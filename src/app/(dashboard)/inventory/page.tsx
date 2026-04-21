@@ -213,12 +213,13 @@ export default function InventoryPage() {
     setLoading(false);
   }
 
+  const uniq = (arr: string[]) => Array.from(new Set(arr)).filter(Boolean).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   const locOptions = useMemo(() => ({
-    zone:  [...new Set(items.map((i) => i.zone))].filter(Boolean).sort(),
-    aisle: [...new Set(items.filter((i) => !locFilter.zone  || i.zone  === locFilter.zone).map((i) => i.aisle))].filter(Boolean).sort((a,b) => a.localeCompare(b, undefined, {numeric:true})),
-    bay:   [...new Set(items.filter((i) => (!locFilter.zone  || i.zone  === locFilter.zone) && (!locFilter.aisle || i.aisle === locFilter.aisle)).map((i) => i.bay))].filter(Boolean).sort((a,b) => a.localeCompare(b, undefined, {numeric:true})),
-    level: [...new Set(items.filter((i) => (!locFilter.zone  || i.zone  === locFilter.zone) && (!locFilter.aisle || i.aisle === locFilter.aisle) && (!locFilter.bay   || i.bay   === locFilter.bay)).map((i) => i.level))].filter(Boolean).sort((a,b) => a.localeCompare(b, undefined, {numeric:true})),
-    slot:  [...new Set(items.filter((i) => (!locFilter.zone  || i.zone  === locFilter.zone) && (!locFilter.aisle || i.aisle === locFilter.aisle) && (!locFilter.bay   || i.bay   === locFilter.bay) && (!locFilter.level || i.level === locFilter.level)).map((i) => i.position))].filter(Boolean).sort((a,b) => a.localeCompare(b, undefined, {numeric:true})),
+    zone:  uniq(items.map((i) => i.zone)),
+    aisle: uniq(items.filter((i) => !locFilter.zone  || i.zone  === locFilter.zone).map((i) => i.aisle)),
+    bay:   uniq(items.filter((i) => (!locFilter.zone  || i.zone  === locFilter.zone) && (!locFilter.aisle || i.aisle === locFilter.aisle)).map((i) => i.bay)),
+    level: uniq(items.filter((i) => (!locFilter.zone  || i.zone  === locFilter.zone) && (!locFilter.aisle || i.aisle === locFilter.aisle) && (!locFilter.bay   || i.bay   === locFilter.bay)).map((i) => i.level)),
+    slot:  uniq(items.filter((i) => (!locFilter.zone  || i.zone  === locFilter.zone) && (!locFilter.aisle || i.aisle === locFilter.aisle) && (!locFilter.bay   || i.bay   === locFilter.bay) && (!locFilter.level || i.level === locFilter.level)).map((i) => i.position)),
   }), [items, locFilter]);
 
   // Filter items
