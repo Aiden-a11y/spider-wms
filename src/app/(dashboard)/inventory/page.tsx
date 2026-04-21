@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
+import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/auth-context";
 import {
   normalizeInventory,
@@ -101,6 +102,29 @@ export default function InventoryPage() {
       await loadInventoryWith(code, "ALL", []);
     }
   }
+
+  const saveSnapshot = useCallback(async (whCode: string, allItems: InventoryItem[]) => {
+    if (allItems.length === 0) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const cacheKey = `snapshot_saved__${whCode}__${today}`;
+    if (sessionStorage.getItem(cacheKey)) return;
+
+    const { error } = await supabase.from("inventory_history").insert(
+      allItems.map((item) => ({
+        captured_date: today,
+        warehouse_code: whCode,
+        customer_code: item.customerCode ?? null,
+        location: [item.zone, item.aisle, item.bay, item.level, item.position].join("-"),
+        sku: item.sku,
+        product_name: item.productName,
+        qty: item.qty,
+        available_qty: item.availableQty ?? null,
+        lot: item.lot ?? null,
+        expire_date: item.expireDate ?? null,
+      }))
+    );
+    if (!error) sessionStorage.setItem(cacheKey, "1");
+  }, []);
 
   async function loadInventory() {
     await loadInventoryWith(warehouseCode, customerCode, customers);
@@ -205,6 +229,7 @@ export default function InventoryPage() {
       }));
 
       setItems(allItems);
+      saveSnapshot(whCode, allItems);
     } catch (e) {
       setError(`요청 실패: ${String(e)}`);
     }
