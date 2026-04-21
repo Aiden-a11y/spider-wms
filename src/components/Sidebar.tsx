@@ -11,11 +11,13 @@ import {
   RotateCcw,
   LogOut,
   Warehouse,
+  History,
 } from "lucide-react";
 
 const nav = [
   { href: "/dashboard", label: "대시보드", icon: LayoutDashboard },
   { href: "/inventory", label: "재고 (로케이션)", icon: Boxes },
+  { href: "/history", label: "재고 히스토리", icon: History },
   { href: "/shipping", label: "출고 주문", icon: Truck },
   { href: "/receiving", label: "입고", icon: PackageCheck },
   { href: "/returns", label: "반품", icon: RotateCcw },

@@ -1,0 +1,193 @@
+"use client";
+
+import { useState, useMemo } from "react";
+import { supabase } from "@/lib/supabase";
+import { Download, Search, Calendar } from "lucide-react";
+
+interface SnapshotRow {
+  id: number;
+  captured_date: string;
+  warehouse_code: string;
+  customer_code: string | null;
+  location: string;
+  sku: string;
+  product_name: string | null;
+  qty: number;
+  available_qty: number | null;
+  lot: string | null;
+  expire_date: string | null;
+}
+
+function formatExpire(d: string | null) {
+  if (!d || d.length !== 8) return d ?? "-";
+  return `${d.slice(4,6)}-${d.slice(6,8)}-${d.slice(0,4)}`;
+}
+
+export default function HistoryPage() {
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [warehouseCode, setWarehouseCode] = useState("STOO1");
+  const [rows, setRows] = useState<SnapshotRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+
+  async function loadSnapshot() {
+    if (!supabase) { setError("Supabase 환경변수가 설정되지 않았습니다."); return; }
+    setLoading(true);
+    setError("");
+    setRows([]);
+
+    const { data, error: err } = await supabase
+      .from("inventory_history")
+      .select("*")
+      .eq("captured_date", date)
+      .eq("warehouse_code", warehouseCode)
+      .order("location", { ascending: true });
+
+    if (err) setError(err.message);
+    else setRows(data ?? []);
+    setLoading(false);
+  }
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter(r =>
+      r.sku?.toLowerCase().includes(q) ||
+      r.product_name?.toLowerCase().includes(q) ||
+      r.location?.toLowerCase().includes(q) ||
+      r.lot?.toLowerCase().includes(q)
+    );
+  }, [rows, search]);
+
+  const totalQty = useMemo(() => filtered.reduce((s, r) => s + r.qty, 0), [filtered]);
+
+  async function downloadExcel() {
+    const { utils, writeFile } = await import("xlsx");
+    const sheet = utils.json_to_sheet(filtered.map(r => ({
+      Date: r.captured_date,
+      Location: r.location,
+      SKU: r.sku,
+      상품명: r.product_name ?? "",
+      재고: r.qty,
+      가용: r.available_qty ?? "",
+      LOT: r.lot ?? "",
+      유통기한: formatExpire(r.expire_date),
+    })));
+    const wb = utils.book_new();
+    utils.book_append_sheet(wb, sheet, "재고히스토리");
+    writeFile(wb, `재고히스토리_${warehouseCode}_${date}.xlsx`);
+  }
+
+  return (
+    <div className="p-8">
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-xl font-bold text-slate-900">재고 히스토리</h1>
+        <button
+          onClick={downloadExcel}
+          disabled={filtered.length === 0}
+          className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <Download className="w-4 h-4" />
+          Export
+        </button>
+      </div>
+
+      {/* Controls */}
+      <div className="flex flex-wrap gap-3 mb-6">
+        <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2 bg-white">
+          <Calendar className="w-4 h-4 text-slate-400" />
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className="text-sm focus:outline-none"
+          />
+        </div>
+        <input
+          type="text"
+          value={warehouseCode}
+          onChange={(e) => setWarehouseCode(e.target.value)}
+          placeholder="창고 코드 (예: STOO1)"
+          className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 w-44"
+        />
+        <button
+          onClick={loadSnapshot}
+          disabled={loading}
+          className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+        >
+          {loading ? "조회 중..." : "조회"}
+        </button>
+        {rows.length > 0 && (
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="SKU, 상품명, LOT 검색..."
+              className="border border-slate-200 rounded-lg pl-9 pr-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
+            />
+          </div>
+        )}
+      </div>
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm mb-5">
+          {error}
+        </div>
+      )}
+
+      {!loading && rows.length > 0 && (
+        <div className="flex items-center gap-4 mb-5 bg-white border border-slate-100 rounded-xl px-5 py-3 text-sm shadow-sm">
+          <span className="text-slate-600"><b className="text-slate-900">{filtered.length.toLocaleString()}</b> 건</span>
+          <span className="text-slate-300">|</span>
+          <span className="text-slate-600">총 재고 <b className="text-slate-900">{totalQty.toLocaleString()}</b> 개</span>
+          <span className="text-slate-300">|</span>
+          <span className="text-slate-500 text-xs">{date} 스냅샷</span>
+        </div>
+      )}
+
+      {!loading && rows.length === 0 && !error && (
+        <div className="text-center py-20 text-slate-400">
+          <Calendar className="w-10 h-10 mx-auto mb-3 opacity-40" />
+          <p className="font-medium">날짜와 창고를 선택 후 조회하세요</p>
+          <p className="text-sm mt-1">스냅샷이 없는 날짜는 데이터가 표시되지 않습니다</p>
+        </div>
+      )}
+
+      {filtered.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-200">
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Location</th>
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">SKU</th>
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">상품명</th>
+                <th className="px-4 py-2.5 text-right text-slate-500 font-medium">재고</th>
+                <th className="px-4 py-2.5 text-right text-slate-500 font-medium">가용</th>
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">LOT</th>
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">유통기한</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((r) => (
+                <tr key={r.id} className="hover:bg-slate-50 border-b border-slate-100 last:border-0">
+                  <td className="px-4 py-2.5 font-mono text-slate-600 whitespace-nowrap">{r.location}</td>
+                  <td className="px-4 py-2.5">
+                    <span className="font-mono font-medium text-slate-900 bg-slate-100 px-2 py-0.5 rounded">{r.sku}</span>
+                  </td>
+                  <td className="px-4 py-2.5 text-slate-700 max-w-xs truncate">{r.product_name ?? "-"}</td>
+                  <td className="px-4 py-2.5 text-right font-semibold text-slate-900">{r.qty.toLocaleString()}</td>
+                  <td className="px-4 py-2.5 text-right text-slate-500">{r.available_qty?.toLocaleString() ?? "-"}</td>
+                  <td className="px-4 py-2.5 text-slate-400 font-mono">{r.lot ?? "-"}</td>
+                  <td className="px-4 py-2.5 text-slate-400 font-mono">{formatExpire(r.expire_date)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
