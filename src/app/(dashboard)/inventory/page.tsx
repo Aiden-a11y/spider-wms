@@ -104,7 +104,7 @@ export default function InventoryPage() {
   }
 
   const saveSnapshot = useCallback(async (whCode: string, allItems: InventoryItem[]) => {
-    if (allItems.length === 0) return;
+    if (!supabase || allItems.length === 0) return;
     const today = new Date().toISOString().slice(0, 10);
     const cacheKey = `snapshot_saved__${whCode}__${today}`;
     if (sessionStorage.getItem(cacheKey)) return;
@@ -123,7 +123,8 @@ export default function InventoryPage() {
         expire_date: item.expireDate ?? null,
       }))
     );
-    if (!error) sessionStorage.setItem(cacheKey, "1");
+    if (error) return;
+    sessionStorage.setItem(cacheKey, "1");
   }, []);
 
   async function loadInventory() {
