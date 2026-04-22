@@ -281,29 +281,58 @@ export default function ReceivingPage() {
                       <Field label="Total Qty" value={d.totalQty} />
                     </div>
 
-                    {/* Show all extra fields from API */}
-                    {Object.keys(d).filter(k => ![
-                      "receiveOrderCode","orderCode","receiveOrderNo","orderNo","status","statusName",
-                      "warehouseCode","warehouseName","customerCode","customerName","poNo","poNumber",
-                      "orderDate","etaDate","inDate","receiveDate","containerNo","containerSize",
-                      "sealNo","palletCount","palletQty","receiveItemList","itemList","items",
-                      "documentList","documents"
-                    ].includes(k)).length > 0 && (
+                    {/* Remarks */}
+                    {d.comment != null && String(d.comment).trim() !== "" && (
                       <div>
-                        <p className="text-xs text-slate-400 uppercase tracking-wide mb-3">Additional Info</p>
-                        <div className="grid grid-cols-3 gap-4">
-                          {Object.keys(d).filter(k => ![
-                            "receiveOrderCode","orderCode","receiveOrderNo","orderNo","status","statusName",
-                            "warehouseCode","warehouseName","customerCode","customerName","poNo","poNumber",
-                            "orderDate","etaDate","inDate","receiveDate","containerNo","containerSize",
-                            "sealNo","palletCount","palletQty","receiveItemList","itemList","items",
-                            "documentList","documents","_itemList"
-                          ].includes(k)).map(k => (
-                            <Field key={k} label={k} value={typeof d[k] === "object" ? JSON.stringify(d[k]) : d[k]} />
-                          ))}
-                        </div>
+                        <p className="text-xs text-slate-400 uppercase tracking-wide mb-2">Remarks</p>
+                        <p className="text-sm text-slate-700 bg-slate-50 rounded-lg px-4 py-3 border border-slate-100">{String(d.comment)}</p>
                       </div>
                     )}
+
+                    {/* Additional fields */}
+                    {(() => {
+                      const SKIP = new Set([
+                        "receiveOrderCode","orderCode","receiveOrderNo","orderNo","status","statusName",
+                        "warehouseCode","warehouseName","customerCode","customerName","poNo","poNumber","poNum",
+                        "orderDate","etaDate","inDate","receiveDate","containerNo","containerSize",
+                        "sealNo","palletCount","palletQty","itemCount","totalQty","assignedQty",
+                        "receiveItemList","itemList","items","documentList","documents","_itemList","comment",
+                      ]);
+                      const LABELS: Record<string, string> = {
+                        omsReceiveOrderCode: "OMS Order Code",
+                        originCode: "Origin",
+                        itemsValue: "Cargo Value",
+                        cancelDate: "Cancel Date",
+                        cancelComment: "Cancel Reason",
+                        add1: "Extra Info 1", add2: "Extra Info 2",
+                        add3: "Extra Info 3", add4: "Extra Info 4",
+                        createdBy: "Created By", createdAt: "Created At",
+                        updatedBy: "Updated By", updatedAt: "Updated At",
+                      };
+                      const extra = Object.keys(d).filter(k => !SKIP.has(k) && d[k] != null && String(d[k]).trim() !== "");
+                      if (extra.length === 0) return null;
+                      return (
+                        <div>
+                          <p className="text-xs text-slate-400 uppercase tracking-wide mb-3">Additional Info</p>
+                          <div className="border border-slate-200 rounded-lg overflow-hidden">
+                            <table className="w-full text-sm">
+                              <tbody>
+                                {extra.map((k, i) => (
+                                  <tr key={k} className={i % 2 === 0 ? "bg-white" : "bg-slate-50"}>
+                                    <td className="px-4 py-2.5 text-slate-500 font-medium w-48 border-r border-slate-100">
+                                      {LABELS[k] ?? k}
+                                    </td>
+                                    <td className="px-4 py-2.5 text-slate-800">
+                                      {typeof d[k] === "object" ? JSON.stringify(d[k]) : String(d[k])}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
 
