@@ -23,10 +23,11 @@ export default function AvailableLocationsPage() {
 
   function parseArr(json: unknown): Row[] {
     const j = json as Record<string, unknown>;
-    return Array.isArray(j?.data?.list) ? (j.data as Record<string, unknown[]>).list as Row[]
-      : Array.isArray(j?.data) ? j.data as Row[]
-      : Array.isArray(json) ? json as Row[]
-      : [];
+    const d = j?.data as Record<string, unknown> | undefined;
+    if (Array.isArray(d?.list)) return d!.list as Row[];
+    if (Array.isArray(d)) return d as unknown as Row[];
+    if (Array.isArray(json)) return json as Row[];
+    return [];
   }
 
   const fetchLocations = useCallback(async (whCode: string) => {
