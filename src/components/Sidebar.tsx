@@ -18,6 +18,10 @@ import {
   Search,
   ClipboardList,
   ScanLine,
+  Layers,
+  MapPin,
+  LayoutGrid,
+  CheckSquare,
 } from "lucide-react";
 
 type NavChild = { href: string; label: string; icon: React.ElementType };
@@ -49,6 +53,16 @@ const nav: NavItem[] = [
     children: [
       { href: "/receiving", label: "Receiving Orders", icon: ClipboardList },
       { href: "/receiving/process", label: "Receiving Process", icon: ScanLine },
+      { href: "/stow", label: "Stow Process", icon: Layers },
+    ],
+  },
+  {
+    href: undefined,
+    label: "Locations",
+    icon: MapPin,
+    children: [
+      { href: "/locations", label: "Location Master", icon: LayoutGrid },
+      { href: "/locations/available", label: "Available Locations", icon: CheckSquare },
     ],
   },
   { href: "/returns", label: "Returns", icon: RotateCcw, children: undefined },
@@ -61,7 +75,8 @@ export default function Sidebar() {
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
     const s = new Set<string>();
     if (["/inventory", "/history"].some((p) => pathname === p || pathname.startsWith(p + "/"))) s.add("Inventory");
-    if (["/receiving"].some((p) => pathname === p || pathname.startsWith(p + "/"))) s.add("Receiving");
+    if (["/receiving", "/stow"].some((p) => pathname === p || pathname.startsWith(p + "/"))) s.add("Receiving");
+    if (pathname === "/locations" || pathname.startsWith("/locations/")) s.add("Locations");
     return s;
   });
 

@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo, useCallback } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import { useRouter, useParams } from "next/navigation";
-import { ArrowLeft, ScanLine, RefreshCw, CheckCircle2, AlertCircle, PackageCheck } from "lucide-react";
+import { ArrowLeft, ScanLine, CheckCircle2, AlertCircle, PackageCheck } from "lucide-react";
 
 type Row = Record<string, unknown>;
 
@@ -23,7 +23,6 @@ export default function ReceivingProcessDetailPage() {
   const [scanInput, setScanInput] = useState("");
   const [scanError, setScanError] = useState("");
   const [completedKeys, setCompletedKeys] = useState<Set<string>>(new Set());
-  const [completing, setCompleting] = useState(false);
 
   const headers = useMemo(
     () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
@@ -80,32 +79,11 @@ export default function ReceivingProcessDetailPage() {
     navigateToInspect(scanInput.trim());
   }
 
-  async function completeOrder() {
-    if (!order) return;
-    setCompleting(true);
-    try {
-      const res = await fetch("/api/wms/receiving/status-change", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          warehouseCode: String(order.warehouseCode ?? ""),
-          customerCode: String(order.customerCode ?? ""),
-          orderCodes: [code],
-          newStatus: "DA",
-          completeDate: "",
-          cancelComment: "",
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok || json?.success === false || json?.code === "ERROR") {
-        throw new Error(json?.message ?? "Failed to complete order");
-      }
-      localStorage.removeItem(`wms_receiving_${code}`);
-      router.push("/receiving/process");
-    } catch (e) {
-      setScanError(String(e instanceof Error ? e.message : e));
-    }
-    setCompleting(false);
+  function completeOrder() {
+    // Receiving inspection complete — do NOT change WMS status here.
+    // Status update happens only after stow process is fully done.
+    localStorage.removeItem(`wms_receiving_${code}`);
+    router.push("/receiving/process");
   }
 
   const allDone = items.length > 0 && items.every((item, i) => completedKeys.has(getItemKey(item, i)));
@@ -132,10 +110,9 @@ export default function ReceivingProcessDetailPage() {
           {allDone && (
             <button
               onClick={completeOrder}
-              disabled={completing}
-              className="flex items-center gap-2 bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+              className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
             >
-              {completing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <PackageCheck className="w-4 h-4" />}
+              <PackageCheck className="w-4 h-4" />
               Complete Order
             </button>
           )}
