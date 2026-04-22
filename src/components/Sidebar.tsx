@@ -12,12 +12,14 @@ import {
   RotateCcw,
   LogOut,
   History,
+  Package,
 } from "lucide-react";
 
 const nav = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/inventory", label: "Inventory", icon: Boxes },
   { href: "/history", label: "Inventory History", icon: History },
+  { href: "/products", label: "Products", icon: Package },
   { href: "/shipping", label: "Outbound Orders", icon: Truck },
   { href: "/receiving", label: "Receiving", icon: PackageCheck },
   { href: "/returns", label: "Returns", icon: RotateCcw },
