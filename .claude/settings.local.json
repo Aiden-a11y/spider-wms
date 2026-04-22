@@ -5,7 +5,10 @@
       "Bash(netstat -ano)",
       "Bash(taskkill /PID 29976 /F)",
       "PowerShell(Stop-Process -Id 29976 -Force)",
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }

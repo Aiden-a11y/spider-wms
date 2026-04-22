@@ -16,6 +16,8 @@ import {
   Package,
   ChevronDown,
   Search,
+  ClipboardList,
+  ScanLine,
 } from "lucide-react";
 
 type NavChild = { href: string; label: string; icon: React.ElementType };
@@ -40,7 +42,15 @@ const nav: NavItem[] = [
   },
   { href: "/products", label: "Products", icon: Package, children: undefined },
   { href: "/shipping", label: "Outbound Orders", icon: Truck, children: undefined },
-  { href: "/receiving", label: "Receiving", icon: PackageCheck, children: undefined },
+  {
+    href: undefined,
+    label: "Receiving",
+    icon: PackageCheck,
+    children: [
+      { href: "/receiving", label: "Receiving Orders", icon: ClipboardList },
+      { href: "/receiving/process", label: "Receiving Process", icon: ScanLine },
+    ],
+  },
   { href: "/returns", label: "Returns", icon: RotateCcw, children: undefined },
 ];
 
@@ -48,9 +58,21 @@ export default function Sidebar() {
   const pathname = usePathname();
   const { user, logout } = useAuth();
 
-  const [inventoryOpen, setInventoryOpen] = useState(
-    ["/inventory", "/history"].some((p) => pathname === p || pathname.startsWith(p + "/"))
-  );
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
+    const s = new Set<string>();
+    if (["/inventory", "/history"].some((p) => pathname === p || pathname.startsWith(p + "/"))) s.add("Inventory");
+    if (["/receiving"].some((p) => pathname === p || pathname.startsWith(p + "/"))) s.add("Receiving");
+    return s;
+  });
+
+  function toggleGroup(label: string) {
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return next;
+    });
+  }
 
   return (
     <aside className="w-60 flex-shrink-0 bg-slate-900 flex flex-col h-screen sticky top-0">
@@ -67,10 +89,11 @@ export default function Sidebar() {
             const isGroupActive = item.children.some(
               (c) => pathname === c.href || pathname.startsWith(c.href + "/")
             );
+            const isOpen = openGroups.has(item.label);
             return (
               <div key={item.label}>
                 <button
-                  onClick={() => setInventoryOpen((o) => !o)}
+                  onClick={() => toggleGroup(item.label)}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                     isGroupActive
                       ? "text-white bg-slate-800"
@@ -79,9 +102,9 @@ export default function Sidebar() {
                 >
                   <item.icon className="w-4 h-4 flex-shrink-0" />
                   <span className="flex-1 text-left">{item.label}</span>
-                  <ChevronDown className={`w-3.5 h-3.5 transition-transform ${inventoryOpen ? "rotate-180" : ""}`} />
+                  <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isOpen ? "rotate-180" : ""}`} />
                 </button>
-                {inventoryOpen && (
+                {isOpen && (
                   <div className="mt-0.5 ml-3 pl-3 border-l border-slate-700 space-y-0.5">
                     {item.children.map(({ href, label, icon: Icon }) => {
                       const active = pathname === href || pathname.startsWith(href + "/");
