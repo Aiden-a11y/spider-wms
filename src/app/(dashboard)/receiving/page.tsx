@@ -86,10 +86,12 @@ export default function ReceivingPage() {
       const itemsJson = await itemsRes.json().catch(() => null);
 
       const d: Row = (detailJson?.data ?? detailJson) as Row;
-      const itemList: Row[] = Array.isArray(itemsJson?.data)
-        ? itemsJson.data
+      const itemList: Row[] = Array.isArray(itemsJson?.data?.items)
+        ? itemsJson.data.items
         : Array.isArray(itemsJson?.data?.list)
         ? itemsJson.data.list
+        : Array.isArray(itemsJson?.data)
+        ? itemsJson.data
         : Array.isArray(itemsJson)
         ? itemsJson
         : [];
@@ -212,9 +214,9 @@ export default function ReceivingPage() {
 
       {/* Detail Modal */}
       {selected && (
-        <div className="fixed inset-0 z-50 flex">
-          <div className="absolute inset-0 bg-black/40" onClick={closeDetail} />
-          <div className="relative ml-auto w-full max-w-3xl bg-white shadow-2xl flex flex-col h-full overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+          <div className="absolute inset-0 bg-black/50" onClick={closeDetail} />
+          <div className="relative w-full max-w-5xl bg-white shadow-2xl flex flex-col rounded-2xl overflow-hidden" style={{ height: "90vh" }}>
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
               <h2 className="font-semibold text-slate-900 text-sm">
