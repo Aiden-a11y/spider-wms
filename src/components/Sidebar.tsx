@@ -19,13 +19,18 @@ import {
 } from "lucide-react";
 
 type NavChild = { href: string; label: string; icon: React.ElementType };
-type NavItem =
-  | { href: string; label: string; icon: React.ElementType; children?: never }
-  | { href?: never; label: string; icon: React.ElementType; children: NavChild[] };
+type LeafItem = { href: string; label: string; icon: React.ElementType; children: undefined };
+type GroupItem = { href: undefined; label: string; icon: React.ElementType; children: NavChild[] };
+type NavItem = LeafItem | GroupItem;
+
+function isGroup(item: NavItem): item is GroupItem {
+  return item.children !== undefined;
+}
 
 const nav: NavItem[] = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, children: undefined },
   {
+    href: undefined,
     label: "Inventory",
     icon: Boxes,
     children: [
@@ -33,19 +38,18 @@ const nav: NavItem[] = [
       { href: "/history", label: "History", icon: History },
     ],
   },
-  { href: "/products", label: "Products", icon: Package },
-  { href: "/shipping", label: "Outbound Orders", icon: Truck },
-  { href: "/receiving", label: "Receiving", icon: PackageCheck },
-  { href: "/returns", label: "Returns", icon: RotateCcw },
+  { href: "/products", label: "Products", icon: Package, children: undefined },
+  { href: "/shipping", label: "Outbound Orders", icon: Truck, children: undefined },
+  { href: "/receiving", label: "Receiving", icon: PackageCheck, children: undefined },
+  { href: "/returns", label: "Returns", icon: RotateCcw, children: undefined },
 ];
 
 export default function Sidebar() {
   const pathname = usePathname();
   const { user, logout } = useAuth();
 
-  const inventoryPaths = ["/inventory", "/history"];
   const [inventoryOpen, setInventoryOpen] = useState(
-    inventoryPaths.some((p) => pathname === p || pathname.startsWith(p + "/"))
+    ["/inventory", "/history"].some((p) => pathname === p || pathname.startsWith(p + "/"))
   );
 
   return (
@@ -59,7 +63,7 @@ export default function Sidebar() {
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-0.5">
         {nav.map((item) => {
-          if ("children" in item) {
+          if (isGroup(item)) {
             const isGroupActive = item.children.some(
               (c) => pathname === c.href || pathname.startsWith(c.href + "/")
             );
