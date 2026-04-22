@@ -41,7 +41,9 @@ export default function LocationMasterPage() {
         headers,
         body: JSON.stringify({ warehouseCode: whCode, page: 1, size: 9999 }),
       });
-      const json = await res.json();
+      const text = await res.text();
+      if (!text.trim()) throw new Error(`Empty response (status ${res.status}) — check the API endpoint`);
+      const json = JSON.parse(text);
       const list = parseArr(json);
       setLocations(list);
     } catch (e) {

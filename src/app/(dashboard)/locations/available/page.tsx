@@ -41,7 +41,9 @@ export default function AvailableLocationsPage() {
         headers,
         body: JSON.stringify({ warehouseCode: whCode, status: "EMPTY", page: 1, size: 9999 }),
       });
-      const json = await res.json();
+      const text = await res.text();
+      if (!text.trim()) throw new Error(`Empty response (status ${res.status}) — check the API endpoint`);
+      const json = JSON.parse(text);
       let list = parseArr(json);
       // client-side filter as fallback if API doesn't filter by status
       list = list.filter((r) => {
