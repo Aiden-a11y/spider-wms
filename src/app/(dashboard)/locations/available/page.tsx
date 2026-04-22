@@ -36,7 +36,7 @@ export default function AvailableLocationsPage() {
     setError("");
     setLocations([]);
     try {
-      const res = await fetch("/api/wms/location/list", {
+      const res = await fetch("/api/wms/warehouse/location/list", {
         method: "POST",
         headers,
         body: JSON.stringify({ warehouseCode: whCode, status: "EMPTY", page: 1, size: 9999 }),
