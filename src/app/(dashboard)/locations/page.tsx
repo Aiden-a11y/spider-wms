@@ -39,7 +39,7 @@ export default function LocationMasterPage() {
       const res = await fetch("/api/wms/warehouse/location/list", {
         method: "POST",
         headers,
-        body: JSON.stringify({ warehouseCode: whCode, page: 1, size: 9999 }),
+        body: JSON.stringify({ page: 1, pageSize: 9999, warehouseCode: whCode, search: "", sortField: "WarehouseCode", sortDir: "asc" }),
       });
       const text = await res.text();
       if (!text.trim()) throw new Error(`Empty response (status ${res.status}) — check the API endpoint`);
