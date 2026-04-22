@@ -111,10 +111,10 @@ export default function ReceivingInspectPage() {
         <p className="text-slate-500 font-mono text-xs mt-0.5">{sku}</p>
         <div className="flex gap-6 mt-3 text-xs text-slate-500">
           <span>Order Qty: <span className="font-semibold text-slate-800">{orderQty}</span></span>
-          {item.lotNo && String(item.lotNo) !== "-" && (
+          {!!item.lotNo && String(item.lotNo) !== "-" && (
             <span>LOT: <span className="font-semibold text-slate-800">{String(item.lotNo)}</span></span>
           )}
-          {item.expireDate && String(item.expireDate) !== "-" && (
+          {!!item.expireDate && String(item.expireDate) !== "-" && (
             <span>Exp: <span className="font-semibold text-slate-800">{String(item.expireDate).slice(0, 10)}</span></span>
           )}
         </div>
