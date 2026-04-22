@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
-import { Download, Search, Calendar } from "lucide-react";
+import { useAuth } from "@/contexts/auth-context";
+import { Download, Search, Calendar, Save } from "lucide-react";
 
 interface SnapshotRow {
   id: number;
@@ -18,18 +19,54 @@ interface SnapshotRow {
   expire_date: string | null;
 }
 
+interface Warehouse {
+  id: string;
+  name: string;
+}
+
 function formatExpire(d: string | null) {
   if (!d || d.length !== 8) return d ?? "-";
   return `${d.slice(4,6)}-${d.slice(6,8)}-${d.slice(0,4)}`;
 }
 
 export default function HistoryPage() {
+  const { user } = useAuth();
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [warehouseCode, setWarehouseCode] = useState("STOO1");
   const [rows, setRows] = useState<SnapshotRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState("");
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
+
+  useEffect(() => {
+    if (!user?.token) return;
+    fetch("/api/wms/combo/warehouse", {
+      headers: { Authorization: `Bearer ${user.token}` },
+    })
+      .then((r) => r.json())
+      .then((json) => {
+        const arr: Record<string, unknown>[] = Array.isArray(json?.data)
+          ? json.data
+          : Array.isArray(json)
+          ? json
+          : [];
+        const list: Warehouse[] = arr
+          .map((w) => ({
+            id: String(w.code ?? w.id ?? ""),
+            name: String(w.name ?? w.code ?? ""),
+          }))
+          .filter((w) => w.id);
+        setWarehouses(list);
+        if (list.length > 0) {
+          const preferred = list.find((w) => w.id === "STOO1") ?? list[0];
+          setWarehouseCode(preferred.id);
+        }
+      })
+      .catch(() => {});
+  }, [user]);
 
   async function loadSnapshot() {
     if (!supabase) { setError("Supabase 환경변수가 설정되지 않았습니다."); return; }
@@ -47,6 +84,23 @@ export default function HistoryPage() {
     if (err) setError(err.message);
     else setRows(data ?? []);
     setLoading(false);
+  }
+
+  async function saveNow() {
+    setSaving(true);
+    setSaveMsg("");
+    try {
+      const res = await fetch(`/api/cron/snapshot?secret=${process.env.NEXT_PUBLIC_CRON_SECRET ?? "sdjoeporgfds"}`);
+      const json = await res.json();
+      if (json.ok) {
+        setSaveMsg(`저장 완료 — ${json.inserted.toLocaleString()}건 (창고 ${json.warehouses}개)`);
+      } else {
+        setSaveMsg(`오류: ${json.error}`);
+      }
+    } catch (e) {
+      setSaveMsg(`요청 실패: ${String(e)}`);
+    }
+    setSaving(false);
   }
 
   const filtered = useMemo(() => {
@@ -83,15 +137,31 @@ export default function HistoryPage() {
     <div className="p-8">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-xl font-bold text-slate-900">재고 히스토리</h1>
-        <button
-          onClick={downloadExcel}
-          disabled={filtered.length === 0}
-          className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <Download className="w-4 h-4" />
-          Export
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={saveNow}
+            disabled={saving}
+            className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors disabled:opacity-50"
+          >
+            <Save className="w-4 h-4" />
+            {saving ? "저장 중..." : "지금 저장"}
+          </button>
+          <button
+            onClick={downloadExcel}
+            disabled={filtered.length === 0}
+            className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Download className="w-4 h-4" />
+            Export
+          </button>
+        </div>
       </div>
+
+      {saveMsg && (
+        <div className={`rounded-xl px-4 py-3 text-sm mb-5 border ${saveMsg.startsWith("오류") || saveMsg.startsWith("요청") ? "bg-red-50 border-red-200 text-red-700" : "bg-green-50 border-green-200 text-green-700"}`}>
+          {saveMsg}
+        </div>
+      )}
 
       {/* Controls */}
       <div className="flex flex-wrap gap-3 mb-6">
@@ -104,13 +174,19 @@ export default function HistoryPage() {
             className="text-sm focus:outline-none"
           />
         </div>
-        <input
-          type="text"
+
+        <select
           value={warehouseCode}
           onChange={(e) => setWarehouseCode(e.target.value)}
-          placeholder="창고 코드 (예: STOO1)"
-          className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 w-44"
-        />
+          disabled={warehouses.length === 0}
+          className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-400"
+        >
+          {warehouses.length === 0 && <option value={warehouseCode}>{warehouseCode}</option>}
+          {warehouses.map((w) => (
+            <option key={w.id} value={w.id}>{w.name || w.id}</option>
+          ))}
+        </select>
+
         <button
           onClick={loadSnapshot}
           disabled={loading}
