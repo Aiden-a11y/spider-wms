@@ -208,27 +208,34 @@ export default function DashboardPage() {
 
         {/* Location by Type */}
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-          <div className="flex items-center gap-2 mb-5">
+          <div className="flex items-center gap-2 mb-4">
             <MapPin className="w-4 h-4 text-slate-400" />
             <h2 className="text-sm font-semibold text-slate-700">Location by Type</h2>
-            <span className="ml-auto text-xs text-slate-400">{locations.length} total</span>
+            <span className="ml-auto text-xs text-slate-400">{locations.length.toLocaleString()} slots</span>
           </div>
-          <div className="space-y-3">
+
+          {/* Stacked proportion bar */}
+          {locByType.length > 0 && (
+            <div className="flex h-3 rounded-full overflow-hidden mb-5 gap-px">
+              {locByType.map(([type, count]) => {
+                const pct = locations.length ? (count / locations.length) * 100 : 0;
+                const colors = LOC_COLORS[type] ?? { bar: "bg-slate-300", dot: "bg-slate-300" };
+                return <div key={type} className={`${colors.bar} transition-all duration-500`} style={{ width: `${pct}%` }} title={`${type}: ${count}`} />;
+              })}
+            </div>
+          )}
+
+          {/* Type list */}
+          <div className="space-y-2.5">
             {locByType.map(([type, count]) => {
               const pct = locations.length ? Math.round((count / locations.length) * 100) : 0;
-              const colors = LOC_COLORS[type] ?? { bar: "bg-slate-400", dot: "bg-slate-400" };
+              const colors = LOC_COLORS[type] ?? { bar: "bg-slate-300", dot: "bg-slate-400" };
               return (
-                <div key={type}>
-                  <div className="flex justify-between text-xs mb-1.5">
-                    <span className="flex items-center gap-1.5">
-                      <span className={`w-2 h-2 rounded-full ${colors.dot} flex-shrink-0`} />
-                      <span className="text-slate-700 font-medium">{type}</span>
-                    </span>
-                    <span className="text-slate-400">{count.toLocaleString()} <span className="text-slate-300">({pct}%)</span></span>
-                  </div>
-                  <div className="w-full bg-slate-100 rounded-full h-1.5">
-                    <div className={`${colors.bar} h-1.5 rounded-full transition-all duration-500`} style={{ width: `${pct}%` }} />
-                  </div>
+                <div key={type} className="flex items-center gap-3">
+                  <span className={`w-2.5 h-2.5 rounded-sm flex-shrink-0 ${colors.dot}`} />
+                  <span className="text-xs text-slate-600 flex-1 truncate">{type}</span>
+                  <span className="text-xs font-bold text-slate-800 tabular-nums">{count.toLocaleString()}</span>
+                  <span className="text-xs text-slate-400 w-9 text-right tabular-nums">{pct}%</span>
                 </div>
               );
             })}
@@ -238,64 +245,66 @@ export default function DashboardPage() {
 
         {/* Receiving Pipeline */}
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-          <div className="flex items-center gap-2 mb-5">
+          <div className="flex items-center gap-2 mb-4">
             <PackageCheck className="w-4 h-4 text-slate-400" />
             <h2 className="text-sm font-semibold text-slate-700">Receiving Pipeline</h2>
-            <span className="ml-auto text-xs text-slate-400">{receiving.length} total</span>
+            <span className="ml-auto text-xs text-slate-400">{receiving.length} orders</span>
           </div>
-          <div className="space-y-3">
-            {Object.entries(rcvByStatus).map(([status, count]) => {
-              const meta = STATUS_META[status];
+
+          {/* Big stat cards 2×2 */}
+          <div className="grid grid-cols-2 gap-2 mb-4">
+            {[
+              { key: "AA", label: "Pre-Alert",  big: "text-yellow-600", bg: "bg-yellow-50",  border: "border-yellow-200", bar: "bg-yellow-400" },
+              { key: "CA", label: "Processing", big: "text-blue-600",   bg: "bg-blue-50",    border: "border-blue-200",   bar: "bg-blue-500"   },
+              { key: "DA", label: "Complete",   big: "text-green-600",  bg: "bg-green-50",   border: "border-green-200",  bar: "bg-green-500"  },
+              { key: "EA", label: "Hold",       big: "text-red-600",    bg: "bg-red-50",     border: "border-red-200",    bar: "bg-red-400"    },
+            ].map(({ key, label, big, bg, border, bar }) => {
+              const count = rcvByStatus[key] ?? 0;
               const pct = receiving.length ? Math.round((count / receiving.length) * 100) : 0;
               return (
-                <div key={status}>
-                  <div className="flex justify-between items-center mb-1.5">
-                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${meta.bg} ${meta.color}`}>{meta.label}</span>
-                    <span className="text-xs text-slate-500 font-semibold">{count} <span className="text-slate-300 font-normal">({pct}%)</span></span>
+                <div key={key} className={`${bg} border ${border} rounded-xl px-3 py-3`}>
+                  <p className={`text-2xl font-black ${big} leading-none`}>{count}</p>
+                  <p className="text-xs text-slate-500 mt-1 mb-2">{label}</p>
+                  <div className="w-full bg-white/70 rounded-full h-1">
+                    <div className={`${bar} h-1 rounded-full transition-all duration-700`} style={{ width: `${pct}%` }} />
                   </div>
-                  <div className="w-full bg-slate-100 rounded-full h-1.5">
-                    <div className={`h-1.5 rounded-full transition-all duration-500 ${
-                      status === "DA" ? "bg-green-500" : status === "AA" ? "bg-yellow-400" : status === "CA" ? "bg-blue-500" : "bg-red-400"
-                    }`} style={{ width: `${pct}%` }} />
-                  </div>
+                  <p className="text-xs text-slate-400 mt-1 text-right">{pct}%</p>
                 </div>
               );
             })}
-            {receiving.length === 0 && <p className="text-xs text-slate-400 text-center py-4">No data</p>}
           </div>
 
-          {/* Summary numbers */}
-          {receiving.length > 0 && (
-            <div className="grid grid-cols-2 gap-2 mt-5 pt-4 border-t border-slate-100">
-              <div className="text-center">
-                <p className="text-lg font-bold text-yellow-600">{rcvByStatus.AA}</p>
-                <p className="text-xs text-slate-400">Pre-Alert</p>
-              </div>
-              <div className="text-center">
-                <p className="text-lg font-bold text-blue-600">{rcvByStatus.CA}</p>
-                <p className="text-xs text-slate-400">Processing</p>
-              </div>
-            </div>
-          )}
+          {receiving.length === 0 && <p className="text-xs text-slate-400 text-center py-4">No data</p>}
         </div>
 
         {/* Location by Zone */}
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-          <div className="flex items-center gap-2 mb-5">
+          <div className="flex items-center gap-2 mb-4">
             <MapPin className="w-4 h-4 text-slate-400" />
             <h2 className="text-sm font-semibold text-slate-700">Locations by Zone</h2>
+            <span className="ml-auto text-xs text-slate-400">{locByZone.length} zones</span>
           </div>
           <div className="space-y-2">
-            {locByZone.slice(0, 10).map(([zone, count]) => (
-              <div key={zone} className="flex items-center gap-3">
-                <span className="text-xs font-mono font-semibold text-slate-500 w-6 flex-shrink-0">Z{zone}</span>
-                <div className="flex-1 bg-slate-100 rounded-full h-2">
-                  <div className="bg-blue-500 h-2 rounded-full transition-all duration-500"
-                    style={{ width: `${Math.round((count / maxZoneCount) * 100)}%` }} />
+            {locByZone.slice(0, 10).map(([zone, count]) => {
+              const pct = Math.round((count / maxZoneCount) * 100);
+              return (
+                <div key={zone} className="group">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-semibold text-slate-600">Zone {zone}</span>
+                    <span className="text-xs font-bold text-slate-700 tabular-nums">{count.toLocaleString()}</span>
+                  </div>
+                  <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
+                    <div
+                      className="h-3 rounded-full transition-all duration-500"
+                      style={{
+                        width: `${pct}%`,
+                        background: `linear-gradient(90deg, #3b82f6, #6366f1)`,
+                      }}
+                    />
+                  </div>
                 </div>
-                <span className="text-xs text-slate-500 w-12 text-right">{count.toLocaleString()}</span>
-              </div>
-            ))}
+              );
+            })}
             {locByZone.length === 0 && <p className="text-xs text-slate-400 text-center py-4">No data</p>}
           </div>
         </div>
