@@ -75,16 +75,29 @@ export default function ReceivingPage() {
     const code = String(row.receiveOrderCode ?? row.orderCode ?? row.id ?? "");
     try {
       // fetch detail + items in parallel
-      const [detailRes, itemsRes] = await Promise.all([
-        fetch(`/api/wms/receiving/${code}`, { headers }),
-        fetch(`/api/wms/receiving/item/list`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ receiveOrderCode: code }),
-        }),
-      ]);
+      const warehouseCode = String(row.warehouseCode ?? "");
+      const customerCode = String(row.customerCode ?? "");
+
+      const detailRes = await fetch(`/api/wms/receiving/${code}`, { headers });
       const detailJson = await detailRes.json();
-      const itemsJson = await itemsRes.json().catch(() => null);
+
+      // try multiple item endpoints
+      let itemsJson = null;
+      const itemPayloads = [
+        { receiveOrderCode: code, warehouseCode, customerCode },
+        { receiveOrderCode: code, warehouseCode },
+        { receiveOrderCode: code },
+      ];
+      for (const payload of itemPayloads) {
+        const r = await fetch(`/api/wms/receiving/item/list`, {
+          method: "POST", headers,
+          body: JSON.stringify(payload),
+        });
+        const j = await r.json().catch(() => null);
+        const list = j?.data?.list ?? j?.data ?? j?.list;
+        if (Array.isArray(list) && list.length > 0) { itemsJson = j; break; }
+        if (itemsJson === null) itemsJson = j;
+      }
 
       const d: Row = (detailJson?.data ?? detailJson) as Row;
       const itemList: Row[] = Array.isArray(itemsJson?.data?.list)
