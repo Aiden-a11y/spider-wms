@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/contexts/auth-context";
+import Image from "next/image";
 import {
   LayoutDashboard,
   Boxes,
@@ -10,7 +11,6 @@ import {
   PackageCheck,
   RotateCcw,
   LogOut,
-  Warehouse,
   History,
 } from "lucide-react";
 
@@ -31,8 +31,8 @@ export default function Sidebar() {
     <aside className="w-60 flex-shrink-0 bg-slate-900 flex flex-col min-h-screen">
       {/* Logo */}
       <div className="flex items-center gap-3 px-5 py-5 border-b border-slate-800">
-        <div className="bg-blue-500 p-2 rounded-lg">
-          <Warehouse className="w-5 h-5 text-white" />
+        <div className="flex-shrink-0">
+          <Image src="/stl-logo.png" alt="STL Logo" width={72} height={28} className="object-contain" />
         </div>
         <div>
           <p className="text-white font-semibold text-sm leading-tight">WMS Dashboard</p>

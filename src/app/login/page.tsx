@@ -3,7 +3,8 @@
 import { useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/auth-context";
-import { Warehouse, AlertCircle, Loader2 } from "lucide-react";
+import Image from "next/image";
+import { AlertCircle, Loader2 } from "lucide-react";
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -31,8 +32,8 @@ export default function LoginPage() {
     <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
         <div className="flex flex-col items-center mb-8">
-          <div className="bg-blue-500 p-3 rounded-2xl mb-4">
-            <Warehouse className="w-8 h-8 text-white" />
+          <div className="mb-4">
+            <Image src="/stl-logo.png" alt="STL Logo" width={120} height={48} className="object-contain" />
           </div>
           <h1 className="text-2xl font-bold text-white">WMS Dashboard</h1>
           <p className="text-slate-400 text-sm mt-1">Sign in to Spider WMS</p>
