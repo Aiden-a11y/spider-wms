@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo, useCallback } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import { Search, RefreshCw, Package, Download } from "lucide-react";
 
+
 interface Customer { code: string; name: string; }
 interface Warehouse { id: string; name: string; }
 interface Product { [key: string]: unknown; }
@@ -16,6 +17,7 @@ export default function ProductsPage() {
   const [customerCode, setCustomerCode] = useState("ALL");
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState<{ loaded: number; total: number } | null>(null);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
 
@@ -67,11 +69,14 @@ export default function ProductsPage() {
     setLoading(true);
     setError("");
     setProducts([]);
+    setProgress(null);
     try {
       const targets = custCode === "ALL" ? custList : custList.filter((c) => c.code === custCode);
+      setProgress({ loaded: 0, total: targets.length });
       const allProducts: Product[] = [];
 
-      for (const cust of targets) {
+      for (let i = 0; i < targets.length; i++) {
+        const cust = targets[i];
         const res = await fetch("/api/wms/product/list", {
           method: "POST",
           headers,
@@ -84,11 +89,13 @@ export default function ProductsPage() {
           ? json.data
           : [];
         list.forEach((p) => allProducts.push({ ...p, _customerCode: cust.code, _customerName: cust.name }));
+        setProgress({ loaded: i + 1, total: targets.length });
       }
       setProducts(allProducts);
     } catch (e) {
       setError(`Request failed: ${String(e)}`);
     }
+    setProgress(null);
     setLoading(false);
   }, [headers]);
 
@@ -197,9 +204,28 @@ export default function ProductsPage() {
       )}
 
       {loading && (
-        <div className="flex items-center justify-center py-20 text-slate-400 gap-3">
-          <RefreshCw className="w-5 h-5 animate-spin" />
-          <span className="text-sm">Loading products...</span>
+        <div className="flex flex-col items-center justify-center py-20 gap-4">
+          <div className="relative w-14 h-14">
+            <svg className="w-14 h-14 -rotate-90" viewBox="0 0 56 56" fill="none">
+              <circle cx="28" cy="28" r="24" stroke="#e2e8f0" strokeWidth="4" />
+              <circle
+                cx="28" cy="28" r="24"
+                stroke="#3b82f6" strokeWidth="4"
+                strokeLinecap="round"
+                strokeDasharray={`${progress && progress.total > 0 ? (progress.loaded / progress.total) * 150.8 : 40} 150.8`}
+                strokeDashoffset="0"
+                className="transition-all duration-300"
+              />
+            </svg>
+            {progress && progress.total > 0 && (
+              <span className="absolute inset-0 flex items-center justify-center text-xs font-semibold text-slate-700">
+                {Math.round((progress.loaded / progress.total) * 100)}%
+              </span>
+            )}
+          </div>
+          <p className="text-sm text-slate-500">
+            Loading products{progress && progress.total > 0 ? ` (${Math.round((progress.loaded / progress.total) * 100)}%)` : ""}
+          </p>
         </div>
       )}
 
