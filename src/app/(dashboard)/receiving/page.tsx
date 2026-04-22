@@ -74,22 +74,30 @@ export default function ReceivingPage() {
     setDetailLoading(true);
     const code = String(row.receiveOrderCode ?? row.orderCode ?? row.id ?? "");
     try {
-      // try POST detail first, then GET
-      let json: unknown = null;
-      const postRes = await fetch(`/api/wms/receiving/detail`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ receiveOrderCode: code }),
-      });
-      if (postRes.ok) {
-        json = await postRes.json();
-      } else {
-        const getRes = await fetch(`/api/wms/receiving/${code}`, { headers });
-        json = await getRes.json();
-      }
-      setDetailRaw(json);
-      const d = (json as Row)?.data ?? json;
-      setDetail(typeof d === "object" && d !== null ? d as Row : row);
+      // fetch detail + items in parallel
+      const [detailRes, itemsRes] = await Promise.all([
+        fetch(`/api/wms/receiving/${code}`, { headers }),
+        fetch(`/api/wms/receiving/item/list`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ receiveOrderCode: code }),
+        }),
+      ]);
+      const detailJson = await detailRes.json();
+      const itemsJson = await itemsRes.json().catch(() => null);
+
+      const d: Row = (detailJson?.data ?? detailJson) as Row;
+      const itemList: Row[] = Array.isArray(itemsJson?.data?.list)
+        ? itemsJson.data.list
+        : Array.isArray(itemsJson?.data)
+        ? itemsJson.data
+        : Array.isArray(itemsJson?.list)
+        ? itemsJson.list
+        : [];
+
+      const merged = { ...d, _itemList: itemList };
+      setDetailRaw({ detail: detailJson, items: itemsJson });
+      setDetail(merged);
     } catch {
       setDetail(row);
       setDetailRaw(null);
@@ -113,7 +121,9 @@ export default function ReceivingPage() {
   }, [data, search]);
 
   const d = detail ?? selected ?? {};
-  const items: Row[] = Array.isArray(d.receiveItemList ?? d.itemList ?? d.items)
+  const items: Row[] = Array.isArray(d._itemList)
+    ? (d._itemList as Row[])
+    : Array.isArray(d.receiveItemList ?? d.itemList ?? d.items)
     ? (d.receiveItemList ?? d.itemList ?? d.items) as Row[]
     : [];
   const docs: Row[] = Array.isArray(d.documentList ?? d.documents)
@@ -250,9 +260,9 @@ export default function ReceivingPage() {
                       </div>
                     </div>
                     <div className="grid grid-cols-3 gap-4">
-                      <Field label="Warehouse" value={`${d.warehouseCode ?? ""} - ${d.warehouseName ?? ""}`} />
+                      <Field label="Warehouse" value={`${d.warehouseCode ?? ""} - ${d.warehouseName ?? ""}`.replace(" - ", d.warehouseName ? " - " : "")} />
                       <Field label="Customer" value={`${d.customerCode ?? ""} - ${d.customerName ?? ""}`} />
-                      <Field label="PO Number" value={d.poNo ?? d.poNumber} />
+                      <Field label="PO Number" value={d.poNum ?? d.poNo ?? d.poNumber} />
                     </div>
                     <div className="grid grid-cols-3 gap-4">
                       <Field label="Order Date" value={d.orderDate} />
@@ -262,10 +272,12 @@ export default function ReceivingPage() {
                     <div className="grid grid-cols-3 gap-4">
                       <Field label="Container No" value={d.containerNo} />
                       <Field label="Container Size" value={d.containerSize} />
-                      <Field label="Seal No" value={d.sealNo} />
+                      <Field label="Seal No" value={d.sealNo ?? d.sealNo} />
                     </div>
                     <div className="grid grid-cols-3 gap-4">
                       <Field label="Pallet Count" value={d.palletCount ?? d.palletQty} />
+                      <Field label="Item Count" value={d.itemCount} />
+                      <Field label="Total Qty" value={d.totalQty} />
                     </div>
 
                     {/* Show all extra fields from API */}
