@@ -78,34 +78,20 @@ export default function ReceivingPage() {
       const warehouseCode = String(row.warehouseCode ?? "");
       const customerCode = String(row.customerCode ?? "");
 
-      const detailRes = await fetch(`/api/wms/receiving/${code}`, { headers });
+      const [detailRes, itemsRes] = await Promise.all([
+        fetch(`/api/wms/receiving/${code}`, { headers }),
+        fetch(`/api/wms/receiving/items/${code}`, { headers }),
+      ]);
       const detailJson = await detailRes.json();
-
-      // try multiple item endpoints
-      let itemsJson = null;
-      const itemPayloads = [
-        { receiveOrderCode: code, warehouseCode, customerCode },
-        { receiveOrderCode: code, warehouseCode },
-        { receiveOrderCode: code },
-      ];
-      for (const payload of itemPayloads) {
-        const r = await fetch(`/api/wms/receiving/item/list`, {
-          method: "POST", headers,
-          body: JSON.stringify(payload),
-        });
-        const j = await r.json().catch(() => null);
-        const list = j?.data?.list ?? j?.data ?? j?.list;
-        if (Array.isArray(list) && list.length > 0) { itemsJson = j; break; }
-        if (itemsJson === null) itemsJson = j;
-      }
+      const itemsJson = await itemsRes.json().catch(() => null);
 
       const d: Row = (detailJson?.data ?? detailJson) as Row;
-      const itemList: Row[] = Array.isArray(itemsJson?.data?.list)
-        ? itemsJson.data.list
-        : Array.isArray(itemsJson?.data)
+      const itemList: Row[] = Array.isArray(itemsJson?.data)
         ? itemsJson.data
-        : Array.isArray(itemsJson?.list)
-        ? itemsJson.list
+        : Array.isArray(itemsJson?.data?.list)
+        ? itemsJson.data.list
+        : Array.isArray(itemsJson)
+        ? itemsJson
         : [];
 
       const merged = { ...d, _itemList: itemList };
@@ -331,32 +317,24 @@ export default function ReceivingPage() {
                               <th className="px-3 py-2 text-left text-slate-500 font-medium">#</th>
                               <th className="px-3 py-2 text-left text-slate-500 font-medium">SKU</th>
                               <th className="px-3 py-2 text-left text-slate-500 font-medium">Product</th>
-                              <th className="px-3 py-2 text-left text-slate-500 font-medium">Location</th>
-                              <th className="px-3 py-2 text-left text-slate-500 font-medium">Condition</th>
-                              <th className="px-3 py-2 text-left text-slate-500 font-medium">Lot</th>
+                              <th className="px-3 py-2 text-left text-slate-500 font-medium">LOT</th>
                               <th className="px-3 py-2 text-left text-slate-500 font-medium">Expire</th>
-                              <th className="px-3 py-2 text-right text-slate-500 font-medium">Qty</th>
-                              <th className="px-3 py-2 text-right text-slate-500 font-medium">Remain</th>
-                              <th className="px-3 py-2 text-left text-slate-500 font-medium">Status</th>
+                              <th className="px-3 py-2 text-right text-slate-500 font-medium">Order Qty</th>
+                              <th className="px-3 py-2 text-right text-slate-500 font-medium">Assigned</th>
+                              <th className="px-3 py-2 text-right text-slate-500 font-medium">Unassigned</th>
                             </tr>
                           </thead>
                           <tbody>
                             {items.map((item, i) => (
                               <tr key={i} className="border-b border-slate-100 hover:bg-slate-50">
-                                <td className="px-3 py-2 text-slate-400">{i + 1}</td>
-                                <td className="px-3 py-2 font-mono font-medium text-slate-900">{String(item.productSku ?? item.sku ?? "-")}</td>
-                                <td className="px-3 py-2 text-slate-700 max-w-xs truncate">{String(item.productName ?? item.product ?? "-")}</td>
-                                <td className="px-3 py-2 font-mono text-slate-500">{String(item.locationCode ?? item.location ?? "-")}</td>
-                                <td className="px-3 py-2 text-slate-500">{String(item.condition ?? item.conditionCode ?? "-")}</td>
-                                <td className="px-3 py-2 text-slate-500">{String(item.lotNo ?? item.lot ?? "-")}</td>
-                                <td className="px-3 py-2 text-slate-500">{String(item.expireDate ?? item.expire ?? "-")}</td>
-                                <td className="px-3 py-2 text-right font-semibold">{String(item.qty ?? item.quantity ?? "-")}</td>
-                                <td className="px-3 py-2 text-right text-slate-400">{String(item.remainQty ?? item.remain ?? "-")}</td>
-                                <td className="px-3 py-2">
-                                  <span className="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full font-medium">
-                                    {String(item.status ?? item.statusName ?? "-")}
-                                  </span>
-                                </td>
+                                <td className="px-3 py-2 text-slate-400">{item.seq != null ? String(item.seq) : i + 1}</td>
+                                <td className="px-3 py-2 font-mono font-medium text-slate-900">{String(item.productSku ?? "-")}</td>
+                                <td className="px-3 py-2 text-slate-700 max-w-xs truncate">{String(item.productName ?? "-")}</td>
+                                <td className="px-3 py-2 font-mono text-slate-500">{String(item.lotNo ?? "-")}</td>
+                                <td className="px-3 py-2 text-slate-500">{String(item.expireDate ?? "-")}</td>
+                                <td className="px-3 py-2 text-right font-semibold">{String(item.orderQty ?? "-")}</td>
+                                <td className="px-3 py-2 text-right text-slate-500">{String(item.assignedQty ?? "-")}</td>
+                                <td className="px-3 py-2 text-right text-slate-500">{String(item.unassignedQty ?? "-")}</td>
                               </tr>
                             ))}
                           </tbody>
