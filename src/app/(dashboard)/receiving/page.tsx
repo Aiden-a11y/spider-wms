@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo } from "react";
 import { useAuth } from "@/contexts/auth-context";
-import { RefreshCw, AlertCircle, PackageCheck, X, Search } from "lucide-react";
+import { RefreshCw, AlertCircle, PackageCheck, X, Search, ArrowLeftRight } from "lucide-react";
 
 type Row = Record<string, unknown>;
 
@@ -15,12 +15,20 @@ function Field({ label, value }: { label: string; value: unknown }) {
   );
 }
 
+const STATUS_OPTIONS = [
+  { code: "AA", label: "AA - Pre Alert" },
+  { code: "CA", label: "CA - Processing" },
+  { code: "DA", label: "DA - Complete" },
+  { code: "EA", label: "EA - Hold" },
+];
+
 function StatusBadge({ status, name }: { status: string; name?: string }) {
   const colors: Record<string, string> = {
     DA: "bg-green-100 text-green-700",
     AA: "bg-yellow-100 text-yellow-700",
-    CA: "bg-red-100 text-red-700",
-    WA: "bg-blue-100 text-blue-700",
+    CA: "bg-blue-100 text-blue-700",
+    EA: "bg-red-100 text-red-700",
+    WA: "bg-purple-100 text-purple-700",
   };
   return (
     <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${colors[status] ?? "bg-slate-100 text-slate-600"}`}>
@@ -40,6 +48,11 @@ export default function ReceivingPage() {
   const [detailRaw, setDetailRaw] = useState<unknown>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<"info" | "items" | "docs" | "raw">("info");
+  const [statusModal, setStatusModal] = useState(false);
+  const [newStatus, setNewStatus] = useState("");
+  const [cancelComment, setCancelComment] = useState("");
+  const [statusChanging, setStatusChanging] = useState(false);
+  const [statusError, setStatusError] = useState("");
 
   const headers = useMemo(
     () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
@@ -111,6 +124,46 @@ export default function ReceivingPage() {
     setSelected(null);
     setDetail(null);
     setDetailRaw(null);
+    setStatusModal(false);
+    setNewStatus("");
+    setCancelComment("");
+    setStatusError("");
+  }
+
+  async function changeStatus() {
+    if (!newStatus) return;
+    setStatusChanging(true);
+    setStatusError("");
+    const code = String(d.receiveOrderCode ?? d.orderCode ?? "");
+    try {
+      const res = await fetch("/api/wms/receiving/status-change", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          warehouseCode: String(d.warehouseCode ?? ""),
+          customerCode: String(d.customerCode ?? ""),
+          orderCodes: [code],
+          newStatus,
+          completeDate: "",
+          cancelComment,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || json?.success === false || json?.code === "ERROR") {
+        throw new Error(json?.message ?? "Status change failed");
+      }
+      setStatusModal(false);
+      setNewStatus("");
+      setCancelComment("");
+      // refresh list and re-fetch detail
+      await load();
+      const updatedRow = { ...selected!, status: newStatus };
+      await openDetail(updatedRow);
+    } catch (e) {
+      setStatusError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setStatusChanging(false);
+    }
   }
 
   const filtered = useMemo(() => {
@@ -222,10 +275,70 @@ export default function ReceivingPage() {
               <h2 className="font-semibold text-slate-900 text-sm">
                 Receiving — {String(d.receiveOrderCode ?? d.orderCode ?? "")}
               </h2>
-              <button onClick={closeDetail} className="text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => { setStatusModal(true); setStatusError(""); setNewStatus(""); setCancelComment(""); }}
+                  className="flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-1.5 hover:bg-slate-50 transition-colors"
+                >
+                  <ArrowLeftRight className="w-3.5 h-3.5" />
+                  Change Status
+                </button>
+                <button onClick={closeDetail} className="text-slate-400 hover:text-slate-600">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
+
+            {/* Status Change Sub-modal */}
+            {statusModal && (
+              <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/30 rounded-2xl">
+                <div className="bg-white rounded-xl shadow-xl w-80 p-6">
+                  <h3 className="font-semibold text-slate-900 text-sm mb-4">Change Status</h3>
+                  <div className="mb-4">
+                    <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">New Status</label>
+                    <select
+                      value={newStatus}
+                      onChange={(e) => setNewStatus(e.target.value)}
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">-- Select --</option>
+                      {STATUS_OPTIONS.map((s) => (
+                        <option key={s.code} value={s.code}>{s.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  {newStatus === "EA" && (
+                    <div className="mb-4">
+                      <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">Hold Reason</label>
+                      <textarea
+                        value={cancelComment}
+                        onChange={(e) => setCancelComment(e.target.value)}
+                        rows={2}
+                        className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                        placeholder="Optional reason..."
+                      />
+                    </div>
+                  )}
+                  {statusError && (
+                    <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-3">{statusError}</p>
+                  )}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => { setStatusModal(false); setStatusError(""); }}
+                      className="flex-1 text-sm border border-slate-200 rounded-lg py-2 text-slate-600 hover:bg-slate-50 transition-colors"
+                    >Cancel</button>
+                    <button
+                      onClick={changeStatus}
+                      disabled={!newStatus || statusChanging}
+                      className="flex-1 text-sm bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white rounded-lg py-2 font-medium transition-colors flex items-center justify-center gap-1.5"
+                    >
+                      {statusChanging && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                      {statusChanging ? "Saving..." : "Confirm"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {detailLoading ? (
               <div className="flex-1 flex items-center justify-center">
