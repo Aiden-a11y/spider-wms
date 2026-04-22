@@ -297,7 +297,7 @@ export default function ReceivingPage() {
                             "warehouseCode","warehouseName","customerCode","customerName","poNo","poNumber",
                             "orderDate","etaDate","inDate","receiveDate","containerNo","containerSize",
                             "sealNo","palletCount","palletQty","receiveItemList","itemList","items",
-                            "documentList","documents"
+                            "documentList","documents","_itemList"
                           ].includes(k)).map(k => (
                             <Field key={k} label={k} value={typeof d[k] === "object" ? JSON.stringify(d[k]) : d[k]} />
                           ))}
