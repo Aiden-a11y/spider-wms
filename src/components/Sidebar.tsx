@@ -18,7 +18,12 @@ import {
   Search,
 } from "lucide-react";
 
-const nav = [
+type NavChild = { href: string; label: string; icon: React.ElementType };
+type NavItem =
+  | { href: string; label: string; icon: React.ElementType; children?: never }
+  | { href?: never; label: string; icon: React.ElementType; children: NavChild[] };
+
+const nav: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   {
     label: "Inventory",
