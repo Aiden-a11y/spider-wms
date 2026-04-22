@@ -93,7 +93,8 @@ export default function HistoryPage() {
       const res = await fetch(`/api/cron/snapshot?secret=${process.env.NEXT_PUBLIC_CRON_SECRET ?? "sdjoeporgfds"}`);
       const json = await res.json();
       if (json.ok) {
-        setSaveMsg(`저장 완료 — ${json.inserted.toLocaleString()}건 (창고 ${json.warehouses}개)`);
+        const errPart = json.errors?.length ? ` | 에러 ${json.errors.length}건: ${json.errors.slice(0,3).join(" / ")}` : "";
+        setSaveMsg(`저장 완료 — ${json.inserted.toLocaleString()}건 (창고 ${json.warehouses}개)${errPart}`);
       } else {
         setSaveMsg(`오류: ${json.error}`);
       }

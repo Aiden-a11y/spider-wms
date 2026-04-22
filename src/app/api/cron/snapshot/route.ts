@@ -67,6 +67,7 @@ export async function GET(req: NextRequest) {
   const today = new Date().toISOString().slice(0, 10);
   let totalInserted = 0;
   const errors: string[] = [];
+  const debug: string[] = [];
 
   // 2. Get warehouses
   const whJson = await wmsGet("combo/warehouse", token);

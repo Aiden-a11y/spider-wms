@@ -109,21 +109,30 @@ export default function InventoryPage() {
     const cacheKey = `snapshot_saved__${whCode}__${today}`;
     if (sessionStorage.getItem(cacheKey)) return;
 
-    const { error } = await supabase.from("inventory_history").insert(
-      allItems.map((item) => ({
-        captured_date: today,
-        warehouse_code: whCode,
-        customer_code: item.customerCode ?? null,
-        location: [item.zone, item.aisle, item.bay, item.level, item.position].join("-"),
-        sku: item.sku,
-        product_name: item.productName,
-        qty: item.qty,
-        available_qty: item.availableQty ?? null,
-        lot: item.lot ?? null,
-        expire_date: item.expireDate ?? null,
-      }))
-    );
-    if (error) return;
+    // 오늘 이미 저장된 행 삭제 후 재삽입 (중복 방지)
+    await supabase
+      .from("inventory_history")
+      .delete()
+      .eq("captured_date", today)
+      .eq("warehouse_code", whCode);
+
+    const rows = allItems.map((item) => ({
+      captured_date: today,
+      warehouse_code: whCode,
+      customer_code: item.customerCode ?? null,
+      location: [item.zone, item.aisle, item.bay, item.level, item.position].join("-"),
+      sku: item.sku,
+      product_name: item.productName,
+      qty: item.qty,
+      available_qty: item.availableQty ?? null,
+      lot: item.lot ?? null,
+      expire_date: item.expireDate ?? null,
+    }));
+
+    for (let i = 0; i < rows.length; i += 500) {
+      const { error } = await supabase.from("inventory_history").insert(rows.slice(i, i + 500));
+      if (error) return;
+    }
     sessionStorage.setItem(cacheKey, "1");
   }, []);
 
