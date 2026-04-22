@@ -35,8 +35,6 @@ export default function LoginPage() {
           <div className="mb-4">
             <Image src="/stl-logo.png" alt="STL Logo" width={120} height={48} className="object-contain" />
           </div>
-          <h1 className="text-2xl font-bold text-white">WMS Dashboard</h1>
-          <p className="text-slate-400 text-sm mt-1">Sign in to Spider WMS</p>
         </div>
 
         <form
