@@ -107,7 +107,12 @@ export default function Sidebar() {
                 {isOpen && (
                   <div className="mt-0.5 ml-3 pl-3 border-l border-slate-700 space-y-0.5">
                     {item.children.map(({ href, label, icon: Icon }) => {
-                      const active = pathname === href || pathname.startsWith(href + "/");
+                      const active =
+                        pathname === href ||
+                        (pathname.startsWith(href + "/") &&
+                          !item.children.some(
+                            (s) => s.href !== href && pathname.startsWith(s.href)
+                          ));
                       return (
                         <Link
                           key={href}
