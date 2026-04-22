@@ -15,12 +15,12 @@ import {
 } from "lucide-react";
 
 const nav = [
-  { href: "/dashboard", label: "대시보드", icon: LayoutDashboard },
-  { href: "/inventory", label: "재고 (로케이션)", icon: Boxes },
-  { href: "/history", label: "재고 히스토리", icon: History },
-  { href: "/shipping", label: "출고 주문", icon: Truck },
-  { href: "/receiving", label: "입고", icon: PackageCheck },
-  { href: "/returns", label: "반품", icon: RotateCcw },
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/inventory", label: "Inventory", icon: Boxes },
+  { href: "/history", label: "Inventory History", icon: History },
+  { href: "/shipping", label: "Outbound Orders", icon: Truck },
+  { href: "/receiving", label: "Receiving", icon: PackageCheck },
+  { href: "/returns", label: "Returns", icon: RotateCcw },
 ];
 
 export default function Sidebar() {
@@ -77,7 +77,7 @@ export default function Sidebar() {
           className="flex items-center gap-3 px-3 py-2 w-full text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg text-sm transition-colors"
         >
           <LogOut className="w-4 h-4" />
-          로그아웃
+          Logout
         </button>
       </div>
     </aside>

@@ -35,7 +35,7 @@ export default function LoginPage() {
             <Warehouse className="w-8 h-8 text-white" />
           </div>
           <h1 className="text-2xl font-bold text-white">WMS Dashboard</h1>
-          <p className="text-slate-400 text-sm mt-1">Spider WMS에 로그인하세요</p>
+          <p className="text-slate-400 text-sm mt-1">Sign in to Spider WMS</p>
         </div>
 
         <form
@@ -52,7 +52,7 @@ export default function LoginPage() {
               onChange={(e) => setUserId(e.target.value)}
               required
               autoFocus
-              placeholder="WMS 아이디"
+              placeholder="User ID"
               className="w-full border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
           </div>
@@ -66,7 +66,7 @@ export default function LoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              placeholder="비밀번호"
+              placeholder="Password"
               className="w-full border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
           </div>
@@ -84,7 +84,7 @@ export default function LoginPage() {
             className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-medium py-2.5 px-4 rounded-lg text-sm transition-colors flex items-center justify-center gap-2"
           >
             {loading && <Loader2 className="w-4 h-4 animate-spin" />}
-            {loading ? "로그인 중..." : "로그인"}
+            {loading ? "Signing in..." : "Sign In"}
           </button>
         </form>
       </div>

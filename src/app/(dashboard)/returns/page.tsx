@@ -30,7 +30,7 @@ export default function ReturnsPage() {
       const list = json?.data?.list ?? json?.data ?? json?.list ?? json ?? [];
       setData(Array.isArray(list) ? list : []);
     } catch {
-      setError("반품 데이터를 불러오지 못했습니다.");
+      setError("Failed to load returns data.");
     } finally {
       setLoading(false);
     }
@@ -47,13 +47,13 @@ export default function ReturnsPage() {
     <div className="p-8">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">반품</h1>
-          <p className="text-slate-500 text-sm mt-0.5">Returns 목록</p>
+          <h1 className="text-xl font-bold text-slate-900">Returns</h1>
+          <p className="text-slate-500 text-sm mt-0.5">Returns list</p>
         </div>
         <button onClick={load} disabled={loading}
           className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors">
           <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-          새로고침
+          Refresh
         </button>
       </div>
 
@@ -74,7 +74,7 @@ export default function ReturnsPage() {
       {!loading && data.length === 0 && !error && (
         <div className="text-center py-20 text-slate-400">
           <RotateCcw className="w-10 h-10 mx-auto mb-3 opacity-40" />
-          <p className="font-medium">반품 데이터가 없습니다</p>
+          <p className="font-medium">No returns data found</p>
         </div>
       )}
 
@@ -107,7 +107,7 @@ export default function ReturnsPage() {
 
       {raw && (
         <details className="mt-6 bg-slate-800 rounded-xl p-4 text-xs">
-          <summary className="text-slate-400 cursor-pointer select-none">Raw API 응답 (개발용)</summary>
+          <summary className="text-slate-400 cursor-pointer select-none">Raw API response (dev)</summary>
           <pre className="text-green-400 overflow-auto max-h-60 mt-3">{JSON.stringify(raw, null, 2)}</pre>
         </details>
       )}

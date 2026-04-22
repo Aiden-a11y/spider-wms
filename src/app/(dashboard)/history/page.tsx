@@ -69,7 +69,7 @@ export default function HistoryPage() {
   }, [user]);
 
   async function loadSnapshot() {
-    if (!supabase) { setError("Supabase 환경변수가 설정되지 않았습니다."); return; }
+    if (!supabase) { setError("Supabase environment variables not configured."); return; }
     setLoading(true);
     setError("");
     setRows([]);
@@ -93,13 +93,13 @@ export default function HistoryPage() {
       const res = await fetch(`/api/cron/snapshot?secret=${process.env.NEXT_PUBLIC_CRON_SECRET ?? "sdjoeporgfds"}`);
       const json = await res.json();
       if (json.ok) {
-        const errPart = json.errors?.length ? ` | 에러 ${json.errors.length}건: ${json.errors.slice(0,3).join(" / ")}` : "";
-        setSaveMsg(`저장 완료 — ${json.inserted.toLocaleString()}건 (창고 ${json.warehouses}개)${errPart}`);
+        const errPart = json.errors?.length ? ` | ${json.errors.length} error(s): ${json.errors.slice(0,3).join(" / ")}` : "";
+        setSaveMsg(`Saved — ${json.inserted.toLocaleString()} rows (${json.warehouses} warehouse(s))${errPart}`);
       } else {
-        setSaveMsg(`오류: ${json.error}`);
+        setSaveMsg(`Error: ${json.error}`);
       }
     } catch (e) {
-      setSaveMsg(`요청 실패: ${String(e)}`);
+      setSaveMsg(`Request failed: ${String(e)}`);
     }
     setSaving(false);
   }
@@ -123,21 +123,21 @@ export default function HistoryPage() {
       Date: r.captured_date,
       Location: r.location,
       SKU: r.sku,
-      상품명: r.product_name ?? "",
-      재고: r.qty,
-      가용: r.available_qty ?? "",
+      "Product Name": r.product_name ?? "",
+      Qty: r.qty,
+      Available: r.available_qty ?? "",
       LOT: r.lot ?? "",
-      유통기한: formatExpire(r.expire_date),
+      "Expiry Date": formatExpire(r.expire_date),
     })));
     const wb = utils.book_new();
-    utils.book_append_sheet(wb, sheet, "재고히스토리");
-    writeFile(wb, `재고히스토리_${warehouseCode}_${date}.xlsx`);
+    utils.book_append_sheet(wb, sheet, "Inventory History");
+    writeFile(wb, `inventory_history_${warehouseCode}_${date}.xlsx`);
   }
 
   return (
     <div className="p-8">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-xl font-bold text-slate-900">재고 히스토리</h1>
+        <h1 className="text-xl font-bold text-slate-900">Inventory History</h1>
         <div className="flex items-center gap-2">
           <button
             onClick={saveNow}
@@ -145,7 +145,7 @@ export default function HistoryPage() {
             className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors disabled:opacity-50"
           >
             <Save className="w-4 h-4" />
-            {saving ? "저장 중..." : "지금 저장"}
+            {saving ? "Saving..." : "Save Now"}
           </button>
           <button
             onClick={downloadExcel}
@@ -193,7 +193,7 @@ export default function HistoryPage() {
           disabled={loading}
           className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
         >
-          {loading ? "조회 중..." : "조회"}
+          {loading ? "Loading..." : "Search"}
         </button>
         {rows.length > 0 && (
           <div className="relative">
@@ -202,7 +202,7 @@ export default function HistoryPage() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="SKU, 상품명, LOT 검색..."
+              placeholder="Search SKU, product name, LOT..."
               className="border border-slate-200 rounded-lg pl-9 pr-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
             />
           </div>
@@ -217,19 +217,19 @@ export default function HistoryPage() {
 
       {!loading && rows.length > 0 && (
         <div className="flex items-center gap-4 mb-5 bg-white border border-slate-100 rounded-xl px-5 py-3 text-sm shadow-sm">
-          <span className="text-slate-600"><b className="text-slate-900">{filtered.length.toLocaleString()}</b> 건</span>
+          <span className="text-slate-600"><b className="text-slate-900">{filtered.length.toLocaleString()}</b> items</span>
           <span className="text-slate-300">|</span>
-          <span className="text-slate-600">총 재고 <b className="text-slate-900">{totalQty.toLocaleString()}</b> 개</span>
+          <span className="text-slate-600">Total qty <b className="text-slate-900">{totalQty.toLocaleString()}</b></span>
           <span className="text-slate-300">|</span>
-          <span className="text-slate-500 text-xs">{date} 스냅샷</span>
+          <span className="text-slate-500 text-xs">{date} snapshot</span>
         </div>
       )}
 
       {!loading && rows.length === 0 && !error && (
         <div className="text-center py-20 text-slate-400">
           <Calendar className="w-10 h-10 mx-auto mb-3 opacity-40" />
-          <p className="font-medium">날짜와 창고를 선택 후 조회하세요</p>
-          <p className="text-sm mt-1">스냅샷이 없는 날짜는 데이터가 표시되지 않습니다</p>
+          <p className="font-medium">Select a date and warehouse, then click Search</p>
+          <p className="text-sm mt-1">Dates without a saved snapshot will show no data</p>
         </div>
       )}
 
@@ -240,11 +240,11 @@ export default function HistoryPage() {
               <tr className="bg-slate-50 border-b border-slate-200">
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Location</th>
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">SKU</th>
-                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">상품명</th>
-                <th className="px-4 py-2.5 text-right text-slate-500 font-medium">재고</th>
-                <th className="px-4 py-2.5 text-right text-slate-500 font-medium">가용</th>
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Product Name</th>
+                <th className="px-4 py-2.5 text-right text-slate-500 font-medium">Qty</th>
+                <th className="px-4 py-2.5 text-right text-slate-500 font-medium">Available</th>
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">LOT</th>
-                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">유통기한</th>
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Expiry Date</th>
               </tr>
             </thead>
             <tbody>

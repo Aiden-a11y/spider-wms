@@ -145,19 +145,19 @@ export default function InventoryPage() {
     const rows = sortedItems.map((item) => ({
       Location: [item.zone, item.aisle, item.bay, item.level, item.position].join("-"),
       SKU: item.sku,
-      상품명: item.productName,
-      재고: item.qty,
-      가용: item.availableQty ?? "",
+      "Product Name": item.productName,
+      Qty: item.qty,
+      Available: item.availableQty ?? "",
       LOT: item.lot ?? "",
-      유통기한: item.expireDate?.length === 8
+      "Expiry Date": item.expireDate?.length === 8
         ? `${item.expireDate.slice(4,6)}-${item.expireDate.slice(6,8)}-${item.expireDate.slice(0,4)}`
         : item.expireDate ?? "",
     }));
     const ws = utils.json_to_sheet(rows);
     const wb = utils.book_new();
-    utils.book_append_sheet(wb, ws, "재고현황");
+    utils.book_append_sheet(wb, ws, "Inventory");
     const date = new Date().toISOString().slice(0,10);
-    writeFile(wb, `재고현황_${warehouseCode}_${date}.xlsx`);
+    writeFile(wb, `inventory_${warehouseCode}_${date}.xlsx`);
   }
 
   async function loadInventoryWith(whCode: string, custCode: string, custSnapshot: Customer[] = customers) {
@@ -170,7 +170,7 @@ export default function InventoryPage() {
     try {
       const custList = custCode === "ALL" || !custCode ? custSnapshot : custSnapshot.filter((c) => c.code === custCode);
       if (custList.length === 0) {
-        setError("고객사 정보가 없습니다.");
+        setError("No customer data available.");
         setLoading(false);
         return;
       }
@@ -203,7 +203,7 @@ export default function InventoryPage() {
       }
 
       if (pairs.length === 0) {
-        setError("등록된 상품이 없습니다.");
+        setError("No products registered.");
         setLoading(false);
         return;
       }
@@ -241,7 +241,7 @@ export default function InventoryPage() {
       setItems(allItems);
       saveSnapshot(whCode, allItems);
     } catch (e) {
-      setError(`요청 실패: ${String(e)}`);
+      setError(`Request failed: ${String(e)}`);
     }
 
     setProgress(null);
@@ -298,7 +298,7 @@ export default function InventoryPage() {
       {/* Header */}
       <div className="flex items-start justify-between mb-6">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">재고 현황</h1>
+          <h1 className="text-xl font-bold text-slate-900">Inventory</h1>
         </div>
         <button
           onClick={loadInventory}
@@ -306,7 +306,7 @@ export default function InventoryPage() {
           className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors"
         >
           <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-          새로고침
+          Refresh
         </button>
         <button
           onClick={downloadExcel}
@@ -326,7 +326,7 @@ export default function InventoryPage() {
           disabled={warehouses.length === 0}
           className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-400"
         >
-          {warehouses.length === 0 && <option value="">창고 로딩 중...</option>}
+          {warehouses.length === 0 && <option value="">Loading warehouses...</option>}
           {warehouses.map((w) => (
             <option key={w.id} value={w.id}>{w.name || w.id}</option>
           ))}
@@ -338,7 +338,7 @@ export default function InventoryPage() {
             onChange={(e) => { setCustomerCode(e.target.value); loadInventoryWith(warehouseCode, e.target.value, customers); }}
             className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
-            <option value="ALL">전체 고객사</option>
+            <option value="ALL">All Customers</option>
             {customers.map((c) => (
               <option key={c.code} value={c.code}>{c.name || c.code}</option>
             ))}
@@ -351,7 +351,7 @@ export default function InventoryPage() {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="SKU, 상품명, LOT 검색..."
+            placeholder="Search SKU, product name, LOT..."
             className="w-full border border-slate-200 rounded-lg pl-9 pr-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
@@ -366,7 +366,7 @@ export default function InventoryPage() {
             onChange={(e) => setLocFilter((f) => ({ ...f, [dim]: e.target.value }))}
             className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 capitalize"
           >
-            <option value="">전체 {dim}</option>
+            <option value="">All {dim}</option>
             {locOptions[dim].map((v) => (
               <option key={v} value={v}>{v}</option>
             ))}
@@ -379,11 +379,11 @@ export default function InventoryPage() {
         <div className="flex items-center gap-4 mb-5 bg-white border border-slate-100 rounded-xl px-5 py-3 text-sm shadow-sm">
           <Package className="w-4 h-4 text-slate-400" />
           <span className="text-slate-600">
-            <b className="text-slate-900">{filteredItems.length.toLocaleString()}</b> 건
+            <b className="text-slate-900">{filteredItems.length.toLocaleString()}</b> items
           </span>
           <span className="text-slate-300">|</span>
           <span className="text-slate-600">
-            총 재고 <b className="text-slate-900">{totalQty.toLocaleString()}</b> 개
+            Total qty <b className="text-slate-900">{totalQty.toLocaleString()}</b>
           </span>
         </div>
       )}
@@ -417,7 +417,7 @@ export default function InventoryPage() {
             )}
           </div>
           <p className="text-sm text-slate-500">
-            재고 조회중{progress ? ` (${Math.round((progress.loaded / progress.total) * 100)}%)` : ""}
+            Loading inventory{progress ? ` (${Math.round((progress.loaded / progress.total) * 100)}%)` : ""}
           </p>
         </div>
       )}
@@ -425,11 +425,11 @@ export default function InventoryPage() {
       {!loading && !error && filteredItems.length === 0 && (
         <div className="text-center py-16 text-slate-400">
           <Package className="w-10 h-10 mx-auto mb-3 opacity-40" />
-          <p className="font-medium">재고 데이터가 없습니다</p>
+          <p className="font-medium">No inventory data</p>
           <p className="text-sm mt-1">
             {debugInfo.endpoint
-              ? `호출: ${debugInfo.endpoint} (HTTP ${debugInfo.status})`
-              : "창고를 선택하거나 검색어를 확인하세요"}
+              ? `Called: ${debugInfo.endpoint} (HTTP ${debugInfo.status})`
+              : "Select a warehouse or check your search terms"}
           </p>
         </div>
       )}
@@ -442,11 +442,11 @@ export default function InventoryPage() {
               <tr className="bg-slate-50 border-b border-slate-200">
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Location</th>
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">SKU</th>
-                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">상품명</th>
-                <th className="px-4 py-2.5 text-right text-slate-500 font-medium">재고</th>
-                <th className="px-4 py-2.5 text-right text-slate-500 font-medium">가용</th>
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Product Name</th>
+                <th className="px-4 py-2.5 text-right text-slate-500 font-medium">Qty</th>
+                <th className="px-4 py-2.5 text-right text-slate-500 font-medium">Available</th>
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">LOT</th>
-                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">유통기한</th>
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Expiry Date</th>
               </tr>
             </thead>
             <tbody>

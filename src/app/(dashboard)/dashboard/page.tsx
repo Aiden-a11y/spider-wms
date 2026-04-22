@@ -55,7 +55,7 @@ export default function DashboardPage() {
       setSummary(d1?.data ?? d1);
       setSidebarSummary(d2?.data ?? d2);
     } catch {
-      setError("대시보드 데이터를 불러오지 못했습니다.");
+      setError("Failed to load dashboard data.");
     } finally {
       setLoading(false);
     }
@@ -75,8 +75,8 @@ export default function DashboardPage() {
     <div className="p-8">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">대시보드</h1>
-          <p className="text-slate-500 text-sm mt-0.5">창고 운영 현황 요약</p>
+          <h1 className="text-xl font-bold text-slate-900">Dashboard</h1>
+          <p className="text-slate-500 text-sm mt-0.5">Warehouse operations summary</p>
         </div>
         <button
           onClick={load}
@@ -84,7 +84,7 @@ export default function DashboardPage() {
           className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors"
         >
           <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-          새로고침
+          Refresh
         </button>
       </div>
 
@@ -105,30 +105,30 @@ export default function DashboardPage() {
         <>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
             <StatCard
-              label="오늘 주문"
+              label="Today's Orders"
               value={get(summary, "todayOrders", "today_orders", "todayOrder")}
-              sub="신규 입수"
+              sub="New receipts"
               icon={Truck}
               color="bg-blue-100 text-blue-600"
             />
             <StatCard
-              label="출고 대기"
+              label="Pending Shipments"
               value={get(summary, "pendingShipping", "pending_shipping", "pendingOrder")}
-              sub="처리 필요"
+              sub="Needs processing"
               icon={Truck}
               color="bg-amber-100 text-amber-600"
             />
             <StatCard
-              label="입고 대기"
+              label="Pending Receiving"
               value={get(summary, "pendingReceiving", "pending_receiving", "pendingReceiving")}
-              sub="입고 예정"
+              sub="Scheduled inbound"
               icon={PackageCheck}
               color="bg-green-100 text-green-600"
             />
             <StatCard
-              label="반품 처리"
+              label="Returns"
               value={get(summary, "pendingReturn", "pending_return", "returnCount")}
-              sub="확인 필요"
+              sub="Needs review"
               icon={RotateCcw}
               color="bg-red-100 text-red-600"
             />
@@ -136,16 +136,16 @@ export default function DashboardPage() {
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-8">
             <StatCard
-              label="전체 SKU"
+              label="Total SKUs"
               value={get(summary, "totalSKUs", "total_skus", "skuCount", "totalSku")}
-              sub="등록 상품 수"
+              sub="Registered products"
               icon={Boxes}
               color="bg-purple-100 text-purple-600"
             />
             <StatCard
-              label="전체 재고"
+              label="Total Inventory"
               value={get(summary, "totalInventory", "total_inventory", "totalQty", "inventoryCount")}
-              sub="총 보관 수량"
+              sub="Total units stored"
               icon={Boxes}
               color="bg-indigo-100 text-indigo-600"
             />
@@ -155,7 +155,7 @@ export default function DashboardPage() {
           {(summary || sidebarSummary) && (
             <details className="bg-slate-800 rounded-xl p-4 text-xs">
               <summary className="text-slate-400 cursor-pointer select-none">
-                Raw API 응답 (개발용)
+                Raw API response (dev)
               </summary>
               <div className="mt-3 space-y-3">
                 <div>

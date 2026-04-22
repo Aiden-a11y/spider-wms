@@ -47,7 +47,7 @@ export default function ShippingPage() {
       const list = json?.data?.list ?? json?.data ?? json?.list ?? json ?? [];
       setOrders(Array.isArray(list) ? list : []);
     } catch {
-      setError("주문 데이터를 불러오지 못했습니다.");
+      setError("Failed to load order data.");
     } finally {
       setLoading(false);
     }
@@ -72,20 +72,20 @@ export default function ShippingPage() {
     <div className="p-8">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">출고 주문</h1>
-          <p className="text-slate-500 text-sm mt-0.5">Shipping order 목록</p>
+          <h1 className="text-xl font-bold text-slate-900">Outbound Orders</h1>
+          <p className="text-slate-500 text-sm mt-0.5">Shipping order list</p>
         </div>
         <button onClick={load} disabled={loading}
           className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors">
           <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-          새로고침
+          Refresh
         </button>
       </div>
 
       <div className="relative mb-5 max-w-sm">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
         <input type="text" value={search} onChange={(e) => setSearch(e.target.value)}
-          placeholder="주문번호, 고객사 검색..."
+          placeholder="Search order number, customer..."
           className="w-full border border-slate-200 rounded-lg pl-9 pr-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
       </div>
 
@@ -106,7 +106,7 @@ export default function ShippingPage() {
       {!loading && filtered.length === 0 && !error && (
         <div className="text-center py-20 text-slate-400">
           <Truck className="w-10 h-10 mx-auto mb-3 opacity-40" />
-          <p className="font-medium">주문 데이터가 없습니다</p>
+          <p className="font-medium">No order data found</p>
         </div>
       )}
 
@@ -151,7 +151,7 @@ export default function ShippingPage() {
 
       {rawResponse && (
         <details className="mt-6 bg-slate-800 rounded-xl p-4 text-xs">
-          <summary className="text-slate-400 cursor-pointer select-none">Raw API 응답 (개발용)</summary>
+          <summary className="text-slate-400 cursor-pointer select-none">Raw API response (dev)</summary>
           <pre className="text-green-400 overflow-auto max-h-60 mt-3">{JSON.stringify(rawResponse, null, 2)}</pre>
         </details>
       )}
