@@ -37,8 +37,9 @@ export default function ReceivingPage() {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Row | null>(null);
   const [detail, setDetail] = useState<Row | null>(null);
+  const [detailRaw, setDetailRaw] = useState<unknown>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"info" | "items" | "docs">("info");
+  const [activeTab, setActiveTab] = useState<"info" | "items" | "docs" | "raw">("info");
 
   const headers = useMemo(
     () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
@@ -73,13 +74,25 @@ export default function ReceivingPage() {
     setDetailLoading(true);
     const code = String(row.receiveOrderCode ?? row.orderCode ?? row.id ?? "");
     try {
-      // try GET detail endpoint
-      const res = await fetch(`/api/wms/receiving/${code}`, { headers });
-      const json = await res.json();
-      const d = json?.data ?? json;
+      // try POST detail first, then GET
+      let json: unknown = null;
+      const postRes = await fetch(`/api/wms/receiving/detail`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ receiveOrderCode: code }),
+      });
+      if (postRes.ok) {
+        json = await postRes.json();
+      } else {
+        const getRes = await fetch(`/api/wms/receiving/${code}`, { headers });
+        json = await getRes.json();
+      }
+      setDetailRaw(json);
+      const d = (json as Row)?.data ?? json;
       setDetail(typeof d === "object" && d !== null ? d as Row : row);
     } catch {
       setDetail(row);
+      setDetailRaw(null);
     } finally {
       setDetailLoading(false);
     }
@@ -88,6 +101,7 @@ export default function ReceivingPage() {
   function closeDetail() {
     setSelected(null);
     setDetail(null);
+    setDetailRaw(null);
   }
 
   const filtered = useMemo(() => {
@@ -210,14 +224,14 @@ export default function ReceivingPage() {
               <div className="flex-1 overflow-y-auto">
                 {/* Tabs */}
                 <div className="flex border-b border-slate-200 px-6">
-                  {(["info", "items", "docs"] as const).map((tab) => (
+                  {(["info", "items", "docs", "raw"] as const).map((tab) => (
                     <button key={tab} onClick={() => setActiveTab(tab)}
                       className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px ${
                         activeTab === tab
                           ? "border-blue-600 text-blue-600"
                           : "border-transparent text-slate-500 hover:text-slate-700"
                       }`}>
-                      {tab === "info" ? "Info" : tab === "items" ? `Receiving & Received Products` : `Documents (${docs.length})`}
+                      {tab === "info" ? "Info" : tab === "items" ? "Products" : tab === "docs" ? `Documents (${docs.length})` : "Raw"}
                     </button>
                   ))}
                 </div>
@@ -324,6 +338,14 @@ export default function ReceivingPage() {
                         </table>
                       </div>
                     )}
+                  </div>
+                )}
+
+                {activeTab === "raw" && (
+                  <div className="p-6">
+                    <pre className="text-xs text-green-400 bg-slate-800 rounded-xl p-4 overflow-auto max-h-[60vh]">
+                      {JSON.stringify(detailRaw, null, 2)}
+                    </pre>
                   </div>
                 )}
 
