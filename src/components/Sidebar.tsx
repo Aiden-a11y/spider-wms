@@ -28,15 +28,15 @@ export default function Sidebar() {
   const { user, logout } = useAuth();
 
   return (
-    <aside className="w-60 flex-shrink-0 bg-slate-900 flex flex-col min-h-screen">
+    <aside className="w-60 flex-shrink-0 bg-slate-900 flex flex-col h-screen sticky top-0">
       {/* Logo */}
-      <div className="flex flex-col px-5 py-5 border-b border-slate-800">
+      <Link href="/dashboard" className="flex flex-col px-5 py-5 border-b border-slate-800 hover:bg-slate-800 transition-colors">
         <Image src="/stl-logo.png" alt="STL Logo" width={72} height={28} className="object-contain" />
         <p className="text-white font-semibold text-sm mt-2">WMS Dashboard</p>
-      </div>
+      </Link>
 
       {/* Nav */}
-      <nav className="flex-1 px-3 py-4 space-y-0.5">
+      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-0.5">
         {nav.map(({ href, label, icon: Icon }) => {
           const active = pathname === href || pathname.startsWith(href + "/");
           return (
