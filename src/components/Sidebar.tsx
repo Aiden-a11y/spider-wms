@@ -30,14 +30,9 @@ export default function Sidebar() {
   return (
     <aside className="w-60 flex-shrink-0 bg-slate-900 flex flex-col min-h-screen">
       {/* Logo */}
-      <div className="flex items-center gap-3 px-5 py-5 border-b border-slate-800">
-        <div className="flex-shrink-0">
-          <Image src="/stl-logo.png" alt="STL Logo" width={72} height={28} className="object-contain" />
-        </div>
-        <div>
-          <p className="text-white font-semibold text-sm leading-tight">WMS Dashboard</p>
-          <p className="text-slate-500 text-xs">Spider WMS</p>
-        </div>
+      <div className="flex flex-col px-5 py-5 border-b border-slate-800">
+        <Image src="/stl-logo.png" alt="STL Logo" width={72} height={28} className="object-contain" />
+        <p className="text-white font-semibold text-sm mt-2">WMS Dashboard</p>
       </div>
 
       {/* Nav */}
