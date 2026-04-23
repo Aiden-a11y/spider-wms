@@ -513,16 +513,17 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* ── KPI Row ── */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-          <KpiCard label="Total Locations"   value={totalLocations}   sub="Registered slots"  icon={MapPin}       accentColor="bg-blue-500"   numColor="text-blue-600"   href="/inventory" animated={animated} delay={0}   />
-          <KpiCard label="Pending Receiving" value={pendingReceiving} sub="Scheduled inbound" icon={PackageCheck} accentColor="bg-emerald-500" numColor="text-emerald-600" href="/receiving"  animated={animated} delay={60}  />
-          <KpiCard label="Pending Shipments" value={pendingShipments} sub="Awaiting dispatch" icon={Truck}        accentColor="bg-amber-500"   numColor="text-amber-600"   href="/shipping"  animated={animated} delay={120} />
-          <KpiCard label="Returns"           value={returns}          sub="Needs review"       icon={RotateCcw}    accentColor="bg-red-500"     numColor="text-red-600"     href="/returns"   animated={animated} delay={180} />
+        {/* ── KPI Row 1: 핵심 운영 지표 ── */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+          <KpiCard label="Pending Receiving" value={pendingReceiving} sub="Scheduled inbound" icon={PackageCheck} accentColor="bg-emerald-500" numColor="text-emerald-600" href="/receiving" animated={animated} delay={0}   size="lg" />
+          <KpiCard label="Pending Shipments" value={pendingShipments} sub="Awaiting dispatch" icon={Truck}        accentColor="bg-amber-500"   numColor="text-amber-600"   href="/shipping"  animated={animated} delay={60}  size="lg" />
+          <KpiCard label="Returns"           value={returns}          sub="Needs review"       icon={RotateCcw}    accentColor="bg-red-500"     numColor="text-red-600"     href="/returns"   animated={animated} delay={120} size="lg" />
         </div>
-        <div className="grid grid-cols-2 gap-4 mb-6">
-          <KpiCard label="Total SKUs"      value={totalSKUs}      sub="Distinct products in warehouse" icon={Boxes}      accentColor="bg-purple-500" numColor="text-purple-600" href="/products"  animated={animated} delay={240} size="lg" />
-          <KpiCard label="Total Inventory" value={totalInventory} sub="Units currently in stock"       icon={TrendingUp} accentColor="bg-indigo-500" numColor="text-indigo-600" href="/inventory" animated={animated} delay={300} size="lg" />
+        {/* ── KPI Row 2: 재고 현황 ── */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+          <KpiCard label="Total Locations"  value={totalLocations}  sub="Registered slots"               icon={MapPin}     accentColor="bg-blue-500"   numColor="text-blue-600"   href="/inventory" animated={animated} delay={180} />
+          <KpiCard label="Total SKUs"       value={totalSKUs}       sub="Distinct products in warehouse" icon={Boxes}      accentColor="bg-purple-500" numColor="text-purple-600" href="/products"  animated={animated} delay={240} />
+          <KpiCard label="Total Inventory"  value={totalInventory}  sub="Units currently in stock"       icon={TrendingUp} accentColor="bg-indigo-500" numColor="text-indigo-600" href="/inventory" animated={animated} delay={300} />
         </div>
 
         {/* ── Analytics Row ── */}
