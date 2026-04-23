@@ -8,6 +8,7 @@ import { Download, Search, Calendar, Save } from "lucide-react";
 interface SnapshotRow {
   id: number;
   captured_date: string;
+  captured_at?: string | null;
   warehouse_code: string;
   customer_code: string | null;
   location: string;
@@ -27,6 +28,24 @@ interface Warehouse {
 function formatExpire(d: string | null) {
   if (!d || d.length !== 8) return d ?? "-";
   return `${d.slice(4,6)}-${d.slice(6,8)}-${d.slice(0,4)}`;
+}
+
+/** Format a UTC ISO timestamp as LA local time */
+function formatCapturedAt(iso: string | null | undefined): string {
+  if (!iso) return "–";
+  try {
+    return new Date(iso).toLocaleString("en-US", {
+      timeZone: "America/Los_Angeles",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
+  } catch {
+    return iso;
+  }
 }
 
 export default function HistoryPage() {
@@ -221,7 +240,14 @@ export default function HistoryPage() {
           <span className="text-slate-300">|</span>
           <span className="text-slate-600">Total qty <b className="text-slate-900">{totalQty.toLocaleString()}</b></span>
           <span className="text-slate-300">|</span>
-          <span className="text-slate-500 text-xs">{date} snapshot</span>
+          <span className="text-slate-500 text-xs">
+            {date} snapshot
+            {rows[0]?.captured_at && (
+              <span className="ml-1 text-slate-400">
+                · captured {formatCapturedAt(rows[0].captured_at)} (LA)
+              </span>
+            )}
+          </span>
         </div>
       )}
 

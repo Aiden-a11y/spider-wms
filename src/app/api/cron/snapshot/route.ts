@@ -64,7 +64,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Token not found in login response" }, { status: 500 });
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  // Use America/Los_Angeles (PST/PDT auto DST) for the date label
+  const capturedAt = new Date().toISOString(); // exact UTC timestamp for audit
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" }); // YYYY-MM-DD in LA time
   let totalInserted = 0;
   const errors: string[] = [];
   const debug: string[] = [];
@@ -128,6 +130,7 @@ export async function GET(req: NextRequest) {
 
                 rows.push({
                   captured_date: today,
+                  captured_at: capturedAt,
                   warehouse_code: whCode,
                   customer_code: cust.code,
                   location,
@@ -176,6 +179,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     ok: true,
     date: today,
+    captured_at: capturedAt,
     inserted: totalInserted,
     warehouses: warehouses.length,
     errors: errors.length > 0 ? errors : undefined,

@@ -105,7 +105,9 @@ export default function InventoryPage() {
 
   const saveSnapshot = useCallback(async (whCode: string, allItems: InventoryItem[]) => {
     if (!supabase || allItems.length === 0) return;
-    const today = new Date().toISOString().slice(0, 10);
+    // Use America/Los_Angeles (PST/PDT auto DST) so date label matches LA business day
+    const capturedAt = new Date().toISOString();
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" }); // YYYY-MM-DD
     const cacheKey = `snapshot_saved__${whCode}__${today}`;
     if (sessionStorage.getItem(cacheKey)) return;
 
@@ -118,6 +120,7 @@ export default function InventoryPage() {
 
     const rows = allItems.map((item) => ({
       captured_date: today,
+      captured_at: capturedAt,
       warehouse_code: whCode,
       customer_code: item.customerCode ?? null,
       location: [item.zone, item.aisle, item.bay, item.level, item.position].join("-"),
