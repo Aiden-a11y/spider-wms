@@ -174,12 +174,17 @@ function KpiCard({
   label: string; value: number; sub?: string;
   icon: React.ElementType; accentColor: string; numColor: string;
   href?: string; animated: boolean; delay?: number;
-  size?: "md" | "lg";
+  size?: "sm" | "md" | "lg";
 }) {
   const router = useRouter();
   const { val, flash } = useCountUp(value, animated);
   const { ripples, trigger } = useRipple();
   const [hovered, setHovered] = useState(false);
+
+  const pad   = size === "lg" ? "p-7" : size === "sm" ? "p-4" : "p-5";
+  const numSz = size === "lg" ? "text-6xl" : size === "sm" ? "text-2xl" : "text-4xl";
+  const subSz = size === "lg" ? "text-sm"  : "text-xs";
+  const icoSz = size === "lg" ? "w-20 h-20" : size === "sm" ? "w-10 h-10" : "w-16 h-16";
 
   return (
     <div
@@ -192,7 +197,7 @@ function KpiCard({
         ${animated ? "animate-[fadeSlideUp_0.5s_ease_forwards]" : "opacity-0"}
         ${href ? "cursor-pointer" : ""}
         ${hovered && href ? "shadow-xl -translate-y-1.5 scale-[1.025]" : "shadow-sm"}
-        ${size === "lg" ? "p-7" : "p-5"}`}
+        ${pad}`}
     >
       {/* top accent bar */}
       <div className={`absolute top-0 left-0 right-0 h-1 ${accentColor} transition-all duration-300
@@ -210,13 +215,13 @@ function KpiCard({
       {/* watermark icon */}
       <Icon className={`absolute right-3 bottom-2 transition-all duration-300 opacity-[0.07]
         ${hovered ? "opacity-[0.12] scale-110" : ""}
-        ${size === "lg" ? "w-20 h-20" : "w-16 h-16"} text-slate-900`} />
+        ${icoSz} text-slate-900`} />
 
       {/* content */}
-      <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-2">{label}</p>
+      <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-1.5">{label}</p>
 
       <p className={`font-black leading-none tabular-nums transition-all duration-200
-        ${size === "lg" ? "text-6xl" : "text-4xl"}
+        ${numSz}
         ${flash ? `${numColor} scale-105` : "text-slate-900"}`}
         style={{ fontVariantNumeric: "tabular-nums" }}
       >
@@ -224,14 +229,13 @@ function KpiCard({
       </p>
 
       {sub && (
-        <p className={`font-medium mt-2 text-slate-400 transition-colors duration-200
-          ${size === "lg" ? "text-sm" : "text-xs"}`}>
+        <p className={`font-medium mt-1.5 text-slate-400 transition-colors duration-200 ${subSz}`}>
           {sub}
         </p>
       )}
 
       {href && (
-        <div className={`mt-3 flex items-center gap-1 text-xs font-semibold transition-all duration-200
+        <div className={`mt-2 flex items-center gap-1 text-xs font-semibold transition-all duration-200
           ${hovered ? `${numColor} gap-2` : "text-slate-300"}`}>
           View all
           <ChevronRight className="w-3.5 h-3.5" />
@@ -520,10 +524,10 @@ export default function DashboardPage() {
           <KpiCard label="Returns"           value={returns}          sub="Needs review"       icon={RotateCcw}    accentColor="bg-red-500"     numColor="text-red-600"     href="/returns"   animated={animated} delay={120} size="lg" />
         </div>
         {/* ── KPI Row 2: 재고 현황 ── */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
-          <KpiCard label="Total Locations"  value={totalLocations}  sub="Registered slots"               icon={MapPin}     accentColor="bg-blue-500"   numColor="text-blue-600"   href="/inventory" animated={animated} delay={180} />
-          <KpiCard label="Total SKUs"       value={totalSKUs}       sub="Distinct products in warehouse" icon={Boxes}      accentColor="bg-purple-500" numColor="text-purple-600" href="/products"  animated={animated} delay={240} />
-          <KpiCard label="Total Inventory"  value={totalInventory}  sub="Units currently in stock"       icon={TrendingUp} accentColor="bg-indigo-500" numColor="text-indigo-600" href="/inventory" animated={animated} delay={300} />
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-6">
+          <KpiCard label="Total Locations"  value={totalLocations}  sub="Registered slots"               icon={MapPin}     accentColor="bg-blue-500"   numColor="text-blue-600"   href="/inventory" animated={animated} delay={180} size="sm" />
+          <KpiCard label="Total SKUs"       value={totalSKUs}       sub="Distinct products in warehouse" icon={Boxes}      accentColor="bg-purple-500" numColor="text-purple-600" href="/products"  animated={animated} delay={240} size="sm" />
+          <KpiCard label="Total Inventory"  value={totalInventory}  sub="Units currently in stock"       icon={TrendingUp} accentColor="bg-indigo-500" numColor="text-indigo-600" href="/inventory" animated={animated} delay={300} size="sm" />
         </div>
 
         {/* ── Analytics Row ── */}
