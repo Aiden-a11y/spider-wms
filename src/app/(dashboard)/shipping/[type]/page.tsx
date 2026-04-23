@@ -23,15 +23,23 @@ const TYPE_META: Record<string, {
   b2e: { label: "B2E Shipping", desc: "Business to eCommerce", icon: Globe,     accent: "bg-teal-600",   accentLight: "bg-teal-50 text-teal-700 border-teal-200",     orderType: "B2E" },
 };
 
-const STATUS_COLORS: Record<string, string> = {
-  PENDING:    "bg-yellow-50 text-yellow-700 border-yellow-200",
-  PROCESSING: "bg-blue-50   text-blue-700   border-blue-200",
-  COMPLETED:  "bg-green-50  text-green-700  border-green-200",
-  SHIPPED:    "bg-purple-50 text-purple-700 border-purple-200",
-  CANCELLED:  "bg-red-50    text-red-700    border-red-200",
+const STATUS_META: Record<string, { label: string; badge: string }> = {
+  CA: { label: "Packing Request",           badge: "bg-blue-50    text-blue-700    border-blue-200"    },
+  DA: { label: "Packing Complete",          badge: "bg-cyan-50    text-cyan-700    border-cyan-200"    },
+  AR: { label: "Auto Label Request",        badge: "bg-violet-50  text-violet-700  border-violet-200"  },
+  AC: { label: "Auto Label Complete",       badge: "bg-indigo-50  text-indigo-700  border-indigo-200"  },
+  LR: { label: "Twinny Packing Request",    badge: "bg-amber-50   text-amber-700   border-amber-200"   },
+  L2: { label: "Twinny Order Cancel Req",   badge: "bg-orange-50  text-orange-700  border-orange-200"  },
+  LC: { label: "Twinny Packing Complete",   badge: "bg-teal-50    text-teal-700    border-teal-200"    },
+  HA: { label: "Hold",                      badge: "bg-red-50     text-red-700     border-red-200"     },
+  CC: { label: "Cancelled Order",           badge: "bg-slate-100  text-slate-500   border-slate-200"   },
+  FA: { label: "Complete",                  badge: "bg-green-50   text-green-700   border-green-200"   },
 };
-function statusBadge(s: string) {
-  return STATUS_COLORS[s?.toUpperCase()] ?? "bg-slate-100 text-slate-600 border-slate-200";
+function statusBadge(code: string) {
+  return STATUS_META[code]?.badge ?? "bg-slate-100 text-slate-500 border-slate-200";
+}
+function statusLabel(code: string) {
+  return STATUS_META[code] ? `${code} · ${STATUS_META[code].label}` : code;
 }
 
 /* ── Friendly column labels ── */
@@ -257,7 +265,7 @@ export default function ShippingTypePage() {
         <div className="flex flex-wrap gap-2 mb-5">
           {statusSummary.map(([s, c]) => (
             <span key={s} className={`text-xs font-semibold px-3 py-1 rounded-full border ${statusBadge(s)}`}>
-              {s} · {c}
+              {statusLabel(s)} ({c})
             </span>
           ))}
           <span className="ml-auto text-xs text-slate-400 self-center">
@@ -312,7 +320,7 @@ export default function ShippingTypePage() {
                       return (
                         <td key={c} className="px-4 py-2.5 whitespace-nowrap">
                           {isStatus ? (
-                            <span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${statusBadge(val)}`}>{val}</span>
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${statusBadge(val)}`}>{statusLabel(val)}</span>
                           ) : isMono ? (
                             <span className="font-mono font-medium text-slate-700">{val}</span>
                           ) : (
