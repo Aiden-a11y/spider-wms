@@ -22,6 +22,10 @@ import {
   MapPin,
   LayoutGrid,
   CheckSquare,
+  Building2,
+  User,
+  Store,
+  Globe,
 } from "lucide-react";
 
 type NavChild = { href: string; label: string; icon: React.ElementType };
@@ -45,7 +49,17 @@ const nav: NavItem[] = [
     ],
   },
   { href: "/products", label: "Products", icon: Package, children: undefined },
-  { href: "/shipping", label: "Outbound Orders", icon: Truck, children: undefined },
+  {
+    href: undefined,
+    label: "Shipping",
+    icon: Truck,
+    children: [
+      { href: "/shipping/b2b", label: "B2B Shipping", icon: Building2 },
+      { href: "/shipping/b2c", label: "B2C Shipping", icon: User },
+      { href: "/shipping/b2s", label: "B2S Shipping", icon: Store },
+      { href: "/shipping/b2e", label: "B2E Shipping", icon: Globe },
+    ],
+  },
   {
     href: undefined,
     label: "Receiving",
@@ -77,6 +91,7 @@ export default function Sidebar() {
     if (["/inventory", "/history"].some((p) => pathname === p || pathname.startsWith(p + "/"))) s.add("Inventory");
     if (["/receiving", "/stow"].some((p) => pathname === p || pathname.startsWith(p + "/"))) s.add("Receiving");
     if (pathname === "/locations" || pathname.startsWith("/locations/")) s.add("Locations");
+    if (pathname.startsWith("/shipping")) s.add("Shipping");
     return s;
   });
 
