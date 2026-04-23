@@ -6,6 +6,19 @@ import { useAuth } from "@/contexts/auth-context";
 import Image from "next/image";
 import { AlertCircle, Loader2 } from "lucide-react";
 
+/* ─────────────────────────────────────────────────────
+   Free Pexels warehouse / logistics stock videos
+   (autoplay, muted, looped — no account needed)
+───────────────────────────────────────────────────── */
+const VIDEO_SOURCES = [
+  // Warehouse workers / forklift interior
+  "https://videos.pexels.com/video-files/3209832/3209832-hd_1920_1080_25fps.mp4",
+  // Logistics packages on conveyor
+  "https://videos.pexels.com/video-files/4842555/4842555-hd_1920_1080_25fps.mp4",
+  // Aerial warehouse overview
+  "https://videos.pexels.com/video-files/3196492/3196492-hd_1920_1080_25fps.mp4",
+];
+
 export default function LoginPage() {
   const { login } = useAuth();
   const router = useRouter();
@@ -29,64 +42,127 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center p-4">
-      <div className="w-full max-w-sm">
+    <div className="relative min-h-screen flex items-center justify-center p-4 overflow-hidden bg-slate-950">
+
+      {/* ── Video background ── */}
+      <video
+        autoPlay
+        muted
+        loop
+        playsInline
+        className="absolute inset-0 w-full h-full object-cover opacity-50"
+      >
+        {VIDEO_SOURCES.map((src) => (
+          <source key={src} src={src} type="video/mp4" />
+        ))}
+      </video>
+
+      {/* ── Gradient overlay (darkens + adds brand color tint) ── */}
+      <div className="absolute inset-0 bg-gradient-to-br from-slate-950/80 via-slate-900/60 to-blue-950/70" />
+
+      {/* ── Subtle grid texture ── */}
+      <div
+        className="absolute inset-0 opacity-[0.04]"
+        style={{
+          backgroundImage:
+            "linear-gradient(rgba(255,255,255,.6) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.6) 1px, transparent 1px)",
+          backgroundSize: "40px 40px",
+        }}
+      />
+
+      {/* ── Login panel ── */}
+      <div className="relative z-10 w-full max-w-sm">
+
+        {/* Logo + tagline */}
         <div className="flex flex-col items-center mb-8">
-          <div className="mb-4">
-            <Image src="/stl-logo.png" alt="STL Logo" width={120} height={48} className="object-contain" />
+          <div className="mb-3 drop-shadow-2xl">
+            <Image
+              src="/stl-logo.png"
+              alt="STL Logo"
+              width={130}
+              height={52}
+              className="object-contain"
+              priority
+            />
           </div>
-          <p className="text-slate-400 text-sm mt-1">Sign in to Spider WMS</p>
+          <p className="text-slate-400 text-sm tracking-wide">Spider WMS · Operations Dashboard</p>
         </div>
 
-        <form
-          onSubmit={handleSubmit}
-          className="bg-white rounded-2xl shadow-2xl p-8 space-y-5"
+        {/* Glassmorphism card */}
+        <div
+          className="rounded-2xl shadow-2xl p-8 space-y-5"
+          style={{
+            background: "rgba(255, 255, 255, 0.07)",
+            backdropFilter: "blur(20px)",
+            WebkitBackdropFilter: "blur(20px)",
+            border: "1px solid rgba(255, 255, 255, 0.12)",
+          }}
         >
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">
-              User ID
-            </label>
-            <input
-              type="text"
-              value={userId}
-              onChange={(e) => setUserId(e.target.value)}
-              required
-              autoFocus
-              placeholder="User ID"
-              className="w-full border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
+          <div className="mb-1">
+            <h2 className="text-white font-semibold text-lg tracking-tight">Sign in</h2>
+            <p className="text-slate-400 text-xs mt-0.5">Enter your credentials to continue</p>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">
-              Password
-            </label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              placeholder="Password"
-              className="w-full border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-          </div>
-
-          {error && (
-            <div className="flex items-center gap-2 text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5 text-sm">
-              <AlertCircle className="w-4 h-4 flex-shrink-0" />
-              {error}
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1.5 uppercase tracking-wide">
+                User ID
+              </label>
+              <input
+                type="text"
+                value={userId}
+                onChange={(e) => setUserId(e.target.value)}
+                required
+                autoFocus
+                placeholder="Enter your user ID"
+                className="w-full rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                style={{
+                  background: "rgba(255,255,255,0.06)",
+                  border: "1px solid rgba(255,255,255,0.12)",
+                }}
+              />
             </div>
-          )}
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-medium py-2.5 px-4 rounded-lg text-sm transition-colors flex items-center justify-center gap-2"
-          >
-            {loading && <Loader2 className="w-4 h-4 animate-spin" />}
-            {loading ? "Signing in..." : "Sign In"}
-          </button>
-        </form>
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1.5 uppercase tracking-wide">
+                Password
+              </label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                placeholder="••••••••"
+                className="w-full rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                style={{
+                  background: "rgba(255,255,255,0.06)",
+                  border: "1px solid rgba(255,255,255,0.12)",
+                }}
+              />
+            </div>
+
+            {error && (
+              <div className="flex items-center gap-2 text-red-300 bg-red-900/40 border border-red-500/30 rounded-lg px-3 py-2.5 text-sm">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                {error}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 disabled:opacity-60 text-white font-semibold py-2.5 px-4 rounded-lg text-sm transition-all duration-200 flex items-center justify-center gap-2 shadow-lg shadow-blue-900/40 mt-2"
+            >
+              {loading && <Loader2 className="w-4 h-4 animate-spin" />}
+              {loading ? "Signing in..." : "Sign In"}
+            </button>
+          </form>
+        </div>
+
+        {/* Footer */}
+        <p className="text-center text-slate-600 text-xs mt-6">
+          © {new Date().getFullYear()} Spider Logistics · Powered by STL
+        </p>
       </div>
     </div>
   );
