@@ -6,18 +6,13 @@ import { useAuth } from "@/contexts/auth-context";
 import Image from "next/image";
 import { AlertCircle, Loader2 } from "lucide-react";
 
-/* ─────────────────────────────────────────────────────
-   Free Pexels warehouse / logistics stock videos
-   (autoplay, muted, looped — no account needed)
-───────────────────────────────────────────────────── */
-const VIDEO_SOURCES = [
-  // Warehouse workers / forklift interior
-  "https://videos.pexels.com/video-files/3209832/3209832-hd_1920_1080_25fps.mp4",
-  // Logistics packages on conveyor
-  "https://videos.pexels.com/video-files/4842555/4842555-hd_1920_1080_25fps.mp4",
-  // Aerial warehouse overview
-  "https://videos.pexels.com/video-files/3196492/3196492-hd_1920_1080_25fps.mp4",
-];
+/* ──────────────────────────────────────────────────────
+   YouTube video IDs — warehouse / logistics / no-copyright
+   Primary  : XK603-FIyaA  (Warehouse | Logistics | Free HD)
+   Fallback : Scgs7-RtviU  (Massive Warehouse Timelapse)
+   The iframe is oversized to hide YouTube UI chrome.
+────────────────────────────────────────────────────── */
+const YT_VIDEO_ID = "XK603-FIyaA";
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -41,32 +36,46 @@ export default function LoginPage() {
     }
   }
 
+  const ytSrc =
+    `https://www.youtube.com/embed/${YT_VIDEO_ID}` +
+    `?autoplay=1&mute=1&loop=1&playlist=${YT_VIDEO_ID}` +
+    `&controls=0&rel=0&modestbranding=1&disablekb=1&fs=0&iv_load_policy=3&playsinline=1`;
+
   return (
     <div className="relative min-h-screen flex items-center justify-center p-4 overflow-hidden bg-slate-950">
 
-      {/* ── Video background ── */}
-      <video
-        autoPlay
-        muted
-        loop
-        playsInline
-        className="absolute inset-0 w-full h-full object-cover opacity-50"
-      >
-        {VIDEO_SOURCES.map((src) => (
-          <source key={src} src={src} type="video/mp4" />
-        ))}
-      </video>
+      {/* ── YouTube background video ── */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden>
+        <iframe
+          src={ytSrc}
+          title="background"
+          allow="autoplay; encrypted-media"
+          style={{
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            /* Cover viewport while keeping 16:9 ratio */
+            width: "100vw",
+            height: "56.25vw",   /* = 100vw × (9/16) */
+            minWidth: "177.78vh", /* = 100vh × (16/9) */
+            minHeight: "100vh",
+            transform: "translate(-50%, -50%)",
+            border: "none",
+            pointerEvents: "none",
+            opacity: 0.55,
+          }}
+        />
+      </div>
 
-      {/* ── Gradient overlay (darkens + adds brand color tint) ── */}
-      <div className="absolute inset-0 bg-gradient-to-br from-slate-950/80 via-slate-900/60 to-blue-950/70" />
+      {/* ── Gradient overlay ── */}
+      <div className="absolute inset-0 bg-gradient-to-br from-slate-950/85 via-slate-900/65 to-blue-950/75 pointer-events-none" />
 
-      {/* ── Subtle grid texture ── */}
+      {/* ── Subtle dot-grid texture ── */}
       <div
-        className="absolute inset-0 opacity-[0.04]"
+        className="absolute inset-0 pointer-events-none"
         style={{
-          backgroundImage:
-            "linear-gradient(rgba(255,255,255,.6) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.6) 1px, transparent 1px)",
-          backgroundSize: "40px 40px",
+          backgroundImage: "radial-gradient(rgba(255,255,255,0.07) 1px, transparent 1px)",
+          backgroundSize: "32px 32px",
         }}
       />
 
@@ -92,10 +101,10 @@ export default function LoginPage() {
         <div
           className="rounded-2xl shadow-2xl p-8 space-y-5"
           style={{
-            background: "rgba(255, 255, 255, 0.07)",
-            backdropFilter: "blur(20px)",
-            WebkitBackdropFilter: "blur(20px)",
-            border: "1px solid rgba(255, 255, 255, 0.12)",
+            background: "rgba(255,255,255,0.07)",
+            backdropFilter: "blur(22px)",
+            WebkitBackdropFilter: "blur(22px)",
+            border: "1px solid rgba(255,255,255,0.12)",
           }}
         >
           <div className="mb-1">
@@ -115,7 +124,7 @@ export default function LoginPage() {
                 required
                 autoFocus
                 placeholder="Enter your user ID"
-                className="w-full rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
                 style={{
                   background: "rgba(255,255,255,0.06)",
                   border: "1px solid rgba(255,255,255,0.12)",
@@ -133,7 +142,7 @@ export default function LoginPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 placeholder="••••••••"
-                className="w-full rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
                 style={{
                   background: "rgba(255,255,255,0.06)",
                   border: "1px solid rgba(255,255,255,0.12)",
