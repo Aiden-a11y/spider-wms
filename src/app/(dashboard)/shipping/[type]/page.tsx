@@ -397,7 +397,7 @@ export default function ShippingTypePage() {
                 </div>
                 <div>
                   <h2 className="font-semibold text-slate-900 text-sm">{meta.label} — {orderCode}</h2>
-                  {d.status && (
+                  {!!d.status && (
                     <span className={`text-xs font-medium px-2 py-0.5 rounded-full border mt-0.5 inline-block ${statusBadge(String(d.status ?? d.orderStatus))}`}>
                       {statusLabel(String(d.status ?? d.orderStatus))}
                     </span>
