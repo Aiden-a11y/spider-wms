@@ -22,6 +22,9 @@ const STATUS_OPTIONS = [
   { code: "EA", label: "EA - Hold" },
 ];
 
+// Rank map for forward-only progression guard (EA is special — always allowed)
+const STATUS_RANK: Record<string, number> = { AA: 0, CA: 1, DA: 2 };
+
 function StatusBadge({ status, name }: { status: string; name?: string }) {
   const colors: Record<string, string> = {
     DA: "bg-green-100 text-green-700",
@@ -357,6 +360,19 @@ export default function ReceivingPage() {
               <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/30 rounded-2xl">
                 <div className="bg-white rounded-xl shadow-xl w-80 p-6">
                   <h3 className="font-semibold text-slate-900 text-sm mb-4">Change Status</h3>
+
+                  {/* Current status display */}
+                  {(() => {
+                    const cur = String(d.status ?? "");
+                    const curName = String(d.statusName ?? cur);
+                    return cur ? (
+                      <div className="mb-4 flex items-center gap-2 text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2 border border-slate-200">
+                        <span>Current:</span>
+                        <StatusBadge status={cur} name={curName} />
+                      </div>
+                    ) : null;
+                  })()}
+
                   <div className="mb-4">
                     <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">New Status</label>
                     <select
@@ -365,7 +381,14 @@ export default function ReceivingPage() {
                       className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="">-- Select --</option>
-                      {STATUS_OPTIONS.map((s) => (
+                      {(() => {
+                        const curRank = STATUS_RANK[String(d.status ?? "")] ?? -1;
+                        return STATUS_OPTIONS.filter((s) => {
+                          if (s.code === "EA") return true; // Hold always allowed
+                          const rank = STATUS_RANK[s.code] ?? -1;
+                          return rank > curRank;           // Only forward moves
+                        });
+                      })().map((s) => (
                         <option key={s.code} value={s.code}>{s.label}</option>
                       ))}
                     </select>

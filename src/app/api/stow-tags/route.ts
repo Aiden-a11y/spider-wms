@@ -38,3 +38,32 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Failed to save stow tag" }, { status: 500 });
   }
 }
+
+// DELETE /api/stow-tags?orderCode=xxx  — remove all pending tags for an order
+export async function DELETE(req: NextRequest) {
+  try {
+    const orderCode = req.nextUrl.searchParams.get("orderCode");
+    if (!orderCode) return NextResponse.json({ error: "orderCode required" }, { status: 400 });
+
+    const raw = await redis.hgetall(HASH_KEY);
+    if (!raw) return NextResponse.json({ deleted: 0 });
+
+    const toDelete: string[] = [];
+    for (const [id, v] of Object.entries(raw)) {
+      const tag: PersistedStowTag = typeof v === "string" ? JSON.parse(v) : (v as PersistedStowTag);
+      // Only delete pending (not yet stowed) tags for this order
+      if (tag.orderCode === orderCode && !tag.stowedAt) {
+        toDelete.push(id);
+      }
+    }
+
+    if (toDelete.length > 0) {
+      await redis.hdel(HASH_KEY, ...toDelete);
+    }
+
+    return NextResponse.json({ deleted: toDelete.length });
+  } catch (e) {
+    console.error("DELETE /api/stow-tags", e);
+    return NextResponse.json({ error: "Failed to delete stow tags" }, { status: 500 });
+  }
+}

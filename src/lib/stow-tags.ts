@@ -43,3 +43,22 @@ export async function fetchPendingStowTags(): Promise<PersistedStowTag[]> {
 export async function markStowTagDone(id: number): Promise<void> {
   await fetch(`/api/stow-tags/${id}`, { method: "PATCH" });
 }
+
+/**
+ * Delete all pending (un-stowed) stow tags for a receiving order.
+ * Called when re-entering order processing to clean up stale tags
+ * from a previous session (e.g., after a status rollback).
+ */
+export async function deleteStowTagsByOrder(orderCode: string): Promise<number> {
+  try {
+    const res = await fetch(
+      `/api/stow-tags?orderCode=${encodeURIComponent(orderCode)}`,
+      { method: "DELETE" }
+    );
+    if (!res.ok) return 0;
+    const json = await res.json();
+    return json.deleted ?? 0;
+  } catch {
+    return 0;
+  }
+}
