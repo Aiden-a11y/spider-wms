@@ -39,7 +39,7 @@ function statusBadge(code: string) {
   return STATUS_META[code]?.badge ?? "bg-slate-100 text-slate-500 border-slate-200";
 }
 function statusLabel(code: string) {
-  return STATUS_META[code] ? `${code} · ${STATUS_META[code].label}` : code;
+  return STATUS_META[code]?.label ?? code;
 }
 
 /* ── Friendly column labels ── */
@@ -265,7 +265,7 @@ export default function ShippingTypePage() {
         <div className="flex flex-wrap gap-2 mb-5">
           {statusSummary.map(([s, c]) => (
             <span key={s} className={`text-xs font-semibold px-3 py-1 rounded-full border ${statusBadge(s)}`}>
-              {statusLabel(s)} ({c})
+              {statusLabel(s)} <span className="opacity-60">· {c}</span>
             </span>
           ))}
           <span className="ml-auto text-xs text-slate-400 self-center">
