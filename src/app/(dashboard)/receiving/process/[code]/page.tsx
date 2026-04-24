@@ -4,7 +4,6 @@ import { useEffect, useState, useMemo, useCallback } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import { useRouter, useParams } from "next/navigation";
 import { ArrowLeft, ScanLine, CheckCircle2, AlertCircle, PackageCheck } from "lucide-react";
-import { deleteStowTagsByOrder } from "@/lib/stow-tags";
 
 type Row = Record<string, unknown>;
 
@@ -33,22 +32,11 @@ export default function ReceivingProcessDetailPage() {
   // Load completed items from localStorage
   useEffect(() => {
     if (!code) return;
-    let alreadyStarted = false;
     try {
       const saved = localStorage.getItem(`wms_receiving_${code}`);
-      if (saved) {
-        const parsed: string[] = JSON.parse(saved);
-        if (parsed.length > 0) alreadyStarted = true;
-        setCompletedKeys(new Set(parsed));
-      }
+      if (saved) setCompletedKeys(new Set(JSON.parse(saved)));
     } catch {}
-
-    // If this is a fresh session for this order (no items completed yet),
-    // clean up any stale pending stow tags left from a previous processing run.
-    if (!alreadyStarted) {
-      deleteStowTagsByOrder(code).catch(() => {});
-    }
-  }, [code]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [code]);
 
   const fetchData = useCallback(async () => {
     if (!code) return;
