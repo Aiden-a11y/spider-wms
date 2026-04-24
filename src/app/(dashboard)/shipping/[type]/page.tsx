@@ -450,7 +450,7 @@ export default function ShippingTypePage() {
                       <Field label="Tracking #"    value={d.trackingNo ?? d.trackingNumber} />
                       <Field label="Delivery Date" value={d.deliveryDate ?? d.estimatedDate} />
                     </div>
-                    {(d.receiverName || d.deliveryAddress) && (
+                    {!!(d.receiverName || d.deliveryAddress) && (
                       <div className="grid grid-cols-3 gap-4">
                         <Field label="Receiver"   value={d.receiverName} />
                         <Field label="Phone"      value={d.receiverPhone ?? d.phone} />
