@@ -235,27 +235,23 @@ export default function ShippingTypePage() {
   async function saveEdit() {
     setSaving(true);
     setSaveError("");
-    const code = String(
-      editData.shippingOrderCode ?? editData.orderCode ?? editData.outboundCode ?? ""
-    );
-    const attempts = [
-      { url: `/api/wms/shipping/${type}/${code}`, method: "PUT"   },
-      { url: `/api/wms/shipping/${type}/${code}`, method: "PATCH" },
-      { url: `/api/wms/shipping/update/${code}`,  method: "PUT"   },
-      { url: `/api/wms/shipping/update`,          method: "POST"  },
-    ];
-    for (const { url, method } of attempts) {
-      try {
-        const res = await fetch(url, { method, headers, body: JSON.stringify(editData) });
-        if (res.ok) {
-          setDetail(editData);
-          setEditMode(false);
-          setSaving(false);
-          return;
-        }
-      } catch { /* try next */ }
+    try {
+      const res = await fetch("/api/wms/shipping/save", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(editData),
+      });
+      const json = await res.json().catch(() => null);
+      if (res.ok && json?.isSuccess !== false) {
+        setDetail(editData);
+        setEditMode(false);
+        setSaving(false);
+        return;
+      }
+      setSaveError(json?.message ?? "저장 실패 — API 응답을 확인해주세요.");
+    } catch {
+      setSaveError("저장 실패 — 네트워크 오류");
     }
-    setSaveError("저장 실패 — API 응답을 확인해주세요.");
     setSaving(false);
   }
 
