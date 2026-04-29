@@ -93,7 +93,7 @@ export default function ShippingTypePage() {
   const [detail,        setDetail]        = useState<Order | null>(null);
   const [itemsRaw,      setItemsRaw]      = useState<Order[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [activeTab,     setActiveTab]     = useState<"info" | "items" | "raw">("info");
+  const [activeTab,     setActiveTab]     = useState<"info" | "address" | "package" | "additional" | "items" | "raw">("info");
 
   const headers = useMemo(
     () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
@@ -454,13 +454,22 @@ export default function ShippingTypePage() {
             </div>
 
             {/* Tabs */}
-            <div className="flex border-b border-slate-200 px-6 flex-shrink-0">
-              {(["info", "items", "raw"] as const).map((tab) => (
-                <button key={tab} onClick={() => setActiveTab(tab)}
-                  className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px ${activeTab === tab ? "border-blue-600 text-blue-600" : "border-transparent text-slate-500 hover:text-slate-700"}`}>
-                  {tab === "info" ? "Info" : tab === "items" ? `Items${itemList.length ? ` (${itemList.length})` : ""}` : "Raw"}
-                </button>
-              ))}
+            <div className="flex border-b border-slate-200 px-6 flex-shrink-0 overflow-x-auto">
+              {(["info", "address", "package", "additional", "items", "raw"] as const).map((tab) => {
+                const label =
+                  tab === "info"       ? "Info"
+                  : tab === "address"  ? "Address"
+                  : tab === "package"  ? "Package"
+                  : tab === "additional" ? "Additional"
+                  : tab === "items"    ? `Items${itemList.length ? ` (${itemList.length})` : ""}`
+                  : "Raw";
+                return (
+                  <button key={tab} onClick={() => setActiveTab(tab)}
+                    className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px whitespace-nowrap ${activeTab === tab ? "border-blue-600 text-blue-600" : "border-transparent text-slate-500 hover:text-slate-700"}`}>
+                    {label}
+                  </button>
+                );
+              })}
             </div>
 
             {/* Content */}
@@ -473,8 +482,7 @@ export default function ShippingTypePage() {
 
                 {/* ── Info tab ── */}
                 {activeTab === "info" && (
-                  <div className="p-6 space-y-6">
-                    {/* Core order info */}
+                  <div className="p-6 space-y-5">
                     <div className="grid grid-cols-3 gap-4">
                       <Field label="Order Code"    value={d.shippingOrderCode ?? d.orderCode ?? d.outboundCode} />
                       <Field label="Customer"      value={d.customerName ?? d.customerCode} />
@@ -495,57 +503,32 @@ export default function ShippingTypePage() {
                       <Field label="Tracking #"    value={d.trackingNo ?? d.trackingNumber} />
                       <Field label="Delivery Date" value={d.deliveryDate ?? d.estimatedDate} />
                     </div>
-                    {!!(d.receiverName || d.deliveryAddress) && (
-                      <div className="grid grid-cols-3 gap-4">
-                        <Field label="Receiver"   value={d.receiverName} />
-                        <Field label="Phone"      value={d.receiverPhone ?? d.phone} />
-                        <Field label="Address"    value={d.deliveryAddress ?? d.address} />
-                      </div>
-                    )}
-
-                    {/* Shipping details */}
                     {!!(d.shippingOrderNo || d.orderType) && (
+                      <div className="grid grid-cols-3 gap-4 pt-2 border-t border-slate-100">
+                        <Field label="Shipping Order No" value={d.shippingOrderNo} />
+                        <Field label="Order Type"        value={d.orderType} />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ── Address tab ── */}
+                {activeTab === "address" && (
+                  <div className="p-6 space-y-6">
+                    {!!(d.receiverName || d.deliveryAddress) && (
                       <div>
-                        <p className="text-xs text-slate-400 uppercase tracking-wide mb-3 border-t border-slate-100 pt-4">Shipping Details</p>
+                        <p className="text-xs text-slate-400 uppercase tracking-wide mb-3">Consignee</p>
                         <div className="grid grid-cols-3 gap-4">
-                          <Field label="Shipping Order No" value={d.shippingOrderNo} />
-                          <Field label="Order Type"        value={d.orderType} />
+                          <Field label="Name"    value={d.receiverName} />
+                          <Field label="Phone"   value={d.receiverPhone ?? d.phone} />
+                          <Field label="ZIP"     value={d.zipCode} />
+                          <Field label="Address" value={d.deliveryAddress ?? d.address} />
                         </div>
                       </div>
                     )}
-
-                    {/* Measurements */}
-                    {!!(d.totalWeight != null || d.length != null || d.width != null || d.height != null) && (
-                      <div>
-                        <p className="text-xs text-slate-400 uppercase tracking-wide mb-3 border-t border-slate-100 pt-4">Measurements</p>
-                        <div className="grid grid-cols-4 gap-4">
-                          <Field label="Total Weight" value={d.totalWeight} />
-                          <Field label="Length"       value={d.length} />
-                          <Field label="Width"        value={d.width} />
-                          <Field label="Height"       value={d.height} />
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Financials */}
-                    {!!(d.invoiceValue != null || d.fareValue != null || d.shippingCost != null) && (
-                      <div>
-                        <p className="text-xs text-slate-400 uppercase tracking-wide mb-3 border-t border-slate-100 pt-4">Financials</p>
-                        <div className="grid grid-cols-3 gap-4">
-                          <Field label="Invoice Value"   value={d.invoiceValue} />
-                          <Field label="Fare Value"      value={d.fareValue} />
-                          <Field label="Fare Etc"        value={d.fareEtcValue} />
-                          <Field label="Insurance Value" value={d.insuranceValue} />
-                          <Field label="Shipping Rate"   value={d.shippingRate} />
-                          <Field label="Shipping Cost"   value={d.shippingCost} />
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Consignor */}
                     {!!(d.consignorName || d.consignorAddress1) && (
                       <div>
-                        <p className="text-xs text-slate-400 uppercase tracking-wide mb-3 border-t border-slate-100 pt-4">Consignor</p>
+                        <p className="text-xs text-slate-400 uppercase tracking-wide mb-3 border-t border-slate-100 pt-5">Consignor</p>
                         <div className="grid grid-cols-3 gap-4">
                           <Field label="Name"    value={d.consignorName} />
                           <Field label="Tel"     value={d.consignorTelLno} />
@@ -557,24 +540,57 @@ export default function ShippingTypePage() {
                         </div>
                       </div>
                     )}
+                    {!(d.receiverName || d.deliveryAddress || d.consignorName || d.consignorAddress1) && (
+                      <p className="text-sm text-slate-400 text-center py-12">No address data</p>
+                    )}
+                  </div>
+                )}
 
-                    {/* Comment */}
+                {/* ── Package tab ── */}
+                {activeTab === "package" && (
+                  <div className="p-6 space-y-6">
+                    <div>
+                      <p className="text-xs text-slate-400 uppercase tracking-wide mb-3">Dimensions</p>
+                      <div className="grid grid-cols-4 gap-4">
+                        <Field label="Total Weight" value={d.totalWeight} />
+                        <Field label="Length"       value={d.length} />
+                        <Field label="Width"        value={d.width} />
+                        <Field label="Height"       value={d.height} />
+                      </div>
+                    </div>
+                    <div className="border-t border-slate-100 pt-5">
+                      <p className="text-xs text-slate-400 uppercase tracking-wide mb-3">Financial</p>
+                      <div className="grid grid-cols-3 gap-4">
+                        <Field label="Invoice Value"   value={d.invoiceValue} />
+                        <Field label="Fare Value"      value={d.fareValue} />
+                        <Field label="Fare Etc"        value={d.fareEtcValue} />
+                        <Field label="Insurance Value" value={d.insuranceValue} />
+                        <Field label="Shipping Rate"   value={d.shippingRate} />
+                        <Field label="Shipping Cost"   value={d.shippingCost} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ── Additional tab ── */}
+                {activeTab === "additional" && (
+                  <div className="p-6 space-y-5">
                     {!!d.comment && (
-                      <div className="border-t border-slate-100 pt-4">
+                      <div>
                         <p className="text-xs text-slate-400 uppercase tracking-wide mb-2">Comment</p>
                         <p className="text-sm text-slate-700 break-all">{String(d.comment)}</p>
                       </div>
                     )}
-
-                    {/* Additional fields — catch-all */}
                     {(() => {
                       const extra = Object.entries(d).filter(([k, v]) =>
                         !SKIP_FIELDS.has(k) && v != null && v !== "" && !Array.isArray(v) && typeof v !== "object"
                       );
+                      if (!extra.length && !d.comment) return (
+                        <p className="text-sm text-slate-400 text-center py-12">No additional data</p>
+                      );
                       if (!extra.length) return null;
                       return (
-                        <div>
-                          <p className="text-xs text-slate-400 uppercase tracking-wide mb-3 border-t border-slate-100 pt-4">Additional Info</p>
+                        <div className={d.comment ? "border-t border-slate-100 pt-5" : ""}>
                           <div className="grid grid-cols-3 gap-4">
                             {extra.map(([k, v]) => <Field key={k} label={COL_LABELS[k] ?? k} value={v} />)}
                           </div>
