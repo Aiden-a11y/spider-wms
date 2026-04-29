@@ -264,6 +264,9 @@ export default function ShippingTypePage() {
     "invoiceValue","fareValue","fareEtcValue","insuranceValue","shippingRate","shippingCost",
     "consignorName","consignorAddress1","consignorCity","consignorState",
     "consignorZip","consignorZipCode","consignorNationalCode","consignorTelLno",
+    "consigneeName","consigneeAddress1","consigneeAddress2","consigneeCity","consigneeState",
+    "consigneeZipCode","consigneeNationalCode","consigneeTelLno","consigneeCellNo",
+    "consigneeDeliveryMessage","consigneeEtc1","consigneeEtc2",
     "comment",
   ]);
 
@@ -515,20 +518,30 @@ export default function ShippingTypePage() {
                 {/* ── Address tab ── */}
                 {activeTab === "address" && (
                   <div className="p-6 space-y-6">
-                    {!!(d.receiverName || d.deliveryAddress) && (
+                    {!!(d.consigneeName || d.consigneeAddress1) && (
                       <div>
                         <p className="text-xs text-slate-400 uppercase tracking-wide mb-3">Consignee</p>
                         <div className="grid grid-cols-3 gap-4">
-                          <Field label="Name"    value={d.receiverName} />
-                          <Field label="Phone"   value={d.receiverPhone ?? d.phone} />
-                          <Field label="ZIP"     value={d.zipCode} />
-                          <Field label="Address" value={d.deliveryAddress ?? d.address} />
+                          <Field label="Name"             value={d.consigneeName} />
+                          <Field label="Tel"              value={d.consigneeTelLno} />
+                          <Field label="Cell"             value={d.consigneeCellNo} />
+                          <Field label="Address"          value={d.consigneeAddress1} />
+                          <Field label="Address 2"        value={d.consigneeAddress2} />
+                          <Field label="City"             value={d.consigneeCity} />
+                          <Field label="State"            value={d.consigneeState} />
+                          <Field label="ZIP"              value={d.consigneeZipCode} />
+                          <Field label="Country"          value={d.consigneeNationalCode} />
+                          {!!d.consigneeDeliveryMessage && (
+                            <div className="col-span-3">
+                              <Field label="Delivery Message" value={d.consigneeDeliveryMessage} />
+                            </div>
+                          )}
                         </div>
                       </div>
                     )}
                     {!!(d.consignorName || d.consignorAddress1) && (
-                      <div>
-                        <p className="text-xs text-slate-400 uppercase tracking-wide mb-3 border-t border-slate-100 pt-5">Consignor</p>
+                      <div className={d.consigneeName || d.consigneeAddress1 ? "border-t border-slate-100 pt-5" : ""}>
+                        <p className="text-xs text-slate-400 uppercase tracking-wide mb-3">Consignor</p>
                         <div className="grid grid-cols-3 gap-4">
                           <Field label="Name"    value={d.consignorName} />
                           <Field label="Tel"     value={d.consignorTelLno} />
@@ -540,7 +553,7 @@ export default function ShippingTypePage() {
                         </div>
                       </div>
                     )}
-                    {!(d.receiverName || d.deliveryAddress || d.consignorName || d.consignorAddress1) && (
+                    {!(d.consigneeName || d.consigneeAddress1 || d.consignorName || d.consignorAddress1) && (
                       <p className="text-sm text-slate-400 text-center py-12">No address data</p>
                     )}
                   </div>
