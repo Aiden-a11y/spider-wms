@@ -44,6 +44,15 @@ const COL_LABELS: Record<string, string> = {
   warehouseCode: "Warehouse",
   trackingNo: "Tracking #", trackingNumber: "Tracking #",
   receiverName: "Receiver", deliveryAddress: "Address",
+  shippingOrderNo: "Shipping Order No", orderType: "Order Type",
+  totalWeight: "Total Weight", length: "Length", width: "Width", height: "Height",
+  invoiceValue: "Invoice Value", fareValue: "Fare Value", fareEtcValue: "Fare Etc",
+  insuranceValue: "Insurance Value", shippingRate: "Shipping Rate", shippingCost: "Shipping Cost",
+  consignorName: "Consignor", consignorAddress1: "Address",
+  consignorCity: "City", consignorState: "State",
+  consignorZip: "ZIP", consignorZipCode: "ZIP",
+  consignorNationalCode: "Country", consignorTelLno: "Tel",
+  comment: "Comment",
 };
 
 /* ── Field display helper ── */
@@ -82,6 +91,7 @@ export default function ShippingTypePage() {
   /* ── Modal state ── */
   const [selected,      setSelected]      = useState<Order | null>(null);
   const [detail,        setDetail]        = useState<Order | null>(null);
+  const [itemsRaw,      setItemsRaw]      = useState<Order[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [activeTab,     setActiveTab]     = useState<"info" | "items" | "raw">("info");
 
@@ -138,32 +148,56 @@ export default function ShippingTypePage() {
   async function openDetail(order: Order) {
     setSelected(order);
     setDetail(null);
+    setItemsRaw([]);
     setActiveTab("info");
     setDetailLoading(true);
 
     const code = String(order.shippingOrderCode ?? order.orderCode ?? order.outboundCode ?? "");
-    const endpoints = [
+
+    // detail + items in parallel
+    const detailEndpoints = [
       `/api/wms/shipping/${type}/${code}`,
       `/api/wms/shipping/detail/${code}`,
       `/api/wms/shipping/${code}`,
       `/api/wms/outbound/${type}/${code}`,
       `/api/wms/outbound/detail/${code}`,
     ];
-    for (const ep of endpoints) {
+    const itemEndpoints = [
+      `/api/wms/shipping/${type}/items/${code}`,
+      `/api/wms/shipping/items/${code}`,
+    ];
+
+    // fetch detail
+    let detailFound = false;
+    for (const ep of detailEndpoints) {
       try {
         const res  = await fetch(ep, { headers });
         const json = await res.json();
         const d    = json?.data ?? json;
         if (res.ok && d && typeof d === "object" && !Array.isArray(d)) {
-          setDetail(d as Order); setDetailLoading(false); return;
+          setDetail(d as Order); setDetailLoading(false);
+          detailFound = true;
+          break;
         }
       } catch { /* try next */ }
     }
     // fallback: show list row data as-is
-    setDetail(order); setDetailLoading(false);
+    if (!detailFound) { setDetail(order); setDetailLoading(false); }
+
+    // fetch items (best-effort, non-blocking)
+    for (const ep of itemEndpoints) {
+      try {
+        const res  = await fetch(ep, { headers });
+        const json = await res.json().catch(() => null);
+        const list = json?.data?.items ?? json?.data?.list ?? json?.data ?? (Array.isArray(json) ? json : null);
+        if (res.ok && Array.isArray(list) && list.length > 0) {
+          setItemsRaw(list); break;
+        }
+      } catch { /* ignore */ }
+    }
   }
 
-  function closeDetail() { setSelected(null); setDetail(null); }
+  function closeDetail() { setSelected(null); setDetail(null); setItemsRaw([]); }
 
   /* ── Derived ── */
   const cols = useMemo(() => {
@@ -211,7 +245,11 @@ export default function ShippingTypePage() {
   /* ── Detail modal content ── */
   const d = detail ?? selected ?? {};
   const orderCode = String(d.shippingOrderCode ?? d.orderCode ?? d.outboundCode ?? "");
-  const itemList: Order[] = Array.isArray(d.itemList ?? d.items ?? d.shippingItemList) ? (d.itemList ?? d.items ?? d.shippingItemList) as Order[] : [];
+  const itemList: Order[] =
+    itemsRaw.length > 0 ? itemsRaw
+    : Array.isArray(d.itemList ?? d.items ?? d.shippingItemList)
+      ? (d.itemList ?? d.items ?? d.shippingItemList) as Order[]
+      : [];
 
   /* Fields to skip in "extra" section */
   const SKIP_FIELDS = new Set([
@@ -221,6 +259,12 @@ export default function ShippingTypePage() {
     "totalQty","qty","trackingNo","trackingNumber",
     "receiverName","receiverPhone","deliveryAddress","zipCode",
     "itemList","items","shippingItemList","documentList",
+    "shippingOrderNo","orderType",
+    "totalWeight","length","width","height",
+    "invoiceValue","fareValue","fareEtcValue","insuranceValue","shippingRate","shippingCost",
+    "consignorName","consignorAddress1","consignorCity","consignorState",
+    "consignorZip","consignorZipCode","consignorNationalCode","consignorTelLno",
+    "comment",
   ]);
 
   return (
@@ -430,6 +474,7 @@ export default function ShippingTypePage() {
                 {/* ── Info tab ── */}
                 {activeTab === "info" && (
                   <div className="p-6 space-y-6">
+                    {/* Core order info */}
                     <div className="grid grid-cols-3 gap-4">
                       <Field label="Order Code"    value={d.shippingOrderCode ?? d.orderCode ?? d.outboundCode} />
                       <Field label="Customer"      value={d.customerName ?? d.customerCode} />
@@ -458,7 +503,70 @@ export default function ShippingTypePage() {
                       </div>
                     )}
 
-                    {/* Additional fields */}
+                    {/* Shipping details */}
+                    {!!(d.shippingOrderNo || d.orderType) && (
+                      <div>
+                        <p className="text-xs text-slate-400 uppercase tracking-wide mb-3 border-t border-slate-100 pt-4">Shipping Details</p>
+                        <div className="grid grid-cols-3 gap-4">
+                          <Field label="Shipping Order No" value={d.shippingOrderNo} />
+                          <Field label="Order Type"        value={d.orderType} />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Measurements */}
+                    {!!(d.totalWeight != null || d.length != null || d.width != null || d.height != null) && (
+                      <div>
+                        <p className="text-xs text-slate-400 uppercase tracking-wide mb-3 border-t border-slate-100 pt-4">Measurements</p>
+                        <div className="grid grid-cols-4 gap-4">
+                          <Field label="Total Weight" value={d.totalWeight} />
+                          <Field label="Length"       value={d.length} />
+                          <Field label="Width"        value={d.width} />
+                          <Field label="Height"       value={d.height} />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Financials */}
+                    {!!(d.invoiceValue != null || d.fareValue != null || d.shippingCost != null) && (
+                      <div>
+                        <p className="text-xs text-slate-400 uppercase tracking-wide mb-3 border-t border-slate-100 pt-4">Financials</p>
+                        <div className="grid grid-cols-3 gap-4">
+                          <Field label="Invoice Value"   value={d.invoiceValue} />
+                          <Field label="Fare Value"      value={d.fareValue} />
+                          <Field label="Fare Etc"        value={d.fareEtcValue} />
+                          <Field label="Insurance Value" value={d.insuranceValue} />
+                          <Field label="Shipping Rate"   value={d.shippingRate} />
+                          <Field label="Shipping Cost"   value={d.shippingCost} />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Consignor */}
+                    {!!(d.consignorName || d.consignorAddress1) && (
+                      <div>
+                        <p className="text-xs text-slate-400 uppercase tracking-wide mb-3 border-t border-slate-100 pt-4">Consignor</p>
+                        <div className="grid grid-cols-3 gap-4">
+                          <Field label="Name"    value={d.consignorName} />
+                          <Field label="Tel"     value={d.consignorTelLno} />
+                          <Field label="Country" value={d.consignorNationalCode} />
+                          <Field label="Address" value={d.consignorAddress1} />
+                          <Field label="City"    value={d.consignorCity} />
+                          <Field label="State"   value={d.consignorState} />
+                          <Field label="ZIP"     value={d.consignorZipCode ?? d.consignorZip} />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Comment */}
+                    {!!d.comment && (
+                      <div className="border-t border-slate-100 pt-4">
+                        <p className="text-xs text-slate-400 uppercase tracking-wide mb-2">Comment</p>
+                        <p className="text-sm text-slate-700 break-all">{String(d.comment)}</p>
+                      </div>
+                    )}
+
+                    {/* Additional fields — catch-all */}
                     {(() => {
                       const extra = Object.entries(d).filter(([k, v]) =>
                         !SKIP_FIELDS.has(k) && v != null && v !== "" && !Array.isArray(v) && typeof v !== "object"
@@ -466,7 +574,7 @@ export default function ShippingTypePage() {
                       if (!extra.length) return null;
                       return (
                         <div>
-                          <p className="text-xs text-slate-400 uppercase tracking-wide mb-3">Additional Info</p>
+                          <p className="text-xs text-slate-400 uppercase tracking-wide mb-3 border-t border-slate-100 pt-4">Additional Info</p>
                           <div className="grid grid-cols-3 gap-4">
                             {extra.map(([k, v]) => <Field key={k} label={COL_LABELS[k] ?? k} value={v} />)}
                           </div>
