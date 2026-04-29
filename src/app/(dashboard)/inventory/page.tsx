@@ -147,6 +147,7 @@ export default function InventoryPage() {
     const { utils, writeFile } = await import("xlsx");
     const rows = sortedItems.map((item) => ({
       Location: [item.zone, item.aisle, item.bay, item.level, item.position].join("-"),
+      Customer: item.customerCode ?? "",
       SKU: item.sku,
       "Product Name": item.productName,
       Qty: item.qty,
@@ -444,6 +445,7 @@ export default function InventoryPage() {
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200">
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Location</th>
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Customer</th>
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">SKU</th>
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Product Name</th>
                 <th className="px-4 py-2.5 text-right text-slate-500 font-medium">Qty</th>
@@ -458,6 +460,7 @@ export default function InventoryPage() {
                 return (
                   <tr key={`${item.locationId}-${item.sku}-${idx}`} className="hover:bg-slate-50 border-b border-slate-100 last:border-0">
                     <td className="px-4 py-2.5 font-mono text-slate-600 whitespace-nowrap">{loc}</td>
+                    <td className="px-4 py-2.5 text-slate-500 font-mono">{item.customerCode || "-"}</td>
                     <td className="px-4 py-2.5">
                       <span className="font-mono font-medium text-slate-900 bg-slate-100 px-2 py-0.5 rounded">{item.sku || "-"}</span>
                     </td>
