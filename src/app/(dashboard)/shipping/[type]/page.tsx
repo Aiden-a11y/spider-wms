@@ -55,9 +55,23 @@ const COL_LABELS: Record<string, string> = {
   comment: "Comment",
 };
 
-/* ── Field display helper ── */
-function Field({ label, value }: { label: string; value: unknown }) {
+/* ── Field display / edit helper ── */
+function Field({ label, value, onChange }: { label: string; value: unknown; onChange?: (v: string) => void }) {
   const v = value == null || value === "" ? "-" : String(value);
+  if (onChange) {
+    return (
+      <div>
+        <label className="text-xs text-slate-400 uppercase tracking-wide mb-1 block">{label}</label>
+        <input
+          type="text"
+          value={v === "-" ? "" : v}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="-"
+          className="w-full text-sm text-slate-800 border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+        />
+      </div>
+    );
+  }
   return (
     <div>
       <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">{label}</p>
@@ -94,6 +108,10 @@ export default function ShippingTypePage() {
   const [itemsRaw,      setItemsRaw]      = useState<Order[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [activeTab,     setActiveTab]     = useState<"info" | "address" | "package" | "additional" | "items" | "raw">("info");
+  const [editMode,      setEditMode]      = useState(false);
+  const [editData,      setEditData]      = useState<Order>({});
+  const [saving,        setSaving]        = useState(false);
+  const [saveError,     setSaveError]     = useState("");
 
   const headers = useMemo(
     () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
@@ -197,7 +215,49 @@ export default function ShippingTypePage() {
     }
   }
 
-  function closeDetail() { setSelected(null); setDetail(null); setItemsRaw([]); }
+  function closeDetail() {
+    setSelected(null); setDetail(null); setItemsRaw([]);
+    setEditMode(false); setEditData({}); setSaveError("");
+  }
+
+  function startEdit() {
+    setEditData({ ...(detail ?? selected ?? {}) });
+    setEditMode(true);
+    setSaveError("");
+  }
+
+  function cancelEdit() {
+    setEditMode(false);
+    setEditData({});
+    setSaveError("");
+  }
+
+  async function saveEdit() {
+    setSaving(true);
+    setSaveError("");
+    const code = String(
+      editData.shippingOrderCode ?? editData.orderCode ?? editData.outboundCode ?? ""
+    );
+    const attempts = [
+      { url: `/api/wms/shipping/${type}/${code}`, method: "PUT"   },
+      { url: `/api/wms/shipping/${type}/${code}`, method: "PATCH" },
+      { url: `/api/wms/shipping/update/${code}`,  method: "PUT"   },
+      { url: `/api/wms/shipping/update`,          method: "POST"  },
+    ];
+    for (const { url, method } of attempts) {
+      try {
+        const res = await fetch(url, { method, headers, body: JSON.stringify(editData) });
+        if (res.ok) {
+          setDetail(editData);
+          setEditMode(false);
+          setSaving(false);
+          return;
+        }
+      } catch { /* try next */ }
+    }
+    setSaveError("저장 실패 — API 응답을 확인해주세요.");
+    setSaving(false);
+  }
 
   /* ── Derived ── */
   const cols = useMemo(() => {
@@ -245,6 +305,11 @@ export default function ShippingTypePage() {
   /* ── Detail modal content ── */
   const d = detail ?? selected ?? {};
   const orderCode = String(d.shippingOrderCode ?? d.orderCode ?? d.outboundCode ?? "");
+
+  /* edit field helper: read from editData in edit mode, d otherwise */
+  const ef = (key: string) => editMode
+    ? { value: editData[key], onChange: (v: string) => setEditData((p) => ({ ...p, [key]: v })) }
+    : { value: d[key] };
   const itemList: Order[] =
     itemsRaw.length > 0 ? itemsRaw
     : Array.isArray(d.itemList ?? d.items ?? d.shippingItemList)
@@ -451,10 +516,32 @@ export default function ShippingTypePage() {
                   )}
                 </div>
               </div>
-              <button onClick={closeDetail} className="text-slate-400 hover:text-slate-700 transition-colors">
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                {!editMode ? (
+                  <button onClick={startEdit}
+                    className="text-xs font-medium px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">
+                    Edit
+                  </button>
+                ) : (
+                  <>
+                    <button onClick={cancelEdit}
+                      className="text-xs font-medium px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">
+                      Cancel
+                    </button>
+                    <button onClick={saveEdit} disabled={saving}
+                      className="text-xs font-medium px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors">
+                      {saving ? "Saving…" : "Save"}
+                    </button>
+                  </>
+                )}
+                <button onClick={closeDetail} className="text-slate-400 hover:text-slate-700 transition-colors ml-1">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
+            {saveError && (
+              <div className="px-6 py-2 bg-red-50 border-b border-red-100 text-xs text-red-600 flex-shrink-0">{saveError}</div>
+            )}
 
             {/* Tabs */}
             <div className="flex border-b border-slate-200 px-6 flex-shrink-0 overflow-x-auto">
@@ -498,18 +585,18 @@ export default function ShippingTypePage() {
                     </div>
                     <div className="grid grid-cols-3 gap-4">
                       <Field label="Warehouse"     value={d.warehouseName ?? d.warehouseCode} />
-                      <Field label="Order Date"    value={d.orderDate} />
-                      <Field label="Ship Date"     value={d.shippingDate ?? d.requestDate} />
+                      <Field label="Order Date"    {...ef("orderDate")} />
+                      <Field label="Ship Date"     {...ef("shippingDate")} />
                     </div>
                     <div className="grid grid-cols-3 gap-4">
-                      <Field label="Total Qty"     value={d.totalQty ?? d.qty} />
-                      <Field label="Tracking #"    value={d.trackingNo ?? d.trackingNumber} />
-                      <Field label="Delivery Date" value={d.deliveryDate ?? d.estimatedDate} />
+                      <Field label="Total Qty"     {...ef("totalQty")} />
+                      <Field label="Tracking #"    {...ef("trackingNo")} />
+                      <Field label="Delivery Date" {...ef("deliveryDate")} />
                     </div>
-                    {!!(d.shippingOrderNo || d.orderType) && (
+                    {!!(d.shippingOrderNo || d.orderType || editMode) && (
                       <div className="grid grid-cols-3 gap-4 pt-2 border-t border-slate-100">
-                        <Field label="Shipping Order No" value={d.shippingOrderNo} />
-                        <Field label="Order Type"        value={d.orderType} />
+                        <Field label="Shipping Order No" {...ef("shippingOrderNo")} />
+                        <Field label="Order Type"        {...ef("orderType")} />
                       </div>
                     )}
                   </div>
@@ -518,43 +605,36 @@ export default function ShippingTypePage() {
                 {/* ── Address tab ── */}
                 {activeTab === "address" && (
                   <div className="p-6 space-y-6">
-                    {!!(d.consigneeName || d.consigneeAddress1) && (
-                      <div>
-                        <p className="text-xs text-slate-400 uppercase tracking-wide mb-3">Consignee</p>
-                        <div className="grid grid-cols-3 gap-4">
-                          <Field label="Name"             value={d.consigneeName} />
-                          <Field label="Tel"              value={d.consigneeTelLno} />
-                          <Field label="Cell"             value={d.consigneeCellNo} />
-                          <Field label="Address"          value={d.consigneeAddress1} />
-                          <Field label="Address 2"        value={d.consigneeAddress2} />
-                          <Field label="City"             value={d.consigneeCity} />
-                          <Field label="State"            value={d.consigneeState} />
-                          <Field label="ZIP"              value={d.consigneeZipCode} />
-                          <Field label="Country"          value={d.consigneeNationalCode} />
-                          {!!d.consigneeDeliveryMessage && (
-                            <div className="col-span-3">
-                              <Field label="Delivery Message" value={d.consigneeDeliveryMessage} />
-                            </div>
-                          )}
+                    <div>
+                      <p className="text-xs text-slate-400 uppercase tracking-wide mb-3">Consignee</p>
+                      <div className="grid grid-cols-3 gap-4">
+                        <Field label="Name"             {...ef("consigneeName")} />
+                        <Field label="Tel"              {...ef("consigneeTelLno")} />
+                        <Field label="Cell"             {...ef("consigneeCellNo")} />
+                        <Field label="Address"          {...ef("consigneeAddress1")} />
+                        <Field label="Address 2"        {...ef("consigneeAddress2")} />
+                        <Field label="City"             {...ef("consigneeCity")} />
+                        <Field label="State"            {...ef("consigneeState")} />
+                        <Field label="ZIP"              {...ef("consigneeZipCode")} />
+                        <Field label="Country"          {...ef("consigneeNationalCode")} />
+                        <div className="col-span-3">
+                          <Field label="Delivery Message" {...ef("consigneeDeliveryMessage")} />
                         </div>
                       </div>
-                    )}
-                    {!!(d.consignorName || d.consignorAddress1) && (
-                      <div className={d.consigneeName || d.consigneeAddress1 ? "border-t border-slate-100 pt-5" : ""}>
+                    </div>
+                    {!!(d.consignorName || d.consignorAddress1 || editMode) && (
+                      <div className="border-t border-slate-100 pt-5">
                         <p className="text-xs text-slate-400 uppercase tracking-wide mb-3">Consignor</p>
                         <div className="grid grid-cols-3 gap-4">
-                          <Field label="Name"    value={d.consignorName} />
-                          <Field label="Tel"     value={d.consignorTelLno} />
-                          <Field label="Country" value={d.consignorNationalCode} />
-                          <Field label="Address" value={d.consignorAddress1} />
-                          <Field label="City"    value={d.consignorCity} />
-                          <Field label="State"   value={d.consignorState} />
-                          <Field label="ZIP"     value={d.consignorZipCode ?? d.consignorZip} />
+                          <Field label="Name"    {...ef("consignorName")} />
+                          <Field label="Tel"     {...ef("consignorTelLno")} />
+                          <Field label="Country" {...ef("consignorNationalCode")} />
+                          <Field label="Address" {...ef("consignorAddress1")} />
+                          <Field label="City"    {...ef("consignorCity")} />
+                          <Field label="State"   {...ef("consignorState")} />
+                          <Field label="ZIP"     {...ef("consignorZipCode")} />
                         </div>
                       </div>
-                    )}
-                    {!(d.consigneeName || d.consigneeAddress1 || d.consignorName || d.consignorAddress1) && (
-                      <p className="text-sm text-slate-400 text-center py-12">No address data</p>
                     )}
                   </div>
                 )}
@@ -565,21 +645,21 @@ export default function ShippingTypePage() {
                     <div>
                       <p className="text-xs text-slate-400 uppercase tracking-wide mb-3">Dimensions</p>
                       <div className="grid grid-cols-4 gap-4">
-                        <Field label="Total Weight" value={d.totalWeight} />
-                        <Field label="Length"       value={d.length} />
-                        <Field label="Width"        value={d.width} />
-                        <Field label="Height"       value={d.height} />
+                        <Field label="Total Weight" {...ef("totalWeight")} />
+                        <Field label="Length"       {...ef("length")} />
+                        <Field label="Width"        {...ef("width")} />
+                        <Field label="Height"       {...ef("height")} />
                       </div>
                     </div>
                     <div className="border-t border-slate-100 pt-5">
                       <p className="text-xs text-slate-400 uppercase tracking-wide mb-3">Financial</p>
                       <div className="grid grid-cols-3 gap-4">
-                        <Field label="Invoice Value"   value={d.invoiceValue} />
-                        <Field label="Fare Value"      value={d.fareValue} />
-                        <Field label="Fare Etc"        value={d.fareEtcValue} />
-                        <Field label="Insurance Value" value={d.insuranceValue} />
-                        <Field label="Shipping Rate"   value={d.shippingRate} />
-                        <Field label="Shipping Cost"   value={d.shippingCost} />
+                        <Field label="Invoice Value"   {...ef("invoiceValue")} />
+                        <Field label="Fare Value"      {...ef("fareValue")} />
+                        <Field label="Fare Etc"        {...ef("fareEtcValue")} />
+                        <Field label="Insurance Value" {...ef("insuranceValue")} />
+                        <Field label="Shipping Rate"   {...ef("shippingRate")} />
+                        <Field label="Shipping Cost"   {...ef("shippingCost")} />
                       </div>
                     </div>
                   </div>
@@ -588,24 +668,19 @@ export default function ShippingTypePage() {
                 {/* ── Additional tab ── */}
                 {activeTab === "additional" && (
                   <div className="p-6 space-y-5">
-                    {!!d.comment && (
-                      <div>
-                        <p className="text-xs text-slate-400 uppercase tracking-wide mb-2">Comment</p>
-                        <p className="text-sm text-slate-700 break-all">{String(d.comment)}</p>
-                      </div>
-                    )}
+                    <div>
+                      <Field label="Comment" {...ef("comment")} />
+                    </div>
                     {(() => {
-                      const extra = Object.entries(d).filter(([k, v]) =>
+                      const src = editMode ? editData : d;
+                      const extra = Object.entries(src).filter(([k, v]) =>
                         !SKIP_FIELDS.has(k) && v != null && v !== "" && !Array.isArray(v) && typeof v !== "object"
-                      );
-                      if (!extra.length && !d.comment) return (
-                        <p className="text-sm text-slate-400 text-center py-12">No additional data</p>
                       );
                       if (!extra.length) return null;
                       return (
-                        <div className={d.comment ? "border-t border-slate-100 pt-5" : ""}>
+                        <div className="border-t border-slate-100 pt-5">
                           <div className="grid grid-cols-3 gap-4">
-                            {extra.map(([k, v]) => <Field key={k} label={COL_LABELS[k] ?? k} value={v} />)}
+                            {extra.map(([k]) => <Field key={k} label={COL_LABELS[k] ?? k} {...ef(k)} />)}
                           </div>
                         </div>
                       );
