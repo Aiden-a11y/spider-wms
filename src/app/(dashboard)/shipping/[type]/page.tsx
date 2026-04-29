@@ -236,10 +236,16 @@ export default function ShippingTypePage() {
     setSaving(true);
     setSaveError("");
     try {
+      // API는 flat primitive 필드만 받음 — 배열/중첩 객체 제거
+      const payload = Object.fromEntries(
+        Object.entries(editData).filter(([, v]) =>
+          v === null || typeof v === "string" || typeof v === "number" || typeof v === "boolean"
+        )
+      );
       const res = await fetch("/api/wms/shipping/save", {
         method: "POST",
         headers,
-        body: JSON.stringify(editData),
+        body: JSON.stringify(payload),
       });
       const json = await res.json().catch(() => null);
       if (res.ok && json?.isSuccess !== false) {
