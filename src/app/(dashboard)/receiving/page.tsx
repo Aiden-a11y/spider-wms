@@ -220,8 +220,65 @@ export default function ReceivingPage() {
       setRecvInfoMap((prev) => ({ ...prev, [saved.orderCode]: saved }));
       setRecvInfo(saved);
 
-      setRecvInfoMsg("Saved");
-      setTimeout(() => setRecvInfoMsg(""), 3000);
+      // 2) WMS comment sync — only for non-Complete orders
+      const orderStatus = String(d.status ?? "");
+      if (orderStatus !== "DA") {
+        const MARKER = "--- RECEIVING INFO ---";
+        const existingComment = String(d.comment ?? "").trim();
+        const markerIdx = existingComment.indexOf(MARKER);
+        const cleanComment = markerIdx >= 0
+          ? existingComment.slice(0, markerIdx).trim()
+          : existingComment;
+
+        const lines = [
+          MARKER,
+          saved.receivingDate      ? `Receiving Date: ${saved.receivingDate}` : "",
+          saved.containerSize      ? `Container Size: ${saved.containerSize}` : "",
+          (saved.pltReceived || saved.ctnReceived)
+            ? `Pallets Received: ${saved.pltReceived} PLT / ${saved.ctnReceived} CTN` : "",
+          (saved.pltPutAway || saved.ctnPutAway)
+            ? `Pallets Put Away: ${saved.pltPutAway} PLT / ${saved.ctnPutAway} CTN` : "",
+          saved.noBreakdown
+            ? "Reason for Breakdown: No Breakdown"
+            : saved.breakdownReason
+            ? `Reason for Breakdown: ${saved.breakdownReason}` : "",
+          saved.dimensionalHours > 0
+            ? `Dimensional Total Hours: ${saved.dimensionalHours}` : "",
+          "--- END ---",
+        ].filter(Boolean);
+
+        const newComment = cleanComment
+          ? `${cleanComment}\n\n${lines.join("\n")}`
+          : lines.join("\n");
+
+        const wmsBody: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(d)) {
+          if (!k.startsWith("_")) wmsBody[k] = v;
+        }
+        wmsBody.comment = newComment;
+
+        const candidates = [
+          { method: "POST", url: `/api/wms/receiving/update` },
+          { method: "POST", url: `/api/wms/receiving/${recvInfo.orderCode}` },
+          { method: "PATCH", url: `/api/wms/receiving/${recvInfo.orderCode}` },
+        ];
+
+        let synced = false;
+        for (const { method, url } of candidates) {
+          const r = await fetch(url, { method, headers, body: JSON.stringify(wmsBody) });
+          const txt = await r.text();
+          console.log(`[WMS ${method} ${url}]`, r.status, txt.slice(0, 200));
+          if (r.ok) { synced = true; break; }
+          if (r.status === 405) continue;
+          break;
+        }
+
+        setRecvInfoMsg(synced ? "Saved & synced to WMS" : "Saved (WMS sync failed — check console)");
+      } else {
+        setRecvInfoMsg("Saved (WMS sync skipped — order is Complete)");
+      }
+
+      setTimeout(() => setRecvInfoMsg(""), 5000);
     } catch {
       setRecvInfoMsg("Save failed");
     } finally {
