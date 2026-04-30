@@ -76,14 +76,12 @@ export default function ReceivingPage() {
       const LIMIT = 100;
       const allRows: Row[] = [];
       let pageNum = 1;
+      let effectivePageSize = LIMIT; // will be set from first response
 
       const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-      // Keep fetching until the API returns an empty page,
-      // with a short human-like delay between requests
       while (true) {
         if (pageNum > 1) {
-          // 400–700 ms random delay between pages
           await sleep(400 + Math.random() * 300);
         }
 
@@ -97,18 +95,17 @@ export default function ReceivingPage() {
 
         if (!Array.isArray(list) || list.length === 0) break;
 
+        // Learn the API's actual page size from the first response
+        if (pageNum === 1) effectivePageSize = list.length;
+
         allRows.push(...list);
-        setData([...allRows]); // update UI incrementally as pages arrive
+        setData([...allRows]);
 
-        const total: number =
-          json?.data?.total ??
-          json?.data?.totalCount ??
-          json?.total ??
-          json?.totalCount ??
-          0;
-
-        if (total > 0 && allRows.length >= total) break;
-        if (list.length < LIMIT) break;
+        // Stop only when the page returned fewer rows than the API's page size
+        // (= last page). Do NOT rely on `total` — it may equal the page size
+        // and cause early termination before all pages are fetched.
+        if (list.length < effectivePageSize) break;
+        if (pageNum >= 50) break; // safety cap: 50 pages max
 
         pageNum++;
       }
