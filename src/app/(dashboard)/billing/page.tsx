@@ -20,12 +20,14 @@ import ExcelJS from "exceljs";
 import {
   buildNewInvoice,
   buildDefaultLineItems,
+  applyRateMaster,
   calcLineAmount,
   calcSubtotals,
   calcTotal,
   formatUSD,
   type BillingInvoice,
   type BillingLineItem,
+  type CustomerRateMaster,
 } from "@/lib/billing-calc";
 import { BILLING_CATEGORIES, RATE_VERSION } from "@/lib/billing-rates";
 import type { BillingCategory } from "@/lib/billing-rates";
@@ -368,11 +370,27 @@ export default function BillingPage() {
       .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── create new invoice ──
-  function createInvoice() {
+  // ── create new invoice (with rate master applied) ──
+  async function createInvoice() {
     const period = `${newYear}-${newMonth}`;
     const name = customers.find((c) => c.code === newCustomer)?.name ?? newCustomerName;
     const inv = buildNewInvoice(newCustomer, name, period);
+
+    // Apply customer-specific rate master if available
+    try {
+      const res = await fetch(`/api/billing/rates?customer=${encodeURIComponent(newCustomer)}`);
+      if (res.ok) {
+        const master: CustomerRateMaster | null = await res.json();
+        if (master) {
+          inv.lineItems = applyRateMaster(inv.lineItems, master.rates);
+          inv.rateVersion = `custom (${new Date(master.updatedAt).toLocaleDateString("en-US")})`;
+          inv.subtotals = calcSubtotals(inv.lineItems);
+        }
+      }
+    } catch {
+      // fallback to default rates silently
+    }
+
     setEditing(inv);
     setShowNewForm(false);
     setFetchMsg("");
@@ -384,10 +402,10 @@ export default function BillingPage() {
     setFetchMsg("");
   }
 
-  // ── update any field of a line item ──
+  // ── update any field of a line item (rate는 Rate Master에서 관리, 편집 불가) ──
   const updateItem = useCallback((
     id: string,
-    field: "qty" | "rate" | "description" | "unit",
+    field: "qty" | "description" | "unit",
     raw: string
   ) => {
     setEditing((prev) => {
@@ -397,10 +415,6 @@ export default function BillingPage() {
         if (field === "qty") {
           const v = raw === "" ? 0 : parseFloat(raw);
           return { ...item, qty: isNaN(v) ? 0 : v, autoFetched: false };
-        }
-        if (field === "rate") {
-          const v = raw === "" ? 0 : parseFloat(raw);
-          return { ...item, rate: isNaN(v) ? 0 : v };
         }
         return { ...item, [field]: raw };
       });
@@ -747,20 +761,14 @@ export default function BillingPage() {
                                   className={`${inputCls} text-slate-500 text-xs`}
                                 />
                               </td>
-                              {/* Rate */}
-                              <td className="px-3 py-2">
+                              {/* Rate — 읽기전용 (Rate Master에서 관리) */}
+                              <td className="px-3 py-2 text-right">
                                 {item.costPlus ? (
-                                  <span className="text-xs text-slate-500 block text-right">cost+10%</span>
+                                  <span className="text-xs text-slate-500">cost+10%</span>
                                 ) : (
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    step="any"
-                                    value={item.rate === 0 ? "" : item.rate}
-                                    onChange={(e) => updateItem(item.id, "rate", e.target.value)}
-                                    placeholder="0.00"
-                                    className={`${inputCls} text-right tabular-nums text-slate-700`}
-                                  />
+                                  <span className="text-sm tabular-nums text-slate-600 select-none">
+                                    {item.rate > 0 ? `$${item.rate}` : "—"}
+                                  </span>
                                 )}
                               </td>
                               {/* Amount (calculated) */}

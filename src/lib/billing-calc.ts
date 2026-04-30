@@ -55,6 +55,27 @@ export function calcTotal(items: BillingLineItem[]): number {
   return items.reduce((s, item) => s + calcLineAmount(item), 0);
 }
 
+// ─── Rate Master ──────────────────────────────────────────────────────────────
+
+export type CustomerRateMaster = {
+  customerCode: string;
+  customerName: string;
+  rates: Record<string, number>; // item.id → custom rate value
+  updatedAt: string;
+};
+
+/** 기본 lineItems에 rate master 값을 덮어씌웁니다 (costPlus 항목 제외). */
+export function applyRateMaster(
+  items: BillingLineItem[],
+  rates: Record<string, number>
+): BillingLineItem[] {
+  return items.map((item) =>
+    !item.costPlus && rates[item.id] !== undefined
+      ? { ...item, rate: rates[item.id] }
+      : item
+  );
+}
+
 export function formatUSD(amount: number): string {
   return new Intl.NumberFormat("en-US", {
     style: "currency",

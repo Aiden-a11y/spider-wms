@@ -27,6 +27,8 @@ import {
   Store,
   Globe,
   Receipt,
+  FileText,
+  SlidersHorizontal,
 } from "lucide-react";
 
 type NavChild = { href: string; label: string; icon: React.ElementType };
@@ -81,7 +83,15 @@ const nav: NavItem[] = [
     ],
   },
   { href: "/returns", label: "Returns", icon: RotateCcw, children: undefined },
-  { href: "/billing", label: "Billing", icon: Receipt, children: undefined },
+  {
+    href: undefined,
+    label: "Billing",
+    icon: Receipt,
+    children: [
+      { href: "/billing", label: "Invoices", icon: FileText },
+      { href: "/billing/rates", label: "Rate Master", icon: SlidersHorizontal },
+    ],
+  },
 ];
 
 export default function Sidebar() {
@@ -94,6 +104,7 @@ export default function Sidebar() {
     if (["/receiving", "/stow"].some((p) => pathname === p || pathname.startsWith(p + "/"))) s.add("Receiving");
     if (pathname === "/locations" || pathname.startsWith("/locations/")) s.add("Locations");
     if (pathname.startsWith("/shipping")) s.add("Shipping");
+    if (pathname === "/billing" || pathname.startsWith("/billing/")) s.add("Billing");
     return s;
   });
 
