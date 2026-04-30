@@ -26,6 +26,7 @@ import {
   User,
   Store,
   Globe,
+  Receipt,
 } from "lucide-react";
 
 type NavChild = { href: string; label: string; icon: React.ElementType };
@@ -80,6 +81,7 @@ const nav: NavItem[] = [
     ],
   },
   { href: "/returns", label: "Returns", icon: RotateCcw, children: undefined },
+  { href: "/billing", label: "Billing", icon: Receipt, children: undefined },
 ];
 
 export default function Sidebar() {
