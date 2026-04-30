@@ -182,6 +182,7 @@ export default function InventoryPage() {
       // Step 1: collect all (customerCode, productSku) pairs — product list cached 10 min
       const CACHE_TTL = 10 * 60 * 1000;
       const pairs: { custCode: string; sku: string }[] = [];
+
       for (const cust of custList) {
         const cacheKey = `sku_cache__${whCode}__${cust.code}`;
         let skus: string[] | null = null;
@@ -191,15 +192,32 @@ export default function InventoryPage() {
         } catch { /* ignore */ }
 
         if (!skus) {
-          const skuRes = await fetch(`/api/wms/product/list`, {
-            method: "POST",
-            headers,
-            body: JSON.stringify({ warehouseCode: whCode, customerCode: cust.code }),
-          });
-          const skuJson = await skuRes.json();
-          skus = ((skuJson.data?.list ?? []) as Record<string, unknown>[])
-            .map((p) => String(p.productSku ?? ""))
-            .filter(Boolean);
+          // Paginate through product list (pageSize=500) until all pages fetched
+          skus = [];
+          let page = 1;
+          const pageSize = 500;
+          while (true) {
+            const skuRes = await fetch(`/api/wms/product/list`, {
+              method: "POST",
+              headers,
+              body: JSON.stringify({
+                warehouseCode: whCode,
+                customerCode: cust.code,
+                pageNum: page,
+                pageSize,
+              }),
+            });
+            const skuJson = await skuRes.json();
+            const list = (skuJson.data?.list ?? []) as Record<string, unknown>[];
+            const pageSkus = list.map((p) => String(p.productSku ?? "")).filter(Boolean);
+            skus.push(...pageSkus);
+
+            // Stop if this page returned fewer than pageSize (last page) or empty
+            if (pageSkus.length < pageSize) break;
+            page += 1;
+            // Small delay between pages so we don't hammer the API
+            await new Promise((r) => setTimeout(r, 300));
+          }
           try { sessionStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), skus })); } catch { /* ignore */ }
         }
 
@@ -214,26 +232,37 @@ export default function InventoryPage() {
 
       setProgress({ total: pairs.length, loaded: 0 });
 
-      // Step 2: fetch all pairs concurrently, update progress per SKU
+      // Step 2: fetch inventory detail in small batches (5 at a time) with delay between batches
+      // Mimics human browsing pace so the WMS API doesn't throttle us
+      const BATCH_SIZE = 5;
+      const BATCH_DELAY_MS = 400;
       const allItems: ReturnType<typeof normalizeInventory> = [];
       let loaded = 0;
-      await Promise.all(
-        pairs.map(({ custCode: cc, sku }) =>
-          fetch(`/api/wms/inventory/detail`, {
-            method: "POST",
-            headers,
-            body: JSON.stringify({ warehouseCode: whCode, customerCode: cc, productSku: sku }),
-          })
-            .then((r) => r.json())
-            .then((j) => normalizeInventory(j))
-            .catch(() => [])
-            .then((rows) => {
-              allItems.push(...rows);
-              loaded += 1;
-              setProgress({ total: pairs.length, loaded });
+
+      for (let i = 0; i < pairs.length; i += BATCH_SIZE) {
+        const batch = pairs.slice(i, i + BATCH_SIZE);
+        const batchResults = await Promise.all(
+          batch.map(({ custCode: cc, sku }) =>
+            fetch(`/api/wms/inventory/detail`, {
+              method: "POST",
+              headers,
+              body: JSON.stringify({ warehouseCode: whCode, customerCode: cc, productSku: sku }),
             })
-        )
-      );
+              .then((r) => r.json())
+              .then((j) => normalizeInventory(j))
+              .catch(() => [])
+          )
+        );
+        for (const rows of batchResults) {
+          allItems.push(...rows);
+          loaded += 1;
+          setProgress({ total: pairs.length, loaded });
+        }
+        // Pause between batches unless this is the last one
+        if (i + BATCH_SIZE < pairs.length) {
+          await new Promise((r) => setTimeout(r, BATCH_DELAY_MS));
+        }
+      }
 
       setDebugInfo((d) => ({
         ...d,
