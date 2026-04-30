@@ -74,45 +74,35 @@ export default function ReceivingPage() {
     setError("");
     try {
       const LIMIT = 100;
+      const allRows: Row[] = [];
+      let page = 1;
 
-      // Fetch first page to get total count
-      const first = await fetch("/api/wms/receiving/list", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ page: 1, limit: LIMIT }),
-      });
-      const firstJson = await first.json();
-      const firstList: Row[] = firstJson?.data?.list ?? firstJson?.data ?? firstJson?.list ?? firstJson ?? [];
+      // Keep fetching until the API returns an empty page
+      while (true) {
+        const res = await fetch("/api/wms/receiving/list", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ page, limit: LIMIT }),
+        });
+        const json = await res.json();
+        const list: Row[] = json?.data?.list ?? json?.data ?? json?.list ?? json ?? [];
 
-      const total: number =
-        firstJson?.data?.total ??
-        firstJson?.data?.totalCount ??
-        firstJson?.total ??
-        firstJson?.totalCount ??
-        firstList.length;
+        if (!Array.isArray(list) || list.length === 0) break;
 
-      const totalPages = Math.ceil(total / LIMIT);
+        allRows.push(...list);
 
-      // Fetch remaining pages in parallel (if any)
-      let allRows: Row[] = Array.isArray(firstList) ? [...firstList] : [];
+        // Check total from response to see if we already have everything
+        const total: number =
+          json?.data?.total ??
+          json?.data?.totalCount ??
+          json?.total ??
+          json?.totalCount ??
+          0;
 
-      if (totalPages > 1) {
-        const rest = await Promise.all(
-          Array.from({ length: totalPages - 1 }, (_, i) =>
-            fetch("/api/wms/receiving/list", {
-              method: "POST",
-              headers,
-              body: JSON.stringify({ page: i + 2, limit: LIMIT }),
-            })
-              .then((r) => r.json())
-              .then((j) => {
-                const l = j?.data?.list ?? j?.data ?? j?.list ?? j ?? [];
-                return Array.isArray(l) ? l : [];
-              })
-              .catch(() => [] as Row[])
-          )
-        );
-        allRows = allRows.concat(rest.flat());
+        if (total > 0 && allRows.length >= total) break;
+        if (list.length < LIMIT) break; // last page (partial)
+
+        page++;
       }
 
       setData(allRows);
