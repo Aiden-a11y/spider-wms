@@ -178,7 +178,7 @@ export default function HistoryPage() {
       </div>
 
       {saveMsg && (
-        <div className={`rounded-xl px-4 py-3 text-sm mb-5 border ${saveMsg.startsWith("오류") || saveMsg.startsWith("요청") ? "bg-red-50 border-red-200 text-red-700" : "bg-green-50 border-green-200 text-green-700"}`}>
+        <div className={`rounded-xl px-4 py-3 text-sm mb-5 border ${saveMsg.startsWith("Error") || saveMsg.startsWith("Request failed") ? "bg-red-50 border-red-200 text-red-700" : "bg-green-50 border-green-200 text-green-700"}`}>
           {saveMsg}
         </div>
       )}

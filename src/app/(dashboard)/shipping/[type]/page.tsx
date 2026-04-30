@@ -254,9 +254,9 @@ export default function ShippingTypePage() {
         setSaving(false);
         return;
       }
-      setSaveError(json?.message ?? "저장 실패 — API 응답을 확인해주세요.");
+      setSaveError(json?.message ?? "Save failed — check the API response.");
     } catch {
-      setSaveError("저장 실패 — 네트워크 오류");
+      setSaveError("Save failed — network error");
     }
     setSaving(false);
   }
