@@ -114,8 +114,12 @@ export default function HistoryPage() {
     setSaveStatus("Connecting…");
 
     try {
-      const secret = process.env.NEXT_PUBLIC_CRON_SECRET ?? "sdjoeporgfds";
-      const res = await fetch(`/api/cron/snapshot?secret=${secret}`);
+      const res = await fetch("/api/snapshot/run", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${user!.token}`,
+        },
+      });
       if (!res.ok || !res.body) {
         const json = await res.json().catch(() => ({}));
         setSaveMsg(`Error: ${(json as Record<string,unknown>).error ?? res.status}`);
