@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo } from "react";
 import { useAuth } from "@/contexts/auth-context";
-import { RefreshCw, AlertCircle, PackageCheck, X, Search, ArrowLeftRight } from "lucide-react";
+import { RefreshCw, AlertCircle, PackageCheck, X, Search, ArrowLeftRight, ChevronLeft, ChevronRight } from "lucide-react";
 
 type Row = Record<string, unknown>;
 
@@ -59,6 +59,10 @@ export default function ReceivingPage() {
   const [cancelComment, setCancelComment] = useState("");
   const [statusChanging, setStatusChanging] = useState(false);
   const [statusError, setStatusError] = useState("");
+
+  // ── pagination ──
+  const [pageSize, setPageSize] = useState(30);
+  const [page, setPage] = useState(1);
 
   const headers = useMemo(
     () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
@@ -182,6 +186,7 @@ export default function ReceivingPage() {
   );
 
   const filtered = useMemo(() => {
+    setPage(1); // reset to first page whenever filters change
     const q = search.trim().toLowerCase();
     return data.filter((r) => {
       if (q && !Object.values(r).some((v) => String(v ?? "").toLowerCase().includes(q))) return false;
@@ -191,6 +196,9 @@ export default function ReceivingPage() {
       return true;
     });
   }, [data, search, filterStatus, filterWarehouse, filterCustomer]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const paginated = filtered.slice((page - 1) * pageSize, page * pageSize);
 
   const activeFilterCount = [filterStatus, filterWarehouse, filterCustomer].filter(Boolean).length;
 
@@ -294,41 +302,114 @@ export default function ReceivingPage() {
       )}
 
       {!loading && filtered.length > 0 && (
-        <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-200">
-                  {["ORDER CODE","ORDER NO","WAREHOUSE","CUSTOMER","CUSTOMER NAME","ORDER DATE","STATUS","STATUS NAME"].map((c) => (
-                    <th key={c} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap">{c}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((row, idx) => {
-                  const status = String(row.status ?? row.STATUS ?? "");
-                  const statusName = String(row.statusName ?? row.STATUSNAME ?? "");
-                  return (
-                    <tr key={idx}
-                      onClick={() => openDetail(row)}
-                      className="border-b border-slate-100 hover:bg-blue-50 cursor-pointer transition-colors">
-                      <td className="px-4 py-2.5 font-mono text-xs text-blue-600 font-medium whitespace-nowrap">{String(row.receiveOrderCode ?? row.orderCode ?? "-")}</td>
-                      <td className="px-4 py-2.5 whitespace-nowrap">{String(row.receiveOrderNo ?? row.orderNo ?? "-")}</td>
-                      <td className="px-4 py-2.5 whitespace-nowrap text-slate-500">{String(row.warehouseCode ?? "-")}</td>
-                      <td className="px-4 py-2.5 whitespace-nowrap text-slate-500">{String(row.customerCode ?? "-")}</td>
-                      <td className="px-4 py-2.5 whitespace-nowrap">{String(row.customerName ?? "-")}</td>
-                      <td className="px-4 py-2.5 whitespace-nowrap text-slate-500">{String(row.orderDate ?? "-")}</td>
-                      <td className="px-4 py-2.5 whitespace-nowrap">
-                        <StatusBadge status={status} name={statusName || undefined} />
-                      </td>
-                      <td className="px-4 py-2.5 whitespace-nowrap text-slate-500">{statusName || "-"}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+        <>
+          <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200">
+                    {["ORDER CODE","ORDER NO","WAREHOUSE","CUSTOMER","CUSTOMER NAME","ORDER DATE","STATUS","STATUS NAME"].map((c) => (
+                      <th key={c} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap">{c}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginated.map((row, idx) => {
+                    const status = String(row.status ?? row.STATUS ?? "");
+                    const statusName = String(row.statusName ?? row.STATUSNAME ?? "");
+                    return (
+                      <tr key={idx}
+                        onClick={() => openDetail(row)}
+                        className="border-b border-slate-100 hover:bg-blue-50 cursor-pointer transition-colors">
+                        <td className="px-4 py-2.5 font-mono text-xs text-blue-600 font-medium whitespace-nowrap">{String(row.receiveOrderCode ?? row.orderCode ?? "-")}</td>
+                        <td className="px-4 py-2.5 whitespace-nowrap">{String(row.receiveOrderNo ?? row.orderNo ?? "-")}</td>
+                        <td className="px-4 py-2.5 whitespace-nowrap text-slate-500">{String(row.warehouseCode ?? "-")}</td>
+                        <td className="px-4 py-2.5 whitespace-nowrap text-slate-500">{String(row.customerCode ?? "-")}</td>
+                        <td className="px-4 py-2.5 whitespace-nowrap">{String(row.customerName ?? "-")}</td>
+                        <td className="px-4 py-2.5 whitespace-nowrap text-slate-500">{String(row.orderDate ?? "-")}</td>
+                        <td className="px-4 py-2.5 whitespace-nowrap">
+                          <StatusBadge status={status} name={statusName || undefined} />
+                        </td>
+                        <td className="px-4 py-2.5 whitespace-nowrap text-slate-500">{statusName || "-"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
+
+          {/* Pagination bar */}
+          <div className="flex items-center justify-between mt-4">
+            {/* Page size selector */}
+            <div className="flex items-center gap-2 text-sm text-slate-500">
+              <span>Rows per page:</span>
+              {[30, 50, 100].map((n) => (
+                <button
+                  key={n}
+                  onClick={() => { setPageSize(n); setPage(1); }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${
+                    pageSize === n
+                      ? "bg-blue-600 text-white border-blue-600"
+                      : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+
+            {/* Page info + prev/next */}
+            <div className="flex items-center gap-3 text-sm text-slate-500">
+              <span className="text-xs">
+                {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, filtered.length)} of {filtered.length}
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page === 1}
+                  className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+
+                {/* Page number buttons */}
+                {Array.from({ length: totalPages }, (_, i) => i + 1)
+                  .filter((p) => p === 1 || p === totalPages || Math.abs(p - page) <= 2)
+                  .reduce<(number | "…")[]>((acc, p, i, arr) => {
+                    if (i > 0 && (p as number) - (arr[i - 1] as number) > 1) acc.push("…");
+                    acc.push(p);
+                    return acc;
+                  }, [])
+                  .map((p, i) =>
+                    p === "…" ? (
+                      <span key={`ellipsis-${i}`} className="px-1 text-slate-400 text-xs">…</span>
+                    ) : (
+                      <button
+                        key={p}
+                        onClick={() => setPage(p as number)}
+                        className={`min-w-[2rem] px-2 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                          page === p
+                            ? "bg-blue-600 text-white border-blue-600"
+                            : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    )
+                  )}
+
+                <button
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={page === totalPages}
+                  className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
       )}
 
       {/* Detail Modal */}
