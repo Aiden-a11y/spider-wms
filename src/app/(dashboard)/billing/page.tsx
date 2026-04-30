@@ -56,65 +56,107 @@ const CATEGORY_COLOR: Record<BillingCategory, string> = {
   "Warehouse Labor":   "bg-red-50 border-red-200 text-red-800",
 };
 
-// ─── Excel export ─────────────────────────────────────────────────────────────
+// ─── Excel helpers ────────────────────────────────────────────────────────────
 
-function exportInvoiceToExcel(invoice: BillingInvoice) {
-  const wb = XLSX.utils.book_new();
+/** Build one worksheet for a single customer invoice */
+function buildInvoiceSheet(invoice: BillingInvoice): XLSX.WorkSheet {
   const rows: (string | number)[][] = [];
 
-  // ── Header info ──
-  rows.push([`INVOICE`]);
-  rows.push([`Customer`, invoice.customerName || invoice.customer]);
-  rows.push([`Customer Code`, invoice.customer]);
-  rows.push([`Period`, periodLabel(invoice.period)]);
-  rows.push([`Rate Version`, invoice.rateVersion]);
-  rows.push([`Generated`, new Date().toLocaleDateString("en-US")]);
+  rows.push(["INVOICE"]);
+  rows.push(["Customer", invoice.customerName || invoice.customer]);
+  rows.push(["Customer Code", invoice.customer]);
+  rows.push(["Period", periodLabel(invoice.period)]);
+  rows.push(["Rate Version", invoice.rateVersion]);
+  rows.push(["Generated", new Date().toLocaleDateString("en-US")]);
   rows.push([]);
 
-  // ── Category sections — ALL items, qty=0 shows $0 ──
   for (const cat of BILLING_CATEGORIES) {
     const catItems = invoice.lineItems.filter((l) => l.category === cat);
-
     rows.push([cat.toUpperCase(), "", "", "", ""]);
     rows.push(["Description", "Qty", "Unit", "Rate", "Amount"]);
-
     for (const item of catItems) {
-      const amt = calcLineAmount(item);
       rows.push([
         item.description,
         item.qty,
         item.unit,
         item.costPlus ? "cost + 10%" : item.rate,
-        amt,
+        calcLineAmount(item),
       ]);
     }
-
     const sub = catItems.reduce((s, i) => s + calcLineAmount(i), 0);
     rows.push(["", "", "", "Subtotal", sub]);
     rows.push([]);
   }
 
-  // ── Grand total ──
   rows.push(["", "", "", "GRAND TOTAL", invoice.total]);
-
   if (invoice.notes) {
     rows.push([]);
     rows.push(["Notes", invoice.notes]);
   }
 
   const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws["!cols"] = [{ wch: 52 }, { wch: 10 }, { wch: 26 }, { wch: 14 }, { wch: 14 }];
+  return ws;
+}
 
-  // ── Column widths ──
-  ws["!cols"] = [
-    { wch: 52 }, // Description
-    { wch: 10 }, // Qty
-    { wch: 26 }, // Unit
-    { wch: 14 }, // Rate
-    { wch: 14 }, // Amount
-  ];
-
-  XLSX.utils.book_append_sheet(wb, ws, "Invoice");
+/** Export a single invoice as one-sheet Excel */
+function exportInvoiceToExcel(invoice: BillingInvoice) {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, buildInvoiceSheet(invoice), invoice.customer.slice(0, 31));
   XLSX.writeFile(wb, `Invoice_${invoice.customer}_${invoice.period}.xlsx`);
+}
+
+/** Export multiple invoices — Summary tab + one tab per customer */
+function exportAllToExcel(invoices: BillingInvoice[], period: string) {
+  if (invoices.length === 0) return;
+  const wb = XLSX.utils.book_new();
+
+  // ── Summary sheet ──
+  const summaryRows: (string | number)[][] = [];
+  summaryRows.push([`BILLING SUMMARY — ${periodLabel(period)}`]);
+  summaryRows.push([`Generated`, new Date().toLocaleDateString("en-US")]);
+  summaryRows.push([]);
+  summaryRows.push([
+    "Customer", "Customer Code",
+    ...BILLING_CATEGORIES,
+    "TOTAL",
+  ]);
+  for (const inv of invoices) {
+    summaryRows.push([
+      inv.customerName || inv.customer,
+      inv.customer,
+      ...BILLING_CATEGORIES.map((c) => inv.subtotals?.[c] ?? 0),
+      inv.total,
+    ]);
+  }
+  // Totals row
+  summaryRows.push([
+    "TOTAL", "",
+    ...BILLING_CATEGORIES.map((c) =>
+      invoices.reduce((s, inv) => s + (inv.subtotals?.[c] ?? 0), 0)
+    ),
+    invoices.reduce((s, inv) => s + inv.total, 0),
+  ]);
+
+  const summaryWs = XLSX.utils.aoa_to_sheet(summaryRows);
+  summaryWs["!cols"] = [
+    { wch: 30 }, { wch: 16 },
+    ...BILLING_CATEGORIES.map(() => ({ wch: 18 })),
+    { wch: 16 },
+  ];
+  XLSX.utils.book_append_sheet(wb, summaryWs, "Summary");
+
+  // ── One sheet per customer ──
+  const usedNames = new Set<string>();
+  for (const inv of invoices) {
+    let name = (inv.customerName || inv.customer).slice(0, 28);
+    // Deduplicate sheet names
+    if (usedNames.has(name)) name = `${name.slice(0, 25)}_${inv.customer.slice(0, 3)}`;
+    usedNames.add(name);
+    XLSX.utils.book_append_sheet(wb, buildInvoiceSheet(inv), name);
+  }
+
+  XLSX.writeFile(wb, `Invoice_ALL_${period}.xlsx`);
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -152,6 +194,10 @@ export default function BillingPage() {
 
   // ── collapsed sections ──
   const [collapsed, setCollapsed] = useState<Set<BillingCategory>>(new Set());
+
+  // ── "All Customers" export state ──
+  const [allExporting, setAllExporting] = useState(false);
+  const [allExportMsg, setAllExportMsg] = useState("");
 
   // ── load invoice list ──
   async function loadList() {
@@ -214,151 +260,133 @@ export default function BillingPage() {
     });
   }, []);
 
-  // ── auto-fetch usage data from WMS API ──
-  async function autoFetch() {
-    if (!editing) return;
-    setFetching(true);
-    setFetchMsg("Fetching WMS data…");
-
-    const { customer, period } = editing;
+  // ── shared: fetch WMS data for one customer/period → qty updates map ──
+  async function fetchWmsQty(customer: string, period: string): Promise<Record<string, number>> {
     const [year, month] = period.split("-").map(Number);
     const startDate = `${period}-01`;
     const lastDay = new Date(year, month, 0).getDate();
     const endDate = `${period}-${String(lastDay).padStart(2, "0")}`;
-
     const updates: Record<string, number> = {};
 
     try {
-      // ── Inbound: count receiving orders ──
-      const inboundRes = await fetch("/api/wms/receiving/list", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          page: 1, limit: 500,
-          customerCode: customer,
-          startDate, endDate,
-        }),
-      });
-      const inboundJson = await inboundRes.json();
-      const inboundList: Record<string, unknown>[] = (
-        inboundJson?.data?.list ?? inboundJson?.data ?? inboundJson?.list ?? []
-      );
-      if (Array.isArray(inboundList)) {
-        // Count cartons vs pallets vs containers by parsing orderType / remarks
-        // For now: total order count maps to carton (most common inbound)
-        // Users can adjust other container types manually
+      const j = await fetch("/api/wms/receiving/list", {
+        method: "POST", headers,
+        body: JSON.stringify({ page: 1, limit: 500, customerCode: customer, startDate, endDate }),
+      }).then((r) => r.json());
+      const list: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
+      if (Array.isArray(list)) {
         let cartons = 0;
-        for (const ord of inboundList) {
+        for (const ord of list) {
           const type = String(ord.inboundType ?? ord.receiveType ?? "").toLowerCase();
-          if (type.includes("container") || type.includes("cont")) {
-            // leave for manual input — too many subtypes
-          } else {
+          if (!type.includes("container") && !type.includes("cont"))
             cartons += Number(ord.totalQty ?? ord.itemCount ?? 1);
-          }
         }
         if (cartons > 0) updates["inbound_carton"] = cartons;
       }
+    } catch {}
 
-      // ── Fulfillment B2B ──
-      const b2bRes = await fetch("/api/wms/shipping/list", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          page: 1, limit: 500,
-          orderType: "B2B",
-          customerCode: customer,
-          startDate, endDate,
-        }),
-      });
-      const b2bJson = await b2bRes.json();
-      const b2bList: Record<string, unknown>[] = (
-        b2bJson?.data?.list ?? b2bJson?.data ?? b2bJson?.list ?? []
-      );
-      if (Array.isArray(b2bList) && b2bList.length > 0) {
-        updates["b2b_order"] = b2bList.length;
-        const totalPieces = b2bList.reduce(
-          (s, o) => s + Number(o.totalQty ?? o.orderQty ?? 0), 0
-        );
-        if (totalPieces > 0) updates["b2b_pick_piece"] = totalPieces;
+    try {
+      const j = await fetch("/api/wms/shipping/list", {
+        method: "POST", headers,
+        body: JSON.stringify({ page: 1, limit: 500, orderType: "B2B", customerCode: customer, startDate, endDate }),
+      }).then((r) => r.json());
+      const list: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
+      if (Array.isArray(list) && list.length > 0) {
+        updates["b2b_order"] = list.length;
+        const pieces = list.reduce((s, o) => s + Number(o.totalQty ?? o.orderQty ?? 0), 0);
+        if (pieces > 0) updates["b2b_pick_piece"] = pieces;
       }
+    } catch {}
 
-      // ── Fulfillment B2C ──
-      const b2cRes = await fetch("/api/wms/shipping/list", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          page: 1, limit: 500,
-          orderType: "B2C",
-          customerCode: customer,
-          startDate, endDate,
-        }),
-      });
-      const b2cJson = await b2cRes.json();
-      const b2cList: Record<string, unknown>[] = (
-        b2cJson?.data?.list ?? b2cJson?.data ?? b2cJson?.list ?? []
-      );
-      if (Array.isArray(b2cList) && b2cList.length > 0) {
-        updates["b2c_order"] = b2cList.length;
-        const totalPicks = b2cList.reduce(
-          (s, o) => s + Number(o.totalQty ?? o.orderQty ?? 0), 0
-        );
-        // Picks after 5th per order
-        const extraPicks = b2cList.reduce((s, o) => {
-          const qty = Number(o.totalQty ?? o.orderQty ?? 0);
-          return s + Math.max(0, qty - 5);
-        }, 0);
-        if (totalPicks > 0) updates["b2c_pick_piece"] = extraPicks;
+    try {
+      const j = await fetch("/api/wms/shipping/list", {
+        method: "POST", headers,
+        body: JSON.stringify({ page: 1, limit: 500, orderType: "B2C", customerCode: customer, startDate, endDate }),
+      }).then((r) => r.json());
+      const list: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
+      if (Array.isArray(list) && list.length > 0) {
+        updates["b2c_order"] = list.length;
+        const extraPicks = list.reduce((s, o) => s + Math.max(0, Number(o.totalQty ?? o.orderQty ?? 0) - 5), 0);
+        if (extraPicks > 0) updates["b2c_pick_piece"] = extraPicks;
       }
+    } catch {}
 
-      // ── Returns ──
-      const retRes = await fetch("/api/wms/returns/list", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          page: 1, limit: 500,
-          customerCode: customer,
-          startDate, endDate,
-        }),
-      }).catch(() => null);
-      if (retRes?.ok) {
-        const retJson = await retRes.json();
-        const retList: Record<string, unknown>[] = (
-          retJson?.data?.list ?? retJson?.data ?? retJson?.list ?? []
-        );
-        if (Array.isArray(retList) && retList.length > 0) {
-          updates["return_receiving"] = retList.length;
-          const restockPieces = retList.reduce(
-            (s, o) => s + Number(o.totalQty ?? o.qty ?? 0), 0
-          );
-          if (restockPieces > 0) updates["return_restock"] = restockPieces;
+    try {
+      const r = await fetch("/api/wms/returns/list", {
+        method: "POST", headers,
+        body: JSON.stringify({ page: 1, limit: 500, customerCode: customer, startDate, endDate }),
+      });
+      if (r.ok) {
+        const j = await r.json();
+        const list: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
+        if (Array.isArray(list) && list.length > 0) {
+          updates["return_receiving"] = list.length;
+          const pieces = list.reduce((s, o) => s + Number(o.totalQty ?? o.qty ?? 0), 0);
+          if (pieces > 0) updates["return_restock"] = pieces;
         }
       }
+    } catch {}
 
-      const updatedCount = Object.keys(updates).length;
+    return updates;
+  }
+
+  // ── auto-fetch for current editing invoice ──
+  async function autoFetch() {
+    if (!editing) return;
+    setFetching(true);
+    setFetchMsg("Fetching WMS data...");
+    try {
+      const updates = await fetchWmsQty(editing.customer, editing.period);
+      const count = Object.keys(updates).length;
       setFetchMsg(
-        updatedCount > 0
-          ? `✓ ${updatedCount} fields auto-filled from WMS data. Verify and adjust as needed.`
+        count > 0
+          ? `✓ ${count} fields auto-filled from WMS data. Verify and adjust as needed.`
           : "No matching data found in WMS for this period. Enter quantities manually."
       );
-
-      if (updatedCount > 0) {
+      if (count > 0) {
         setEditing((prev) => {
           if (!prev) return prev;
           const items = prev.lineItems.map((item) =>
-            updates[item.id] !== undefined
-              ? { ...item, qty: updates[item.id], autoFetched: true }
-              : item
+            updates[item.id] !== undefined ? { ...item, qty: updates[item.id], autoFetched: true } : item
           );
-          const subtotals = calcSubtotals(items);
-          const total = calcTotal(items);
-          return { ...prev, lineItems: items, subtotals, total };
+          return { ...prev, lineItems: items, subtotals: calcSubtotals(items), total: calcTotal(items) };
         });
       }
-    } catch (e) {
+    } catch {
       setFetchMsg("Failed to fetch WMS data. Enter quantities manually.");
-      console.error(e);
     } finally {
       setFetching(false);
+    }
+  }
+
+  // ── "All Customers" export: fetch all + multi-sheet Excel ──
+  async function exportAllCustomers() {
+    if (customers.length === 0) return;
+    const period = `${newYear}-${newMonth}`;
+    setAllExporting(true);
+    setAllExportMsg(`Fetching data for ${customers.length} customers...`);
+    try {
+      const invoiceList: BillingInvoice[] = [];
+      for (let i = 0; i < customers.length; i++) {
+        const c = customers[i];
+        setAllExportMsg(`Fetching ${c.code} (${i + 1}/${customers.length})...`);
+        const updates = await fetchWmsQty(c.code, period);
+        const inv = buildNewInvoice(c.code, c.name, period);
+        if (Object.keys(updates).length > 0) {
+          inv.lineItems = inv.lineItems.map((item) =>
+            updates[item.id] !== undefined ? { ...item, qty: updates[item.id], autoFetched: true } : item
+          );
+        }
+        inv.subtotals = calcSubtotals(inv.lineItems);
+        inv.total = calcTotal(inv.lineItems);
+        invoiceList.push(inv);
+      }
+      exportAllToExcel(invoiceList, period);
+      setAllExportMsg(`✓ Exported ${invoiceList.length} customers to Invoice_ALL_${period}.xlsx`);
+    } catch {
+      setAllExportMsg("Export failed. Please try again.");
+    } finally {
+      setAllExporting(false);
     }
   }
 
@@ -626,13 +654,24 @@ export default function BillingPage() {
           <h1 className="text-xl font-bold text-slate-900">Billing</h1>
           <p className="text-slate-500 text-sm mt-0.5">Monthly invoice management</p>
         </div>
-        <button
-          onClick={() => setShowNewForm(true)}
-          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          New Invoice
-        </button>
+        <div className="flex items-center gap-2">
+          {invoices.length > 0 && (
+            <button
+              onClick={() => exportAllToExcel(invoices, invoices[0]?.period ?? "")}
+              className="flex items-center gap-2 text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-600 hover:bg-slate-50 transition-colors"
+            >
+              <Download className="w-4 h-4" />
+              Export All
+            </button>
+          )}
+          <button
+            onClick={() => { setShowNewForm(true); setAllExportMsg(""); }}
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            New Invoice
+          </button>
+        </div>
       </div>
 
       {/* New invoice form */}
@@ -642,17 +681,19 @@ export default function BillingPage() {
           <div className="flex flex-wrap gap-3 items-end">
             {/* Customer */}
             <div>
-              <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">Customer Code</label>
+              <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">Customer</label>
               {customers.length > 0 ? (
                 <select
                   value={newCustomer}
                   onChange={(e) => {
                     setNewCustomer(e.target.value);
                     setNewCustomerName(customers.find((c) => c.code === e.target.value)?.name ?? "");
+                    setAllExportMsg("");
                   }}
-                  className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 w-52"
+                  className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 w-56"
                 >
                   <option value="">— Select —</option>
+                  <option value="__ALL__">★ All Customers</option>
                   {customers.map((c) => (
                     <option key={c.code} value={c.code}>{c.code} {c.name && `— ${c.name}`}</option>
                   ))}
@@ -708,21 +749,49 @@ export default function BillingPage() {
               </select>
             </div>
 
+            {/* Action button — changes based on All vs single */}
+            {newCustomer === "__ALL__" ? (
+              <button
+                onClick={exportAllCustomers}
+                disabled={allExporting || customers.length === 0}
+                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-300 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+              >
+                {allExporting
+                  ? <RefreshCw className="w-4 h-4 animate-spin" />
+                  : <Download className="w-4 h-4" />}
+                {allExporting ? "Exporting..." : "Export All Customers"}
+              </button>
+            ) : (
+              <button
+                onClick={createInvoice}
+                disabled={!newCustomer}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+              >
+                <Receipt className="w-4 h-4" />
+                Create
+              </button>
+            )}
             <button
-              onClick={createInvoice}
-              disabled={!newCustomer}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-            >
-              <Receipt className="w-4 h-4" />
-              Create
-            </button>
-            <button
-              onClick={() => setShowNewForm(false)}
+              onClick={() => { setShowNewForm(false); setAllExportMsg(""); }}
               className="text-sm text-slate-400 hover:text-slate-600 px-3 py-2"
             >
               Cancel
             </button>
           </div>
+
+          {/* All-customers export progress/result */}
+          {allExportMsg && (
+            <div className={`mt-3 flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm border ${
+              allExportMsg.startsWith("✓")
+                ? "bg-green-50 border-green-200 text-green-800"
+                : allExportMsg.startsWith("Export failed")
+                ? "bg-red-50 border-red-200 text-red-700"
+                : "bg-blue-50 border-blue-200 text-blue-700"
+            }`}>
+              {allExporting && <RefreshCw className="w-3.5 h-3.5 animate-spin flex-shrink-0" />}
+              {allExportMsg}
+            </div>
+          )}
         </div>
       )}
 
