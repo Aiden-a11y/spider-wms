@@ -238,15 +238,31 @@ export default function ReceivingPage() {
       }
       wmsBody.comment = newComment;
 
-      const wmsRes = await fetch(`/api/wms/receiving/${recvInfo.orderCode}`, {
-        method: "PUT",
-        headers,
-        body: JSON.stringify(wmsBody),
-      });
-      const wmsText = await wmsRes.text();
-      console.log("[WMS PUT]", wmsRes.status, wmsText);
+      // Try POST endpoints in order until one succeeds
+      const candidates = [
+        { method: "POST", url: `/api/wms/receiving/update` },
+        { method: "POST", url: `/api/wms/receiving/${recvInfo.orderCode}` },
+        { method: "PATCH", url: `/api/wms/receiving/${recvInfo.orderCode}` },
+      ];
 
-      setRecvInfoMsg(wmsRes.ok ? "Saved & synced to WMS" : `WMS sync failed (${wmsRes.status}): ${wmsText.slice(0, 120)}`);
+      let synced = false;
+      let lastStatus = 0;
+      let lastBody = "";
+      for (const { method, url } of candidates) {
+        const r = await fetch(url, { method, headers, body: JSON.stringify(wmsBody) });
+        const txt = await r.text();
+        console.log(`[WMS ${method} ${url}]`, r.status, txt.slice(0, 200));
+        lastStatus = r.status;
+        lastBody = txt;
+        if (r.ok || r.status === 200) { synced = true; break; }
+        if (r.status === 405) continue; // method not allowed → try next
+        break; // any other error → stop
+      }
+
+      setRecvInfoMsg(synced
+        ? "Saved & synced to WMS"
+        : `WMS sync failed (${lastStatus}): ${lastBody.replace(/<[^>]*>/g, "").trim().slice(0, 100)}`
+      );
       setTimeout(() => setRecvInfoMsg(""), 6000);
     } catch {
       setRecvInfoMsg("Save failed");
