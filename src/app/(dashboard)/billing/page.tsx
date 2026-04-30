@@ -16,7 +16,7 @@ import {
   X,
   AlertCircle,
 } from "lucide-react";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import {
   buildNewInvoice,
   buildDefaultLineItems,
@@ -56,107 +56,246 @@ const CATEGORY_COLOR: Record<BillingCategory, string> = {
   "Warehouse Labor":   "bg-red-50 border-red-200 text-red-800",
 };
 
-// ─── Excel helpers ────────────────────────────────────────────────────────────
+// ─── Excel helpers (ExcelJS — styled) ────────────────────────────────────────
 
-/** Build one worksheet for a single customer invoice */
-function buildInvoiceSheet(invoice: BillingInvoice): XLSX.WorkSheet {
-  const rows: (string | number)[][] = [];
+// Category accent colors (ARGB hex, no #)
+const CAT_COLORS: Record<BillingCategory, { header: string; row: string }> = {
+  "Inbound Handling":  { header: "FF1D4ED8", row: "FFDBEAFE" }, // blue
+  "Storage":           { header: "FF7C3AED", row: "FFEDE9FE" }, // purple
+  "Fulfillment B2B":   { header: "FF059669", row: "FFD1FAE5" }, // emerald
+  "Fulfillment B2C":   { header: "FF0D9488", row: "FFCCFBF1" }, // teal
+  "Return Management": { header: "FFEA580C", row: "FFFED7AA" }, // orange
+  "Warehouse Labor":   { header: "FFDC2626", row: "FFFECACA" }, // red
+};
 
-  rows.push(["INVOICE"]);
-  rows.push(["Customer", invoice.customerName || invoice.customer]);
-  rows.push(["Customer Code", invoice.customer]);
-  rows.push(["Period", periodLabel(invoice.period)]);
-  rows.push(["Rate Version", invoice.rateVersion]);
-  rows.push(["Generated", new Date().toLocaleDateString("en-US")]);
-  rows.push([]);
+const COL_WIDTHS = [52, 10, 26, 14, 14];
 
+function applyBorder(cell: ExcelJS.Cell, style: ExcelJS.BorderStyle = "thin") {
+  cell.border = {
+    top: { style }, bottom: { style },
+    left: { style }, right: { style },
+  };
+}
+
+/** Fill one ExcelJS worksheet with a styled invoice */
+function fillInvoiceSheet(ws: ExcelJS.Worksheet, invoice: BillingInvoice) {
+  ws.columns = COL_WIDTHS.map((w) => ({ width: w }));
+
+  // ── Invoice title ──
+  const titleRow = ws.addRow(["INVOICE"]);
+  titleRow.height = 22;
+  const titleCell = titleRow.getCell(1);
+  titleCell.font = { bold: true, size: 14, color: { argb: "FFFFFFFF" } };
+  titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E293B" } };
+  titleCell.alignment = { vertical: "middle" };
+  ws.mergeCells(`A${titleRow.number}:E${titleRow.number}`);
+  applyBorder(titleCell, "medium");
+
+  // ── Meta rows ──
+  const meta = [
+    ["Customer",     invoice.customerName || invoice.customer],
+    ["Customer Code",invoice.customer],
+    ["Period",       periodLabel(invoice.period)],
+    ["Rate Version", invoice.rateVersion],
+    ["Generated",    new Date().toLocaleDateString("en-US")],
+  ];
+  for (const [label, value] of meta) {
+    const r = ws.addRow([label, value]);
+    r.getCell(1).font = { bold: true, color: { argb: "FF64748B" } };
+    r.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8FAFC" } };
+    r.getCell(2).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8FAFC" } };
+    [1, 2].forEach((c) => applyBorder(r.getCell(c)));
+  }
+  ws.addRow([]); // spacer
+
+  // ── Category sections ──
   for (const cat of BILLING_CATEGORIES) {
+    const colors = CAT_COLORS[cat];
     const catItems = invoice.lineItems.filter((l) => l.category === cat);
-    rows.push([cat.toUpperCase(), "", "", "", ""]);
-    rows.push(["Description", "Qty", "Unit", "Rate", "Amount"]);
+
+    // Category header
+    const catRow = ws.addRow([cat.toUpperCase()]);
+    catRow.height = 18;
+    ws.mergeCells(`A${catRow.number}:E${catRow.number}`);
+    const catCell = catRow.getCell(1);
+    catCell.font = { bold: true, size: 11, color: { argb: "FFFFFFFF" } };
+    catCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: colors.header } };
+    catCell.alignment = { vertical: "middle", indent: 1 };
+    applyBorder(catCell, "medium");
+
+    // Column headers
+    const colHeaderRow = ws.addRow(["Description", "Qty", "Unit", "Rate", "Amount"]);
+    colHeaderRow.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: "FF1E293B" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: colors.row } };
+      cell.alignment = { horizontal: Number(cell.col) === 1 ? "left" : "right" };
+      applyBorder(cell);
+    });
+
+    // Data rows
     for (const item of catItems) {
-      rows.push([
+      const amt = calcLineAmount(item);
+      const r = ws.addRow([
         item.description,
         item.qty,
         item.unit,
         item.costPlus ? "cost + 10%" : item.rate,
-        calcLineAmount(item),
+        amt,
       ]);
+      r.eachCell((cell) => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFFFF" } };
+        applyBorder(cell);
+        if (Number(cell.col) > 1) cell.alignment = { horizontal: "right" };
+      });
+      // Dim zero rows
+      if (item.qty === 0) {
+        r.eachCell((cell) => { cell.font = { color: { argb: "FFCBD5E1" } }; });
+      }
+      // Format numbers
+      r.getCell(2).numFmt = "#,##0.##";
+      if (!item.costPlus) r.getCell(4).numFmt = "$#,##0.00";
+      r.getCell(5).numFmt = "$#,##0.00";
     }
+
+    // Subtotal row
     const sub = catItems.reduce((s, i) => s + calcLineAmount(i), 0);
-    rows.push(["", "", "", "Subtotal", sub]);
-    rows.push([]);
+    const subRow = ws.addRow(["", "", "", "Subtotal", sub]);
+    subRow.eachCell((cell) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
+      applyBorder(cell);
+      if (Number(cell.col) >= 4) {
+        cell.font = { bold: true };
+        cell.alignment = { horizontal: "right" };
+      }
+    });
+    subRow.getCell(5).numFmt = "$#,##0.00";
+    ws.addRow([]); // spacer
   }
 
-  rows.push(["", "", "", "GRAND TOTAL", invoice.total]);
+  // ── Grand Total ──
+  const totalRow = ws.addRow(["", "", "", "GRAND TOTAL", invoice.total]);
+  totalRow.height = 20;
+  totalRow.eachCell((cell) => {
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E293B" } };
+    applyBorder(cell, "medium");
+    if (Number(cell.col) >= 4) {
+      cell.font = { bold: true, size: 12, color: { argb: "FFFFFFFF" } };
+      cell.alignment = { horizontal: "right" };
+    }
+  });
+  totalRow.getCell(5).numFmt = "$#,##0.00";
+
+  // Notes
   if (invoice.notes) {
-    rows.push([]);
-    rows.push(["Notes", invoice.notes]);
+    ws.addRow([]);
+    const notesRow = ws.addRow(["Notes", invoice.notes]);
+    notesRow.getCell(1).font = { bold: true, color: { argb: "FF64748B" } };
   }
-
-  const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws["!cols"] = [{ wch: 52 }, { wch: 10 }, { wch: 26 }, { wch: 14 }, { wch: 14 }];
-  return ws;
 }
 
-/** Export a single invoice as one-sheet Excel */
-function exportInvoiceToExcel(invoice: BillingInvoice) {
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, buildInvoiceSheet(invoice), invoice.customer.slice(0, 31));
-  XLSX.writeFile(wb, `Invoice_${invoice.customer}_${invoice.period}.xlsx`);
+async function downloadWorkbook(wb: ExcelJS.Workbook, filename: string) {
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
-/** Export multiple invoices — Summary tab + one tab per customer */
-function exportAllToExcel(invoices: BillingInvoice[], period: string) {
+/** Export a single invoice — one styled sheet */
+async function exportInvoiceToExcel(invoice: BillingInvoice) {
+  const wb = new ExcelJS.Workbook();
+  const sheetName = (invoice.customerName || invoice.customer).slice(0, 31);
+  fillInvoiceSheet(wb.addWorksheet(sheetName), invoice);
+  await downloadWorkbook(wb, `Invoice_${invoice.customer}_${invoice.period}.xlsx`);
+}
+
+/** Export multiple invoices — styled Summary tab + one tab per customer */
+async function exportAllToExcel(invoices: BillingInvoice[], period: string) {
   if (invoices.length === 0) return;
-  const wb = XLSX.utils.book_new();
+  const wb = new ExcelJS.Workbook();
 
   // ── Summary sheet ──
-  const summaryRows: (string | number)[][] = [];
-  summaryRows.push([`BILLING SUMMARY — ${periodLabel(period)}`]);
-  summaryRows.push([`Generated`, new Date().toLocaleDateString("en-US")]);
-  summaryRows.push([]);
-  summaryRows.push([
-    "Customer", "Customer Code",
-    ...BILLING_CATEGORIES,
-    "TOTAL",
-  ]);
+  const summaryWs = wb.addWorksheet("Summary");
+  summaryWs.columns = [
+    { width: 30 }, { width: 16 },
+    ...BILLING_CATEGORIES.map(() => ({ width: 18 })),
+    { width: 16 },
+  ];
+
+  // Title
+  const titleRow = summaryWs.addRow([`BILLING SUMMARY — ${periodLabel(period)}`]);
+  summaryWs.mergeCells(`A1:${String.fromCharCode(65 + 1 + BILLING_CATEGORIES.length)}1`);
+  titleRow.height = 22;
+  titleRow.getCell(1).font = { bold: true, size: 13, color: { argb: "FFFFFFFF" } };
+  titleRow.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E293B" } };
+  titleRow.getCell(1).alignment = { vertical: "middle" };
+  applyBorder(titleRow.getCell(1), "medium");
+
+  const genRow = summaryWs.addRow(["Generated", new Date().toLocaleDateString("en-US")]);
+  genRow.getCell(1).font = { bold: true, color: { argb: "FF64748B" } };
+  summaryWs.addRow([]);
+
+  // Column headers
+  const hdrs = ["Customer", "Customer Code", ...BILLING_CATEGORIES, "TOTAL"];
+  const hdrRow = summaryWs.addRow(hdrs);
+  hdrRow.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF334155" } };
+    cell.alignment = { horizontal: Number(cell.col) <= 2 ? "left" : "right" };
+    applyBorder(cell, "medium");
+  });
+
+  // Data rows
   for (const inv of invoices) {
-    summaryRows.push([
+    const dataRow = summaryWs.addRow([
       inv.customerName || inv.customer,
       inv.customer,
       ...BILLING_CATEGORIES.map((c) => inv.subtotals?.[c] ?? 0),
       inv.total,
     ]);
+    dataRow.eachCell((cell) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFFFF" } };
+      applyBorder(cell);
+      if (Number(cell.col) > 2) {
+        cell.numFmt = "$#,##0.00";
+        cell.alignment = { horizontal: "right" };
+      }
+    });
   }
+
   // Totals row
-  summaryRows.push([
+  const totRow = summaryWs.addRow([
     "TOTAL", "",
     ...BILLING_CATEGORIES.map((c) =>
       invoices.reduce((s, inv) => s + (inv.subtotals?.[c] ?? 0), 0)
     ),
     invoices.reduce((s, inv) => s + inv.total, 0),
   ]);
-
-  const summaryWs = XLSX.utils.aoa_to_sheet(summaryRows);
-  summaryWs["!cols"] = [
-    { wch: 30 }, { wch: 16 },
-    ...BILLING_CATEGORIES.map(() => ({ wch: 18 })),
-    { wch: 16 },
-  ];
-  XLSX.utils.book_append_sheet(wb, summaryWs, "Summary");
+  totRow.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E293B" } };
+    applyBorder(cell, "medium");
+    if (Number(cell.col) > 2) {
+      cell.numFmt = "$#,##0.00";
+      cell.alignment = { horizontal: "right" };
+    }
+  });
 
   // ── One sheet per customer ──
   const usedNames = new Set<string>();
   for (const inv of invoices) {
     let name = (inv.customerName || inv.customer).slice(0, 28);
-    // Deduplicate sheet names
-    if (usedNames.has(name)) name = `${name.slice(0, 25)}_${inv.customer.slice(0, 3)}`;
+    if (usedNames.has(name)) name = `${name.slice(0, 24)}_${inv.customer.slice(-3)}`;
     usedNames.add(name);
-    XLSX.utils.book_append_sheet(wb, buildInvoiceSheet(inv), name);
+    fillInvoiceSheet(wb.addWorksheet(name), inv);
   }
 
-  XLSX.writeFile(wb, `Invoice_ALL_${period}.xlsx`);
+  await downloadWorkbook(wb, `Invoice_ALL_${period}.xlsx`);
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -470,7 +609,7 @@ export default function BillingPage() {
             </button>
             {/* Export */}
             <button
-              onClick={() => exportInvoiceToExcel({ ...editing, total: currentTotal })}
+              onClick={() => exportInvoiceToExcel({ ...editing, total: currentTotal }).catch(console.error)}
               className="flex items-center gap-1.5 text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-600 hover:bg-slate-50 transition-colors"
             >
               <Download className="w-4 h-4" />
@@ -657,7 +796,7 @@ export default function BillingPage() {
         <div className="flex items-center gap-2">
           {invoices.length > 0 && (
             <button
-              onClick={() => exportAllToExcel(invoices, invoices[0]?.period ?? "")}
+              onClick={() => exportAllToExcel(invoices, invoices[0]?.period ?? "").catch(console.error)}
               className="flex items-center gap-2 text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-600 hover:bg-slate-50 transition-colors"
             >
               <Download className="w-4 h-4" />
@@ -851,7 +990,7 @@ export default function BillingPage() {
                   <td className="px-5 py-3.5 text-right" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-end gap-1">
                       <button
-                        onClick={() => exportInvoiceToExcel(inv)}
+                        onClick={() => exportInvoiceToExcel(inv).catch(console.error)}
                         className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                         title="Export Excel"
                       >
