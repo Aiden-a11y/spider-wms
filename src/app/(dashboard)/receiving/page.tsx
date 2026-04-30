@@ -8,7 +8,6 @@ import {
   CONTAINER_SIZES,
   emptyRecvInfo,
   hasRecvInfo,
-  formatRecvInfoText,
 } from "@/lib/receiving-info";
 
 type Row = Record<string, unknown>;
@@ -221,49 +220,8 @@ export default function ReceivingPage() {
       setRecvInfoMap((prev) => ({ ...prev, [saved.orderCode]: saved }));
       setRecvInfo(saved);
 
-      // 2) Sync formatted text into WMS comment field via PUT
-      const MARKER = "--- RECEIVING INFO ---";
-      const existingComment = String(d.comment ?? "").trim();
-      const markerIdx = existingComment.indexOf(MARKER);
-      const cleanComment = markerIdx >= 0
-        ? existingComment.slice(0, markerIdx).trim()
-        : existingComment;
-      const formatted = formatRecvInfoText(recvInfo);
-      const newComment = cleanComment ? `${cleanComment}\n\n${formatted}` : formatted;
-
-      // Build PUT body from current WMS detail (exclude synthetic _fields)
-      const wmsBody: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(d)) {
-        if (!k.startsWith("_")) wmsBody[k] = v;
-      }
-      wmsBody.comment = newComment;
-
-      // Try POST endpoints in order until one succeeds
-      const candidates = [
-        { method: "POST", url: `/api/wms/receiving/update` },
-        { method: "POST", url: `/api/wms/receiving/${recvInfo.orderCode}` },
-        { method: "PATCH", url: `/api/wms/receiving/${recvInfo.orderCode}` },
-      ];
-
-      let synced = false;
-      let lastStatus = 0;
-      let lastBody = "";
-      for (const { method, url } of candidates) {
-        const r = await fetch(url, { method, headers, body: JSON.stringify(wmsBody) });
-        const txt = await r.text();
-        console.log(`[WMS ${method} ${url}]`, r.status, txt.slice(0, 200));
-        lastStatus = r.status;
-        lastBody = txt;
-        if (r.ok || r.status === 200) { synced = true; break; }
-        if (r.status === 405) continue; // method not allowed → try next
-        break; // any other error → stop
-      }
-
-      setRecvInfoMsg(synced
-        ? "Saved & synced to WMS"
-        : `WMS sync failed (${lastStatus}): ${lastBody.replace(/<[^>]*>/g, "").trim().slice(0, 100)}`
-      );
-      setTimeout(() => setRecvInfoMsg(""), 6000);
+      setRecvInfoMsg("Saved");
+      setTimeout(() => setRecvInfoMsg(""), 3000);
     } catch {
       setRecvInfoMsg("Save failed");
     } finally {
