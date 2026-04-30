@@ -73,14 +73,49 @@ export default function ReceivingPage() {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch("/api/wms/receiving/list", {
+      const LIMIT = 100;
+
+      // Fetch first page to get total count
+      const first = await fetch("/api/wms/receiving/list", {
         method: "POST",
         headers,
-        body: JSON.stringify({ page: 1, limit: 200 }),
+        body: JSON.stringify({ page: 1, limit: LIMIT }),
       });
-      const json = await res.json();
-      const list = json?.data?.list ?? json?.data ?? json?.list ?? json ?? [];
-      setData(Array.isArray(list) ? list : []);
+      const firstJson = await first.json();
+      const firstList: Row[] = firstJson?.data?.list ?? firstJson?.data ?? firstJson?.list ?? firstJson ?? [];
+
+      const total: number =
+        firstJson?.data?.total ??
+        firstJson?.data?.totalCount ??
+        firstJson?.total ??
+        firstJson?.totalCount ??
+        firstList.length;
+
+      const totalPages = Math.ceil(total / LIMIT);
+
+      // Fetch remaining pages in parallel (if any)
+      let allRows: Row[] = Array.isArray(firstList) ? [...firstList] : [];
+
+      if (totalPages > 1) {
+        const rest = await Promise.all(
+          Array.from({ length: totalPages - 1 }, (_, i) =>
+            fetch("/api/wms/receiving/list", {
+              method: "POST",
+              headers,
+              body: JSON.stringify({ page: i + 2, limit: LIMIT }),
+            })
+              .then((r) => r.json())
+              .then((j) => {
+                const l = j?.data?.list ?? j?.data ?? j?.list ?? j ?? [];
+                return Array.isArray(l) ? l : [];
+              })
+              .catch(() => [] as Row[])
+          )
+        );
+        allRows = allRows.concat(rest.flat());
+      }
+
+      setData(allRows);
     } catch {
       setError("Failed to load receiving data.");
     } finally {
