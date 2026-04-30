@@ -60,21 +60,24 @@ const CATEGORY_COLOR: Record<BillingCategory, string> = {
 
 function exportInvoiceToExcel(invoice: BillingInvoice) {
   const wb = XLSX.utils.book_new();
-  const rows: unknown[][] = [];
+  const rows: (string | number)[][] = [];
 
-  rows.push([`INVOICE — ${invoice.customerName || invoice.customer}`]);
-  rows.push([`Period: ${periodLabel(invoice.period)}`]);
-  rows.push([`Customer: ${invoice.customer}`]);
-  rows.push([`Rate Version: ${invoice.rateVersion}`]);
-  rows.push([`Generated: ${new Date().toLocaleDateString("en-US")}`]);
+  // ── Header info ──
+  rows.push([`INVOICE`]);
+  rows.push([`Customer`, invoice.customerName || invoice.customer]);
+  rows.push([`Customer Code`, invoice.customer]);
+  rows.push([`Period`, periodLabel(invoice.period)]);
+  rows.push([`Rate Version`, invoice.rateVersion]);
+  rows.push([`Generated`, new Date().toLocaleDateString("en-US")]);
   rows.push([]);
 
+  // ── Category sections — ALL items, qty=0 shows $0 ──
   for (const cat of BILLING_CATEGORIES) {
-    const catItems = invoice.lineItems.filter((l) => l.category === cat && (l.qty > 0 || l.costPlus));
-    if (catItems.length === 0) continue;
+    const catItems = invoice.lineItems.filter((l) => l.category === cat);
 
-    rows.push([cat.toUpperCase()]);
+    rows.push([cat.toUpperCase(), "", "", "", ""]);
     rows.push(["Description", "Qty", "Unit", "Rate", "Amount"]);
+
     for (const item of catItems) {
       const amt = calcLineAmount(item);
       rows.push([
@@ -85,19 +88,31 @@ function exportInvoiceToExcel(invoice: BillingInvoice) {
         amt,
       ]);
     }
+
     const sub = catItems.reduce((s, i) => s + calcLineAmount(i), 0);
     rows.push(["", "", "", "Subtotal", sub]);
     rows.push([]);
   }
 
-  rows.push(["", "", "", "TOTAL", invoice.total]);
+  // ── Grand total ──
+  rows.push(["", "", "", "GRAND TOTAL", invoice.total]);
+
   if (invoice.notes) {
     rows.push([]);
-    rows.push(["Notes:", invoice.notes]);
+    rows.push(["Notes", invoice.notes]);
   }
 
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws["!cols"] = [{ wch: 55 }, { wch: 10 }, { wch: 28 }, { wch: 14 }, { wch: 14 }];
+
+  // ── Column widths ──
+  ws["!cols"] = [
+    { wch: 52 }, // Description
+    { wch: 10 }, // Qty
+    { wch: 26 }, // Unit
+    { wch: 14 }, // Rate
+    { wch: 14 }, // Amount
+  ];
+
   XLSX.utils.book_append_sheet(wb, ws, "Invoice");
   XLSX.writeFile(wb, `Invoice_${invoice.customer}_${invoice.period}.xlsx`);
 }
