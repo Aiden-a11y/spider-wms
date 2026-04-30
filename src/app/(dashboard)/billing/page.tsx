@@ -15,7 +15,16 @@ import {
   FileText,
   X,
   AlertCircle,
+  Table2,
 } from "lucide-react";
+
+// Raw WMS orders collected during auto-fetch (shown in Source Data panel)
+type WmsSource = {
+  receiving: Record<string, unknown>[];
+  b2b:       Record<string, unknown>[];
+  b2c:       Record<string, unknown>[];
+  returns:   Record<string, unknown>[];
+};
 import ExcelJS from "exceljs";
 import {
   buildNewInvoice,
@@ -339,6 +348,11 @@ export default function BillingPage() {
   const [allExporting, setAllExporting] = useState(false);
   const [allExportMsg, setAllExportMsg] = useState("");
 
+  // ── WMS source data (shown after auto-fetch) ──
+  const [wmsSource, setWmsSource] = useState<WmsSource | null>(null);
+  const [sourceTab, setSourceTab] = useState<"receiving" | "b2b" | "b2c" | "returns">("receiving");
+  const [showSource, setShowSource] = useState(false);
+
   // ── load invoice list ──
   async function loadList() {
     setListLoading(true);
@@ -400,6 +414,8 @@ export default function BillingPage() {
   function openInvoice(inv: BillingInvoice) {
     setEditing(JSON.parse(JSON.stringify(inv))); // deep clone
     setFetchMsg("");
+    setWmsSource(null);
+    setShowSource(false);
   }
 
   // ── update any field of a line item (rate는 Rate Master에서 관리, 편집 불가) ──
@@ -422,13 +438,17 @@ export default function BillingPage() {
     });
   }, []);
 
-  // ── shared: fetch WMS data for one customer/period → qty updates map ──
-  async function fetchWmsQty(customer: string, period: string): Promise<Record<string, number>> {
+  // ── shared: fetch WMS data for one customer/period → qty updates + raw source ──
+  async function fetchWmsQty(
+    customer: string,
+    period: string
+  ): Promise<{ updates: Record<string, number>; source: WmsSource }> {
     const [year, month] = period.split("-").map(Number);
     const startDate = `${period}-01`;
     const lastDay = new Date(year, month, 0).getDate();
     const endDate = `${period}-${String(lastDay).padStart(2, "0")}`;
     const updates: Record<string, number> = {};
+    const source: WmsSource = { receiving: [], b2b: [], b2c: [], returns: [] };
 
     try {
       const j = await fetch("/api/wms/receiving/list", {
@@ -437,6 +457,7 @@ export default function BillingPage() {
       }).then((r) => r.json());
       const list: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
       if (Array.isArray(list)) {
+        source.receiving = list;
         let cartons = 0;
         for (const ord of list) {
           const type = String(ord.inboundType ?? ord.receiveType ?? "").toLowerCase();
@@ -454,6 +475,7 @@ export default function BillingPage() {
       }).then((r) => r.json());
       const list: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
       if (Array.isArray(list) && list.length > 0) {
+        source.b2b = list;
         updates["b2b_order"] = list.length;
         const pieces = list.reduce((s, o) => s + Number(o.totalQty ?? o.orderQty ?? 0), 0);
         if (pieces > 0) updates["b2b_pick_piece"] = pieces;
@@ -467,6 +489,7 @@ export default function BillingPage() {
       }).then((r) => r.json());
       const list: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
       if (Array.isArray(list) && list.length > 0) {
+        source.b2c = list;
         updates["b2c_order"] = list.length;
         const extraPicks = list.reduce((s, o) => s + Math.max(0, Number(o.totalQty ?? o.orderQty ?? 0) - 5), 0);
         if (extraPicks > 0) updates["b2c_pick_piece"] = extraPicks;
@@ -482,6 +505,7 @@ export default function BillingPage() {
         const j = await r.json();
         const list: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
         if (Array.isArray(list) && list.length > 0) {
+          source.returns = list;
           updates["return_receiving"] = list.length;
           const pieces = list.reduce((s, o) => s + Number(o.totalQty ?? o.qty ?? 0), 0);
           if (pieces > 0) updates["return_restock"] = pieces;
@@ -489,7 +513,7 @@ export default function BillingPage() {
       }
     } catch {}
 
-    return updates;
+    return { updates, source };
   }
 
   // ── auto-fetch for current editing invoice ──
@@ -497,8 +521,11 @@ export default function BillingPage() {
     if (!editing) return;
     setFetching(true);
     setFetchMsg("Fetching WMS data...");
+    setWmsSource(null);
+    setShowSource(false);
     try {
-      const updates = await fetchWmsQty(editing.customer, editing.period);
+      const { updates, source } = await fetchWmsQty(editing.customer, editing.period);
+      setWmsSource(source);
       const count = Object.keys(updates).length;
       setFetchMsg(
         count > 0
@@ -532,7 +559,7 @@ export default function BillingPage() {
       for (let i = 0; i < customers.length; i++) {
         const c = customers[i];
         setAllExportMsg(`Fetching ${c.code} (${i + 1}/${customers.length})...`);
-        const updates = await fetchWmsQty(c.code, period);
+        const { updates } = await fetchWmsQty(c.code, period);
         const inv = buildNewInvoice(c.code, c.name, period);
         if (Object.keys(updates).length > 0) {
           inv.lineItems = inv.lineItems.map((item) =>
@@ -674,6 +701,236 @@ export default function BillingPage() {
           <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm mb-5">
             <AlertCircle className="w-4 h-4 flex-shrink-0" />
             {saveError}
+          </div>
+        )}
+
+        {/* ── WMS Source Data panel ── */}
+        {wmsSource && (
+          <div className="mb-5 bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+            {/* Header / toggle */}
+            <button
+              onClick={() => setShowSource((s) => !s)}
+              className="w-full flex items-center justify-between px-5 py-3 hover:bg-slate-50 transition-colors"
+            >
+              <div className="flex items-center gap-3 text-sm font-medium text-slate-700">
+                <Table2 className="w-4 h-4 text-slate-400" />
+                WMS Source Data
+                <span className="flex gap-1.5 flex-wrap">
+                  {wmsSource.receiving.length > 0 && (
+                    <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">
+                      Inbound {wmsSource.receiving.length}
+                    </span>
+                  )}
+                  {wmsSource.b2b.length > 0 && (
+                    <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-medium">
+                      B2B {wmsSource.b2b.length}
+                    </span>
+                  )}
+                  {wmsSource.b2c.length > 0 && (
+                    <span className="text-xs bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full font-medium">
+                      B2C {wmsSource.b2c.length}
+                    </span>
+                  )}
+                  {wmsSource.returns.length > 0 && (
+                    <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-medium">
+                      Returns {wmsSource.returns.length}
+                    </span>
+                  )}
+                </span>
+              </div>
+              {showSource
+                ? <ChevronUp className="w-4 h-4 text-slate-400" />
+                : <ChevronDown className="w-4 h-4 text-slate-400" />}
+            </button>
+
+            {showSource && (
+              <div className="border-t border-slate-100">
+                {/* Sub-tabs */}
+                <div className="flex border-b border-slate-100 px-5">
+                  {(
+                    [
+                      { key: "receiving", label: "Inbound",      count: wmsSource.receiving.length, active: "text-blue-600 border-blue-600" },
+                      { key: "b2b",       label: "B2B Shipping", count: wmsSource.b2b.length,       active: "text-emerald-600 border-emerald-600" },
+                      { key: "b2c",       label: "B2C Shipping", count: wmsSource.b2c.length,       active: "text-teal-600 border-teal-600" },
+                      { key: "returns",   label: "Returns",      count: wmsSource.returns.length,    active: "text-orange-600 border-orange-600" },
+                    ] as const
+                  ).map(({ key, label, count, active }) => (
+                    <button
+                      key={key}
+                      onClick={() => setSourceTab(key)}
+                      className={`px-4 py-2.5 text-xs font-medium border-b-2 transition-colors -mb-px ${
+                        sourceTab === key
+                          ? `${active} border-current`
+                          : "border-transparent text-slate-400 hover:text-slate-600"
+                      }`}
+                    >
+                      {label} ({count})
+                    </button>
+                  ))}
+                </div>
+
+                {/* Table area */}
+                <div className="overflow-x-auto" style={{ maxHeight: "16rem" }}>
+                  {/* ── Inbound ── */}
+                  {sourceTab === "receiving" && (
+                    wmsSource.receiving.length === 0 ? (
+                      <p className="text-center text-sm text-slate-400 py-8">No inbound orders this period</p>
+                    ) : (
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-50 sticky top-0">
+                          <tr>
+                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">Order Code</th>
+                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">Date</th>
+                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">Type</th>
+                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">Qty</th>
+                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">Counted</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {wmsSource.receiving.map((o, i) => {
+                            const type = String(o.inboundType ?? o.receiveType ?? "");
+                            const isContainer = /container|cont/i.test(type);
+                            const qty = Number(o.totalQty ?? o.itemCount ?? 1);
+                            return (
+                              <tr key={i} className={`border-b border-slate-50 ${isContainer ? "opacity-40" : ""}`}>
+                                <td className="px-3 py-1.5 font-mono text-blue-600">{String(o.receiveOrderCode ?? o.orderCode ?? "—")}</td>
+                                <td className="px-3 py-1.5 text-slate-500">{String(o.orderDate ?? "—")}</td>
+                                <td className="px-3 py-1.5 text-slate-500">{type || "—"}{isContainer && <span className="ml-1 text-red-400">(excl.)</span>}</td>
+                                <td className="px-3 py-1.5 text-right">{qty}</td>
+                                <td className="px-3 py-1.5 text-right font-semibold text-blue-600">{isContainer ? "—" : qty}</td>
+                              </tr>
+                            );
+                          })}
+                          <tr className="bg-blue-50 border-t border-blue-100 font-semibold text-blue-700">
+                            <td colSpan={4} className="px-3 py-1.5">Total Cartons</td>
+                            <td className="px-3 py-1.5 text-right">
+                              {wmsSource.receiving
+                                .filter((o) => !/container|cont/i.test(String(o.inboundType ?? o.receiveType ?? "")))
+                                .reduce((s, o) => s + Number(o.totalQty ?? o.itemCount ?? 1), 0)}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    )
+                  )}
+
+                  {/* ── B2B ── */}
+                  {sourceTab === "b2b" && (
+                    wmsSource.b2b.length === 0 ? (
+                      <p className="text-center text-sm text-slate-400 py-8">No B2B orders this period</p>
+                    ) : (
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-50 sticky top-0">
+                          <tr>
+                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">Order Code</th>
+                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">Date</th>
+                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">Total Qty</th>
+                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">+1 Order</th>
+                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">+Pieces</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {wmsSource.b2b.map((o, i) => {
+                            const qty = Number(o.totalQty ?? o.orderQty ?? 0);
+                            return (
+                              <tr key={i} className="border-b border-slate-50">
+                                <td className="px-3 py-1.5 font-mono text-emerald-600">{String(o.shipOrderCode ?? o.orderCode ?? "—")}</td>
+                                <td className="px-3 py-1.5 text-slate-500">{String(o.orderDate ?? "—")}</td>
+                                <td className="px-3 py-1.5 text-right">{qty}</td>
+                                <td className="px-3 py-1.5 text-right font-semibold text-emerald-600">1</td>
+                                <td className="px-3 py-1.5 text-right font-semibold text-emerald-600">{qty}</td>
+                              </tr>
+                            );
+                          })}
+                          <tr className="bg-emerald-50 border-t border-emerald-100 font-semibold text-emerald-700">
+                            <td colSpan={3} className="px-3 py-1.5">Total</td>
+                            <td className="px-3 py-1.5 text-right">{wmsSource.b2b.length}</td>
+                            <td className="px-3 py-1.5 text-right">{wmsSource.b2b.reduce((s, o) => s + Number(o.totalQty ?? o.orderQty ?? 0), 0)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    )
+                  )}
+
+                  {/* ── B2C ── */}
+                  {sourceTab === "b2c" && (
+                    wmsSource.b2c.length === 0 ? (
+                      <p className="text-center text-sm text-slate-400 py-8">No B2C orders this period</p>
+                    ) : (
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-50 sticky top-0">
+                          <tr>
+                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">Order Code</th>
+                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">Date</th>
+                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">Total Qty</th>
+                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">+1 Order</th>
+                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">+Extra Picks</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {wmsSource.b2c.map((o, i) => {
+                            const qty = Number(o.totalQty ?? o.orderQty ?? 0);
+                            const extra = Math.max(0, qty - 5);
+                            return (
+                              <tr key={i} className="border-b border-slate-50">
+                                <td className="px-3 py-1.5 font-mono text-teal-600">{String(o.shipOrderCode ?? o.orderCode ?? "—")}</td>
+                                <td className="px-3 py-1.5 text-slate-500">{String(o.orderDate ?? "—")}</td>
+                                <td className="px-3 py-1.5 text-right">{qty}</td>
+                                <td className="px-3 py-1.5 text-right font-semibold text-teal-600">1</td>
+                                <td className="px-3 py-1.5 text-right font-semibold text-teal-600">{extra > 0 ? extra : "—"}</td>
+                              </tr>
+                            );
+                          })}
+                          <tr className="bg-teal-50 border-t border-teal-100 font-semibold text-teal-700">
+                            <td colSpan={3} className="px-3 py-1.5">Total</td>
+                            <td className="px-3 py-1.5 text-right">{wmsSource.b2c.length}</td>
+                            <td className="px-3 py-1.5 text-right">{wmsSource.b2c.reduce((s, o) => s + Math.max(0, Number(o.totalQty ?? o.orderQty ?? 0) - 5), 0)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    )
+                  )}
+
+                  {/* ── Returns ── */}
+                  {sourceTab === "returns" && (
+                    wmsSource.returns.length === 0 ? (
+                      <p className="text-center text-sm text-slate-400 py-8">No returns this period</p>
+                    ) : (
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-50 sticky top-0">
+                          <tr>
+                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">Order Code</th>
+                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">Date</th>
+                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">Total Qty</th>
+                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">+1 Return</th>
+                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">+Restock Pcs</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {wmsSource.returns.map((o, i) => {
+                            const qty = Number(o.totalQty ?? o.qty ?? 0);
+                            return (
+                              <tr key={i} className="border-b border-slate-50">
+                                <td className="px-3 py-1.5 font-mono text-orange-600">{String(o.returnOrderCode ?? o.orderCode ?? "—")}</td>
+                                <td className="px-3 py-1.5 text-slate-500">{String(o.orderDate ?? "—")}</td>
+                                <td className="px-3 py-1.5 text-right">{qty}</td>
+                                <td className="px-3 py-1.5 text-right font-semibold text-orange-600">1</td>
+                                <td className="px-3 py-1.5 text-right font-semibold text-orange-600">{qty}</td>
+                              </tr>
+                            );
+                          })}
+                          <tr className="bg-orange-50 border-t border-orange-100 font-semibold text-orange-700">
+                            <td colSpan={3} className="px-3 py-1.5">Total</td>
+                            <td className="px-3 py-1.5 text-right">{wmsSource.returns.length}</td>
+                            <td className="px-3 py-1.5 text-right">{wmsSource.returns.reduce((s, o) => s + Number(o.totalQty ?? o.qty ?? 0), 0)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    )
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
