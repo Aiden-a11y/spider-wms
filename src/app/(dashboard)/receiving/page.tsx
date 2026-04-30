@@ -251,27 +251,30 @@ export default function ReceivingPage() {
           ? `${cleanComment}\n\n${lines.join("\n")}`
           : lines.join("\n");
 
+        // Build WMS save body: copy scalar fields from detail, skip arrays & internal keys
+        const SKIP_KEYS = new Set([
+          "_itemList", "receiveItemList", "itemList", "items",
+          "documentList", "documents", "statusName",
+        ]);
         const wmsBody: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(d)) {
-          if (!k.startsWith("_")) wmsBody[k] = v;
+          if (k.startsWith("_")) continue;
+          if (SKIP_KEYS.has(k)) continue;
+          if (Array.isArray(v)) continue;
+          wmsBody[k] = v;
         }
         wmsBody.comment = newComment;
 
         const candidates = [
-          { method: "POST", url: `/api/wms/receiving/update` },
-          { method: "POST", url: `/api/wms/receiving/${recvInfo.orderCode}` },
-          { method: "PATCH", url: `/api/wms/receiving/${recvInfo.orderCode}` },
+          { method: "POST", url: `/api/wms/receiving/save` },
         ];
 
         let synced = false;
-        for (const { method, url } of candidates) {
-          const r = await fetch(url, { method, headers, body: JSON.stringify(wmsBody) });
-          const txt = await r.text();
-          console.log(`[WMS ${method} ${url}]`, r.status, txt.slice(0, 200));
-          if (r.ok) { synced = true; break; }
-          if (r.status === 405) continue;
-          break;
-        }
+        const { method, url } = candidates[0];
+        const r = await fetch(url, { method, headers, body: JSON.stringify(wmsBody) });
+        const txt = await r.text();
+        console.log(`[WMS ${method} ${url}] → ${r.status}`, txt.slice(0, 400));
+        synced = r.ok;
 
         setRecvInfoMsg(synced ? "Saved & synced to WMS" : "Saved (WMS sync failed — check console)");
       } else {
@@ -959,7 +962,11 @@ export default function ReceivingPage() {
 
                     {/* Save bar */}
                     <div className="flex items-center justify-between pt-2 border-t border-slate-100">
-                      <span className={`text-xs font-medium ${recvInfoMsg === "Saved" ? "text-emerald-600" : recvInfoMsg ? "text-red-500" : "text-transparent"}`}>
+                      <span className={`text-xs font-medium ${
+                        recvInfoMsg.startsWith("Saved") ? "text-emerald-600"
+                        : recvInfoMsg ? "text-red-500"
+                        : "text-transparent"
+                      }`}>
                         {recvInfoMsg || "·"}
                       </span>
                       <button
