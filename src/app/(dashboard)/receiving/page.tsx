@@ -8,6 +8,7 @@ import {
   CONTAINER_SIZES,
   emptyRecvInfo,
   hasRecvInfo,
+  formatRecvInfoText,
 } from "@/lib/receiving-info";
 
 type Row = Record<string, unknown>;
@@ -208,17 +209,43 @@ export default function ReceivingPage() {
     setRecvInfoSaving(true);
     setRecvInfoMsg("");
     try {
+      // 1) Save to Redis
       const res = await fetch("/api/receiving-info", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(recvInfo),
       });
       if (!res.ok) throw new Error("Save failed");
+
       const saved = { ...recvInfo, updatedAt: new Date().toISOString() };
       setRecvInfoMap((prev) => ({ ...prev, [saved.orderCode]: saved }));
       setRecvInfo(saved);
-      setRecvInfoMsg("Saved");
-      setTimeout(() => setRecvInfoMsg(""), 3000);
+
+      // 2) Sync formatted text into WMS comment field via PUT
+      const MARKER = "--- RECEIVING INFO ---";
+      const existingComment = String(d.comment ?? "").trim();
+      const markerIdx = existingComment.indexOf(MARKER);
+      const cleanComment = markerIdx >= 0
+        ? existingComment.slice(0, markerIdx).trim()
+        : existingComment;
+      const formatted = formatRecvInfoText(recvInfo);
+      const newComment = cleanComment ? `${cleanComment}\n\n${formatted}` : formatted;
+
+      // Build PUT body from current WMS detail (exclude synthetic _fields)
+      const wmsBody: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(d)) {
+        if (!k.startsWith("_")) wmsBody[k] = v;
+      }
+      wmsBody.comment = newComment;
+
+      const wmsRes = await fetch(`/api/wms/receiving/${recvInfo.orderCode}`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(wmsBody),
+      });
+
+      setRecvInfoMsg(wmsRes.ok ? "Saved & synced to WMS" : "Saved locally (WMS sync failed)");
+      setTimeout(() => setRecvInfoMsg(""), 4000);
     } catch {
       setRecvInfoMsg("Save failed");
     } finally {
