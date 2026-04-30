@@ -143,14 +143,11 @@ function fillInvoiceSheet(ws: ExcelJS.Worksheet, invoice: BillingInvoice) {
         amt,
       ]);
       r.eachCell((cell) => {
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFFFF" } };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: item.qty === 0 ? "FFF8FAFC" : "FFFFFFFF" } };
+        cell.font = { color: { argb: "FF1E293B" } };
         applyBorder(cell);
         if (Number(cell.col) > 1) cell.alignment = { horizontal: "right" };
       });
-      // Dim zero rows
-      if (item.qty === 0) {
-        r.eachCell((cell) => { cell.font = { color: { argb: "FFCBD5E1" } }; });
-      }
       // Format numbers
       r.getCell(2).numFmt = "#,##0.##";
       if (!item.costPlus) r.getCell(4).numFmt = "$#,##0.00";
