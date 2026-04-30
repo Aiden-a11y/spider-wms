@@ -384,17 +384,27 @@ export default function BillingPage() {
     setFetchMsg("");
   }
 
-  // ── update qty in editor ──
-  const updateQty = useCallback((id: string, raw: string) => {
-    const qty = raw === "" ? 0 : parseFloat(raw);
+  // ── update any field of a line item ──
+  const updateItem = useCallback((
+    id: string,
+    field: "qty" | "rate" | "description" | "unit",
+    raw: string
+  ) => {
     setEditing((prev) => {
       if (!prev) return prev;
-      const items = prev.lineItems.map((item) =>
-        item.id === id ? { ...item, qty: isNaN(qty) ? 0 : qty } : item
-      );
-      const subtotals = calcSubtotals(items);
-      const total = calcTotal(items);
-      return { ...prev, lineItems: items, subtotals, total };
+      const items = prev.lineItems.map((item) => {
+        if (item.id !== id) return item;
+        if (field === "qty") {
+          const v = raw === "" ? 0 : parseFloat(raw);
+          return { ...item, qty: isNaN(v) ? 0 : v, autoFetched: false };
+        }
+        if (field === "rate") {
+          const v = raw === "" ? 0 : parseFloat(raw);
+          return { ...item, rate: isNaN(v) ? 0 : v };
+        }
+        return { ...item, [field]: raw };
+      });
+      return { ...prev, lineItems: items, subtotals: calcSubtotals(items), total: calcTotal(items) };
     });
   }, []);
 
@@ -686,53 +696,75 @@ export default function BillingPage() {
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="bg-slate-50 border-b border-slate-100">
-                          <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-400 uppercase tracking-wide">Description</th>
-                          <th className="px-4 py-2.5 text-right text-xs font-semibold text-slate-400 uppercase tracking-wide w-28">Qty</th>
-                          <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-400 uppercase tracking-wide">Unit</th>
-                          <th className="px-4 py-2.5 text-right text-xs font-semibold text-slate-400 uppercase tracking-wide w-24">Rate</th>
-                          <th className="px-4 py-2.5 text-right text-xs font-semibold text-slate-400 uppercase tracking-wide w-28">Amount</th>
+                          <th className="px-3 py-2.5 text-left text-xs font-semibold text-slate-400 uppercase tracking-wide">Description</th>
+                          <th className="px-3 py-2.5 text-right text-xs font-semibold text-slate-400 uppercase tracking-wide w-24">Qty</th>
+                          <th className="px-3 py-2.5 text-left text-xs font-semibold text-slate-400 uppercase tracking-wide w-36">Unit</th>
+                          <th className="px-3 py-2.5 text-right text-xs font-semibold text-slate-400 uppercase tracking-wide w-28">Rate</th>
+                          <th className="px-3 py-2.5 text-right text-xs font-semibold text-slate-400 uppercase tracking-wide w-28">Amount</th>
                         </tr>
                       </thead>
                       <tbody>
                         {catItems.map((item) => {
                           const amt = calcLineAmount(item);
-                          const dimmed = item.qty === 0;
+                          const inputCls = "w-full bg-transparent border-0 border-b border-transparent hover:border-slate-200 focus:border-blue-400 focus:outline-none text-sm py-0.5 transition-colors";
                           return (
                             <tr
                               key={item.id}
-                              className={`border-b border-slate-50 last:border-0 transition-colors ${
-                                dimmed ? "opacity-40" : ""
-                              }`}
+                              className={`border-b border-slate-50 last:border-0 ${item.qty === 0 ? "opacity-50" : ""}`}
                             >
-                              <td className="px-4 py-2.5 text-slate-700">
-                                <div className="flex items-center gap-2">
-                                  {item.description}
+                              {/* Description */}
+                              <td className="px-3 py-2">
+                                <div className="flex items-center gap-1.5">
+                                  <input
+                                    type="text"
+                                    value={item.description}
+                                    onChange={(e) => updateItem(item.id, "description", e.target.value)}
+                                    className={`${inputCls} text-slate-800`}
+                                  />
                                   {item.autoFetched && item.qty > 0 && (
-                                    <span className="text-xs bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-medium">
-                                      auto
-                                    </span>
-                                  )}
-                                  {item.note && (
-                                    <span className="text-xs text-slate-400">({item.note})</span>
+                                    <span className="flex-shrink-0 text-xs bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-medium">auto</span>
                                   )}
                                 </div>
                               </td>
-                              <td className="px-4 py-2.5 text-right">
+                              {/* Qty */}
+                              <td className="px-3 py-2">
                                 <input
                                   type="number"
                                   min={0}
                                   step="any"
                                   value={item.qty === 0 ? "" : item.qty}
-                                  onChange={(e) => updateQty(item.id, e.target.value)}
+                                  onChange={(e) => updateItem(item.id, "qty", e.target.value)}
                                   placeholder="0"
-                                  className="w-24 text-right border border-slate-200 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                                  className={`${inputCls} text-right tabular-nums`}
                                 />
                               </td>
-                              <td className="px-4 py-2.5 text-slate-500 text-xs">{item.unit}</td>
-                              <td className="px-4 py-2.5 text-right text-slate-600 tabular-nums">
-                                {item.costPlus ? "cost+10%" : `$${item.rate.toFixed(2)}`}
+                              {/* Unit */}
+                              <td className="px-3 py-2">
+                                <input
+                                  type="text"
+                                  value={item.unit}
+                                  onChange={(e) => updateItem(item.id, "unit", e.target.value)}
+                                  className={`${inputCls} text-slate-500 text-xs`}
+                                />
                               </td>
-                              <td className={`px-4 py-2.5 text-right font-semibold tabular-nums ${
+                              {/* Rate */}
+                              <td className="px-3 py-2">
+                                {item.costPlus ? (
+                                  <span className="text-xs text-slate-500 block text-right">cost+10%</span>
+                                ) : (
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    step="any"
+                                    value={item.rate === 0 ? "" : item.rate}
+                                    onChange={(e) => updateItem(item.id, "rate", e.target.value)}
+                                    placeholder="0.00"
+                                    className={`${inputCls} text-right tabular-nums text-slate-700`}
+                                  />
+                                )}
+                              </td>
+                              {/* Amount (calculated) */}
+                              <td className={`px-3 py-2 text-right font-semibold tabular-nums text-sm ${
                                 amt > 0 ? "text-slate-900" : "text-slate-300"
                               }`}>
                                 {amt > 0 ? formatUSD(amt) : "—"}
@@ -741,18 +773,16 @@ export default function BillingPage() {
                           );
                         })}
                       </tbody>
-                      {catTotal > 0 && (
-                        <tfoot>
-                          <tr className="bg-slate-50 border-t border-slate-200">
-                            <td colSpan={4} className="px-4 py-2.5 text-right text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                              Subtotal
-                            </td>
-                            <td className="px-4 py-2.5 text-right font-bold text-slate-900 tabular-nums">
-                              {formatUSD(catTotal)}
-                            </td>
-                          </tr>
-                        </tfoot>
-                      )}
+                      <tfoot>
+                        <tr className="bg-slate-50 border-t border-slate-200">
+                          <td colSpan={4} className="px-3 py-2.5 text-right text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                            Subtotal
+                          </td>
+                          <td className="px-3 py-2.5 text-right font-bold text-slate-900 tabular-nums">
+                            {catTotal > 0 ? formatUSD(catTotal) : "—"}
+                          </td>
+                        </tr>
+                      </tfoot>
                     </table>
                   </div>
                 )}
