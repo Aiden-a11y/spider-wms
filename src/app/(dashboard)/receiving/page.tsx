@@ -2,7 +2,13 @@
 
 import { useEffect, useState, useMemo } from "react";
 import { useAuth } from "@/contexts/auth-context";
-import { RefreshCw, AlertCircle, PackageCheck, X, Search, ArrowLeftRight, ChevronLeft, ChevronRight } from "lucide-react";
+import { RefreshCw, AlertCircle, PackageCheck, X, Search, ArrowLeftRight, ChevronLeft, ChevronRight, CheckCircle2, ClipboardList, Save } from "lucide-react";
+import {
+  type ReceivingInfo,
+  CONTAINER_SIZES,
+  emptyRecvInfo,
+  hasRecvInfo,
+} from "@/lib/receiving-info";
 
 type Row = Record<string, unknown>;
 
@@ -53,7 +59,7 @@ export default function ReceivingPage() {
   const [detail, setDetail] = useState<Row | null>(null);
   const [detailRaw, setDetailRaw] = useState<unknown>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"info" | "items" | "docs" | "raw">("info");
+  const [activeTab, setActiveTab] = useState<"info" | "items" | "docs" | "recvInfo" | "raw">("info");
   const [statusModal, setStatusModal] = useState(false);
   const [newStatus, setNewStatus] = useState("");
   const [cancelComment, setCancelComment] = useState("");
@@ -63,6 +69,12 @@ export default function ReceivingPage() {
   // ── pagination ──
   const [pageSize, setPageSize] = useState(30);
   const [page, setPage] = useState(1);
+
+  // ── receiving info ──
+  const [recvInfoMap, setRecvInfoMap] = useState<Record<string, ReceivingInfo>>({});
+  const [recvInfo, setRecvInfo] = useState<ReceivingInfo | null>(null);
+  const [recvInfoSaving, setRecvInfoSaving] = useState(false);
+  const [recvInfoMsg, setRecvInfoMsg] = useState("");
 
   const headers = useMemo(
     () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
@@ -118,6 +130,14 @@ export default function ReceivingPage() {
     }
   }
 
+  // Load all receiving infos once on mount
+  useEffect(() => {
+    fetch("/api/receiving-info")
+      .then((r) => r.json())
+      .then((data) => { if (data && typeof data === "object") setRecvInfoMap(data); })
+      .catch(() => {});
+  }, []);
+
   useEffect(() => { load(); }, []); // eslint-disable-line
 
   async function openDetail(row: Row) {
@@ -125,6 +145,11 @@ export default function ReceivingPage() {
     setDetail(null);
     setActiveTab("info");
     setDetailLoading(true);
+    setRecvInfoMsg("");
+
+    // Pre-populate recv info form from map (or empty)
+    const orderCode = String(row.receiveOrderCode ?? row.orderCode ?? "");
+    setRecvInfo({ ...(recvInfoMap[orderCode] ?? emptyRecvInfo(orderCode)) });
     const code = String(row.receiveOrderCode ?? row.orderCode ?? row.id ?? "");
     try {
       // fetch detail + items in parallel
@@ -168,6 +193,37 @@ export default function ReceivingPage() {
     setNewStatus("");
     setCancelComment("");
     setStatusError("");
+    setRecvInfo(null);
+    setRecvInfoMsg("");
+  }
+
+  // ── recv info field updater ──
+  function updateRecvInfo<K extends keyof ReceivingInfo>(field: K, value: ReceivingInfo[K]) {
+    setRecvInfo((prev) => prev ? { ...prev, [field]: value } : prev);
+  }
+
+  // ── save recv info ──
+  async function saveRecvInfo() {
+    if (!recvInfo) return;
+    setRecvInfoSaving(true);
+    setRecvInfoMsg("");
+    try {
+      const res = await fetch("/api/receiving-info", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(recvInfo),
+      });
+      if (!res.ok) throw new Error("Save failed");
+      const saved = { ...recvInfo, updatedAt: new Date().toISOString() };
+      setRecvInfoMap((prev) => ({ ...prev, [saved.orderCode]: saved }));
+      setRecvInfo(saved);
+      setRecvInfoMsg("Saved");
+      setTimeout(() => setRecvInfoMsg(""), 3000);
+    } catch {
+      setRecvInfoMsg("Save failed");
+    } finally {
+      setRecvInfoSaving(false);
+    }
   }
 
   async function changeStatus() {
@@ -338,7 +394,7 @@ export default function ReceivingPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200">
-                    {["ORDER CODE","ORDER NO","WAREHOUSE","CUSTOMER","CUSTOMER NAME","ORDER DATE","STATUS","STATUS NAME"].map((c) => (
+                    {["ORDER CODE","ORDER NO","WAREHOUSE","CUSTOMER","CUSTOMER NAME","ORDER DATE","STATUS","STATUS NAME","RECV INFO"].map((c) => (
                       <th key={c} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap">{c}</th>
                     ))}
                   </tr>
@@ -361,6 +417,27 @@ export default function ReceivingPage() {
                           <StatusBadge status={status} name={statusName || undefined} />
                         </td>
                         <td className="px-4 py-2.5 whitespace-nowrap text-slate-500">{statusName || "-"}</td>
+                        <td className="px-4 py-2.5 whitespace-nowrap">
+                          {(() => {
+                            const code = String(row.receiveOrderCode ?? row.orderCode ?? "");
+                            const info = recvInfoMap[code];
+                            if (hasRecvInfo(info)) {
+                              return (
+                                <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600">
+                                  <CheckCircle2 className="w-3.5 h-3.5" /> Done
+                                </span>
+                              );
+                            }
+                            if (status === "DA") {
+                              return (
+                                <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-500">
+                                  <AlertCircle className="w-3.5 h-3.5" /> Missing
+                                </span>
+                              );
+                            }
+                            return <span className="text-slate-300 text-xs">—</span>;
+                          })()}
+                        </td>
                       </tr>
                     );
                   })}
@@ -545,16 +622,31 @@ export default function ReceivingPage() {
               <div className="flex-1 overflow-y-auto">
                 {/* Tabs */}
                 <div className="flex border-b border-slate-200 px-6">
-                  {(["info", "items", "docs", "raw"] as const).map((tab) => (
-                    <button key={tab} onClick={() => setActiveTab(tab)}
-                      className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px ${
-                        activeTab === tab
-                          ? "border-blue-600 text-blue-600"
-                          : "border-transparent text-slate-500 hover:text-slate-700"
-                      }`}>
-                      {tab === "info" ? "Info" : tab === "items" ? "Products" : tab === "docs" ? `Documents (${docs.length})` : "Raw"}
-                    </button>
-                  ))}
+                  {(["info", "items", "docs", "recvInfo", "raw"] as const).map((tab) => {
+                    const label =
+                      tab === "info" ? "Info"
+                      : tab === "items" ? "Products"
+                      : tab === "docs" ? `Documents (${docs.length})`
+                      : tab === "recvInfo" ? (
+                        <span className="flex items-center gap-1.5">
+                          <ClipboardList className="w-3.5 h-3.5" />
+                          Recv Info
+                          {recvInfo && hasRecvInfo(recvInfo) && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
+                          )}
+                        </span>
+                      ) : "Raw";
+                    return (
+                      <button key={tab} onClick={() => setActiveTab(tab)}
+                        className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px ${
+                          activeTab === tab
+                            ? "border-blue-600 text-blue-600"
+                            : "border-transparent text-slate-500 hover:text-slate-700"
+                        }`}>
+                        {label}
+                      </button>
+                    );
+                  })}
                 </div>
 
                 {activeTab === "info" && (
@@ -680,6 +772,151 @@ export default function ReceivingPage() {
                             ))}
                           </tbody>
                         </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {activeTab === "recvInfo" && recvInfo && (
+                  <div className="p-6 space-y-5">
+                    {/* ── grid of fields ── */}
+                    <div className="grid grid-cols-2 gap-5">
+                      {/* Receiving Date */}
+                      <div>
+                        <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">Receiving Date</label>
+                        <input
+                          type="date"
+                          value={recvInfo.receivingDate}
+                          onChange={(e) => updateRecvInfo("receivingDate", e.target.value)}
+                          className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                        />
+                      </div>
+
+                      {/* Container Size */}
+                      <div>
+                        <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">Container Size</label>
+                        <select
+                          value={recvInfo.containerSize}
+                          onChange={(e) => updateRecvInfo("containerSize", e.target.value)}
+                          className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+                        >
+                          <option value="">— Select —</option>
+                          {CONTAINER_SIZES.map((c) => (
+                            <option key={c.value} value={c.value}>{c.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Pallets Received */}
+                    <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
+                      <p className="text-xs text-slate-500 uppercase tracking-wide mb-3">Pallets Received</p>
+                      <div className="flex items-center gap-6">
+                        <div className="flex items-center gap-2">
+                          <label className="text-sm text-slate-500 w-8">PLT</label>
+                          <input
+                            type="number" min={0}
+                            value={recvInfo.pltReceived || ""}
+                            onChange={(e) => updateRecvInfo("pltReceived", Number(e.target.value) || 0)}
+                            placeholder="0"
+                            className="w-24 border border-slate-200 rounded-lg px-3 py-2 text-sm text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-400"
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <label className="text-sm text-slate-500 w-8">CTN</label>
+                          <input
+                            type="number" min={0}
+                            value={recvInfo.ctnReceived || ""}
+                            onChange={(e) => updateRecvInfo("ctnReceived", Number(e.target.value) || 0)}
+                            placeholder="0"
+                            className="w-24 border border-slate-200 rounded-lg px-3 py-2 text-sm text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-400"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Pallets Put Away */}
+                    <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
+                      <p className="text-xs text-slate-500 uppercase tracking-wide mb-3">Pallets Put Away</p>
+                      <div className="flex items-center gap-6">
+                        <div className="flex items-center gap-2">
+                          <label className="text-sm text-slate-500 w-8">PLT</label>
+                          <input
+                            type="number" min={0}
+                            value={recvInfo.pltPutAway || ""}
+                            onChange={(e) => updateRecvInfo("pltPutAway", Number(e.target.value) || 0)}
+                            placeholder="0"
+                            className="w-24 border border-slate-200 rounded-lg px-3 py-2 text-sm text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-400"
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <label className="text-sm text-slate-500 w-8">CTN</label>
+                          <input
+                            type="number" min={0}
+                            value={recvInfo.ctnPutAway || ""}
+                            onChange={(e) => updateRecvInfo("ctnPutAway", Number(e.target.value) || 0)}
+                            placeholder="0"
+                            className="w-24 border border-slate-200 rounded-lg px-3 py-2 text-sm text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-400"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Reason for Breakdown */}
+                    <div>
+                      <label className="text-xs text-slate-500 uppercase tracking-wide mb-2 block">Reason for Breakdown</label>
+                      <label className="flex items-center gap-2 mb-2 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={recvInfo.noBreakdown}
+                          onChange={(e) => updateRecvInfo("noBreakdown", e.target.checked)}
+                          className="w-4 h-4 rounded accent-blue-600"
+                        />
+                        <span className="text-sm text-slate-700 font-medium">No Breakdown</span>
+                      </label>
+                      {!recvInfo.noBreakdown && (
+                        <textarea
+                          value={recvInfo.breakdownReason}
+                          onChange={(e) => updateRecvInfo("breakdownReason", e.target.value)}
+                          rows={2}
+                          placeholder="Describe reason for breakdown..."
+                          className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-400"
+                        />
+                      )}
+                    </div>
+
+                    {/* Dimensional Total Hours */}
+                    <div>
+                      <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">Dimensional Total Hours</label>
+                      <input
+                        type="number" min={0} step="0.5"
+                        value={recvInfo.dimensionalHours || ""}
+                        onChange={(e) => updateRecvInfo("dimensionalHours", Number(e.target.value) || 0)}
+                        placeholder="0"
+                        className="w-36 border border-slate-200 rounded-lg px-3 py-2 text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-400"
+                      />
+                    </div>
+
+                    {/* Save bar */}
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                      <span className={`text-xs font-medium ${recvInfoMsg === "Saved" ? "text-emerald-600" : recvInfoMsg ? "text-red-500" : "text-transparent"}`}>
+                        {recvInfoMsg || "·"}
+                      </span>
+                      <button
+                        onClick={saveRecvInfo}
+                        disabled={recvInfoSaving}
+                        className="flex items-center gap-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-4 py-2 disabled:opacity-50 transition-colors"
+                      >
+                        {recvInfoSaving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                        {recvInfoSaving ? "Saving…" : "Save"}
+                      </button>
+                    </div>
+
+                    {/* Existing WMS comment (read-only reference) */}
+                    {d.comment != null && String(d.comment).trim() !== "" && (
+                      <div className="border-t border-slate-100 pt-4">
+                        <p className="text-xs text-slate-400 uppercase tracking-wide mb-2">Existing WMS Comment (reference)</p>
+                        <pre className="text-xs text-slate-600 bg-slate-50 rounded-lg px-4 py-3 border border-slate-100 whitespace-pre-wrap">{String(d.comment)}</pre>
                       </div>
                     )}
                   </div>
