@@ -3,11 +3,13 @@ import { createClient } from "@supabase/supabase-js";
 
 const WMS_BASE = "https://us-wms-api.stload.com/api";
 
+const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 async function wmsGet(path: string, token: string) {
   const res = await fetch(`${WMS_BASE}/${path}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
+  if (!res.ok) throw new Error(`GET ${path} → HTTP ${res.status}`);
   return res.json();
 }
 
@@ -20,19 +22,23 @@ async function wmsPost(path: string, token: string, body: unknown) {
     },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`POST ${path} failed: ${res.status}`);
+  if (!res.ok) throw new Error(`POST ${path} → HTTP ${res.status}`);
   return res.json();
 }
 
 export async function GET(req: NextRequest) {
-  // Verify cron secret
-  const secret = req.headers.get("x-cron-secret") ?? req.nextUrl.searchParams.get("secret");
+  // ── Auth ────────────────────────────────────────────────────────────────────
+  const secret =
+    req.headers.get("x-cron-secret") ??
+    req.nextUrl.searchParams.get("secret");
   if (secret !== process.env.CRON_SECRET) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const supabaseKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ??
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!supabaseUrl || !supabaseKey) {
     return NextResponse.json({ error: "Supabase env vars missing" }, { status: 500 });
   }
@@ -44,7 +50,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "WMS credentials missing" }, { status: 500 });
   }
 
-  // 1. Login
+  // ── Login ───────────────────────────────────────────────────────────────────
   const loginRes = await fetch(`${WMS_BASE}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -52,10 +58,13 @@ export async function GET(req: NextRequest) {
   });
   if (!loginRes.ok) {
     const err = await loginRes.json().catch(() => ({}));
-    return NextResponse.json({ error: `Login failed: ${err?.message ?? loginRes.status}` }, { status: 500 });
+    return NextResponse.json(
+      { error: `Login failed: ${(err as Record<string,unknown>)?.message ?? loginRes.status}` },
+      { status: 500 }
+    );
   }
   const loginJson = await loginRes.json();
-  const token =
+  const token: string =
     loginJson?.data?.token ??
     loginJson?.data?.accessToken ??
     loginJson?.token ??
@@ -64,91 +73,141 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Token not found in login response" }, { status: 500 });
   }
 
-  // Use America/Los_Angeles (PST/PDT auto DST) for the date label
-  const capturedAt = new Date().toISOString(); // exact UTC timestamp for audit
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" }); // YYYY-MM-DD in LA time
+  // Use America/Los_Angeles for the date label (matches LA business day)
+  const capturedAt = new Date().toISOString();
+  const today = new Date().toLocaleDateString("en-CA", {
+    timeZone: "America/Los_Angeles",
+  }); // YYYY-MM-DD
+
   let totalInserted = 0;
   const errors: string[] = [];
   const debug: string[] = [];
 
-  // 2. Get warehouses
+  // ── 1. Warehouses ───────────────────────────────────────────────────────────
   const whJson = await wmsGet("combo/warehouse", token);
-  const warehouses: { id: string; name: string }[] = Array.isArray(whJson?.data)
+  const rawWarehouses: Record<string, unknown>[] = Array.isArray(whJson?.data)
     ? whJson.data
     : Array.isArray(whJson)
     ? whJson
     : [];
 
+  // WMS returns { code, name } — map code → id to match the rest of the app
+  const warehouses = rawWarehouses
+    .map((w) => ({
+      id: String(w.code ?? w.id ?? w.warehouseId ?? ""),
+      name: String(w.name ?? w.warehouseName ?? w.code ?? ""),
+    }))
+    .filter((w) => w.id);
+
+  debug.push(`Warehouses found: ${warehouses.map((w) => w.id).join(", ")}`);
+
+  // ── 2. Per warehouse ────────────────────────────────────────────────────────
   for (const wh of warehouses) {
     const whCode = wh.id;
     try {
-      // 3. Get customers for this warehouse
+      // Customers for this warehouse
       const custJson = await wmsGet(`combo/customer-by-warehouse/${whCode}`, token);
-      const customers: { code: string; name: string }[] = Array.isArray(custJson?.data)
+      const rawCustomers: Record<string, unknown>[] = Array.isArray(custJson?.data)
         ? custJson.data
         : Array.isArray(custJson)
         ? custJson
         : [];
 
+      const customers = rawCustomers
+        .map((c) => ({
+          code: String(c.code ?? c.customerCode ?? c.id ?? ""),
+          name: String(c.name ?? c.customerName ?? c.code ?? ""),
+        }))
+        .filter((c) => c.code);
+
+      debug.push(`  ${whCode}: ${customers.length} customer(s)`);
+
       for (const cust of customers) {
         try {
-          // 4. Get SKU list
-          const skuJson = await wmsPost("product/list", token, {
-            warehouseCode: whCode,
-            customerCode: cust.code,
-            page: 1,
-            size: 9999,
-          });
-          const skuList: string[] = (
-            Array.isArray(skuJson?.data?.list)
+          // ── SKU list — paginate with correct param names ──────────────────
+          const skus: string[] = [];
+          let page = 1;
+          const pageSize = 500;
+          while (true) {
+            const skuJson = await wmsPost("product/list", token, {
+              warehouseCode: whCode,
+              customerCode: cust.code,
+              pageNum: page,
+              pageSize,
+            });
+            const list: Record<string, unknown>[] = Array.isArray(skuJson?.data?.list)
               ? skuJson.data.list
               : Array.isArray(skuJson?.data)
               ? skuJson.data
-              : []
-          ).map((p: Record<string, unknown>) => String(p.productSku ?? p.sku ?? p.code ?? "")).filter(Boolean);
+              : [];
+            const pageSkus = list
+              .map((p) => String(p.productSku ?? p.sku ?? p.code ?? ""))
+              .filter(Boolean);
+            skus.push(...pageSkus);
+            if (pageSkus.length < pageSize) break; // last page
+            page += 1;
+            await delay(300); // be polite between pages
+          }
 
+          debug.push(`    ${cust.code}: ${skus.length} SKU(s)`);
+          if (skus.length === 0) continue;
+
+          // ── Inventory detail — 5 SKUs at a time, 400 ms between batches ──
           const rows: Record<string, unknown>[] = [];
+          const BATCH = 5;
 
-          for (const sku of skuList) {
-            try {
-              const invJson = await wmsPost("inventory/detail", token, {
-                warehouseCode: whCode,
-                customerCode: cust.code,
-                productSku: sku,
-              });
+          for (let i = 0; i < skus.length; i += BATCH) {
+            const batch = skus.slice(i, i + BATCH);
+            const batchResults = await Promise.all(
+              batch.map((sku) =>
+                wmsPost("inventory/detail", token, {
+                  warehouseCode: whCode,
+                  customerCode: cust.code,
+                  productSku: sku,
+                }).catch(() => null)
+              )
+            );
+
+            for (let j = 0; j < batchResults.length; j++) {
+              const invJson = batchResults[j];
+              const sku = batch[j];
               const items: Record<string, unknown>[] = Array.isArray(invJson?.data)
                 ? invJson.data
                 : [];
 
               for (const item of items) {
-                const zone = String(item.zoneName ?? item.zone ?? "");
-                const aisle = String(item.aisleName ?? item.aisle ?? "");
-                const bay = String(item.bayName ?? item.bay ?? "");
-                const level = String(item.levelName ?? item.level ?? "");
+                const zone     = String(item.zoneName     ?? item.zone     ?? "");
+                const aisle    = String(item.aisleName    ?? item.aisle    ?? "");
+                const bay      = String(item.bayName      ?? item.bay      ?? "");
+                const level    = String(item.levelName    ?? item.level    ?? "");
                 const position = String(item.positionName ?? item.position ?? "");
-                const location = [zone, aisle, bay, level, position].filter(Boolean).join("-");
+                const location = [zone, aisle, bay, level, position]
+                  .filter(Boolean)
+                  .join("-");
 
                 rows.push({
-                  captured_date: today,
-                  captured_at: capturedAt,
+                  captured_date:  today,
+                  captured_at:    capturedAt,
                   warehouse_code: whCode,
-                  customer_code: cust.code,
+                  customer_code:  cust.code,
                   location,
-                  sku: String(item.productSku ?? item.sku ?? sku),
-                  product_name: String(item.productName ?? item.itemName ?? "") || null,
-                  qty: Number(item.qty ?? item.quantity ?? item.onHandQty ?? 0),
-                  available_qty: item.availableQty != null ? Number(item.availableQty) : null,
-                  lot: String(item.lotNo ?? item.lot ?? "") || null,
-                  expire_date: String(item.expireDate ?? item.expiryDate ?? "") || null,
+                  sku:            String(item.productSku ?? item.sku ?? sku),
+                  product_name:   String(item.productName ?? item.itemName ?? "") || null,
+                  qty:            Number(item.qty ?? item.quantity ?? item.onHandQty ?? 0),
+                  available_qty:  item.availableQty != null ? Number(item.availableQty) : null,
+                  lot:            String(item.lotNo ?? item.lot ?? "") || null,
+                  expire_date:    String(item.expireDate ?? item.expiryDate ?? "") || null,
                 });
               }
-            } catch (e) {
-              errors.push(`${whCode}/${cust.code}/${sku}: ${(e as Error).message}`);
             }
+
+            // Pause between batches (except last)
+            if (i + BATCH < skus.length) await delay(400);
           }
 
+          // ── Upsert to Supabase ────────────────────────────────────────────
           if (rows.length > 0) {
-            // Delete existing rows for today before inserting (idempotent)
+            // Delete today's existing rows for this warehouse+customer (idempotent)
             await sb
               .from("inventory_history")
               .delete()
@@ -156,10 +215,11 @@ export async function GET(req: NextRequest) {
               .eq("warehouse_code", whCode)
               .eq("customer_code", cust.code);
 
-            // Batch insert in chunks of 500
             for (let i = 0; i < rows.length; i += 500) {
               const chunk = rows.slice(i, i + 500);
-              const { error: insertErr } = await sb.from("inventory_history").insert(chunk);
+              const { error: insertErr } = await sb
+                .from("inventory_history")
+                .insert(chunk);
               if (insertErr) {
                 errors.push(`insert ${whCode}/${cust.code}: ${insertErr.message}`);
               } else {
@@ -167,6 +227,8 @@ export async function GET(req: NextRequest) {
               }
             }
           }
+
+          debug.push(`    ${cust.code}: ${rows.length} rows inserted`);
         } catch (e) {
           errors.push(`${whCode}/${cust.code}: ${(e as Error).message}`);
         }
@@ -182,6 +244,7 @@ export async function GET(req: NextRequest) {
     captured_at: capturedAt,
     inserted: totalInserted,
     warehouses: warehouses.length,
+    debug,
     errors: errors.length > 0 ? errors : undefined,
   });
 }
