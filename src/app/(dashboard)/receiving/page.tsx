@@ -243,9 +243,11 @@ export default function ReceivingPage() {
         headers,
         body: JSON.stringify(wmsBody),
       });
+      const wmsText = await wmsRes.text();
+      console.log("[WMS PUT]", wmsRes.status, wmsText);
 
-      setRecvInfoMsg(wmsRes.ok ? "Saved & synced to WMS" : "Saved locally (WMS sync failed)");
-      setTimeout(() => setRecvInfoMsg(""), 4000);
+      setRecvInfoMsg(wmsRes.ok ? "Saved & synced to WMS" : `WMS sync failed (${wmsRes.status}): ${wmsText.slice(0, 120)}`);
+      setTimeout(() => setRecvInfoMsg(""), 6000);
     } catch {
       setRecvInfoMsg("Save failed");
     } finally {
