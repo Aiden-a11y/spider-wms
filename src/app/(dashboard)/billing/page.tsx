@@ -59,75 +59,77 @@ const CATEGORY_COLOR: Record<BillingCategory, string> = {
 // ─── Excel helpers (ExcelJS — styled) ────────────────────────────────────────
 
 // Category accent colors (ARGB hex, no #)
-const CAT_COLORS: Record<BillingCategory, { header: string; row: string }> = {
-  "Inbound Handling":  { header: "FF1D4ED8", row: "FFDBEAFE" }, // blue
-  "Storage":           { header: "FF7C3AED", row: "FFEDE9FE" }, // purple
-  "Fulfillment B2B":   { header: "FF059669", row: "FFD1FAE5" }, // emerald
-  "Fulfillment B2C":   { header: "FF0D9488", row: "FFCCFBF1" }, // teal
-  "Return Management": { header: "FFEA580C", row: "FFFED7AA" }, // orange
-  "Warehouse Labor":   { header: "FFDC2626", row: "FFFECACA" }, // red
+// B&W palette
+const BW = {
+  black:    "FF000000",
+  white:    "FFFFFFFF",
+  dark:     "FF1A1A1A", // near-black — title / grand total bg
+  mid:      "FF444444", // category header bg
+  light:    "FFD0D0D0", // column header bg
+  faint:    "FFF2F2F2", // zero-qty row + subtotal bg
+  border:   "FF888888",
 };
 
 const COL_WIDTHS = [52, 10, 26, 14, 14];
 
 function applyBorder(cell: ExcelJS.Cell, style: ExcelJS.BorderStyle = "thin") {
+  const color = { argb: BW.border };
   cell.border = {
-    top: { style }, bottom: { style },
-    left: { style }, right: { style },
+    top: { style, color }, bottom: { style, color },
+    left: { style, color }, right: { style, color },
   };
 }
 
-/** Fill one ExcelJS worksheet with a styled invoice */
+/** Fill one ExcelJS worksheet with a B&W styled invoice */
 function fillInvoiceSheet(ws: ExcelJS.Worksheet, invoice: BillingInvoice) {
   ws.columns = COL_WIDTHS.map((w) => ({ width: w }));
 
   // ── Invoice title ──
   const titleRow = ws.addRow(["INVOICE"]);
   titleRow.height = 22;
-  const titleCell = titleRow.getCell(1);
-  titleCell.font = { bold: true, size: 14, color: { argb: "FFFFFFFF" } };
-  titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E293B" } };
-  titleCell.alignment = { vertical: "middle" };
   ws.mergeCells(`A${titleRow.number}:E${titleRow.number}`);
+  const titleCell = titleRow.getCell(1);
+  titleCell.font = { bold: true, size: 14, color: { argb: BW.white } };
+  titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: BW.dark } };
+  titleCell.alignment = { vertical: "middle", indent: 1 };
   applyBorder(titleCell, "medium");
 
   // ── Meta rows ──
   const meta = [
-    ["Customer",     invoice.customerName || invoice.customer],
-    ["Customer Code",invoice.customer],
-    ["Period",       periodLabel(invoice.period)],
-    ["Rate Version", invoice.rateVersion],
-    ["Generated",    new Date().toLocaleDateString("en-US")],
+    ["Customer",      invoice.customerName || invoice.customer],
+    ["Customer Code", invoice.customer],
+    ["Period",        periodLabel(invoice.period)],
+    ["Rate Version",  invoice.rateVersion],
+    ["Generated",     new Date().toLocaleDateString("en-US")],
   ];
   for (const [label, value] of meta) {
     const r = ws.addRow([label, value]);
-    r.getCell(1).font = { bold: true, color: { argb: "FF64748B" } };
-    r.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8FAFC" } };
-    r.getCell(2).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF8FAFC" } };
+    r.getCell(1).font = { bold: true, color: { argb: BW.black } };
+    r.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: BW.faint } };
+    r.getCell(2).fill = { type: "pattern", pattern: "solid", fgColor: { argb: BW.white } };
     [1, 2].forEach((c) => applyBorder(r.getCell(c)));
   }
-  ws.addRow([]); // spacer
+  ws.addRow([]);
 
   // ── Category sections ──
   for (const cat of BILLING_CATEGORIES) {
-    const colors = CAT_COLORS[cat];
     const catItems = invoice.lineItems.filter((l) => l.category === cat);
 
-    // Category header
+    // Category header — dark gray, white bold text
     const catRow = ws.addRow([cat.toUpperCase()]);
     catRow.height = 18;
     ws.mergeCells(`A${catRow.number}:E${catRow.number}`);
     const catCell = catRow.getCell(1);
-    catCell.font = { bold: true, size: 11, color: { argb: "FFFFFFFF" } };
-    catCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: colors.header } };
+    catCell.font = { bold: true, size: 11, color: { argb: BW.white } };
+    catCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: BW.mid } };
     catCell.alignment = { vertical: "middle", indent: 1 };
     applyBorder(catCell, "medium");
 
-    // Column headers
+    // Column headers — light gray bg, bold black
     const colHeaderRow = ws.addRow(["Description", "Qty", "Unit", "Rate", "Amount"]);
     colHeaderRow.eachCell((cell) => {
-      cell.font = { bold: true, color: { argb: "FF1E293B" } };
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: colors.row } };
+      cell.font = { bold: true, color: { argb: BW.black } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: BW.light } };
       cell.alignment = { horizontal: Number(cell.col) === 1 ? "left" : "right" };
       applyBorder(cell);
     });
@@ -143,50 +145,49 @@ function fillInvoiceSheet(ws: ExcelJS.Worksheet, invoice: BillingInvoice) {
         amt,
       ]);
       r.eachCell((cell) => {
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: item.qty === 0 ? "FFF8FAFC" : "FFFFFFFF" } };
-        cell.font = { color: { argb: "FF1E293B" } };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: item.qty === 0 ? BW.faint : BW.white } };
+        cell.font = { color: { argb: BW.black } };
         applyBorder(cell);
         if (Number(cell.col) > 1) cell.alignment = { horizontal: "right" };
       });
-      // Format numbers
       r.getCell(2).numFmt = "#,##0.##";
       if (!item.costPlus) r.getCell(4).numFmt = "$#,##0.00";
       r.getCell(5).numFmt = "$#,##0.00";
     }
 
-    // Subtotal row
+    // Subtotal row — faint bg, bold
     const sub = catItems.reduce((s, i) => s + calcLineAmount(i), 0);
     const subRow = ws.addRow(["", "", "", "Subtotal", sub]);
     subRow.eachCell((cell) => {
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1F5F9" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: BW.faint } };
+      cell.font = { color: { argb: BW.black } };
       applyBorder(cell);
       if (Number(cell.col) >= 4) {
-        cell.font = { bold: true };
+        cell.font = { bold: true, color: { argb: BW.black } };
         cell.alignment = { horizontal: "right" };
       }
     });
     subRow.getCell(5).numFmt = "$#,##0.00";
-    ws.addRow([]); // spacer
+    ws.addRow([]);
   }
 
-  // ── Grand Total ──
+  // ── Grand Total — dark bg, white bold ──
   const totalRow = ws.addRow(["", "", "", "GRAND TOTAL", invoice.total]);
   totalRow.height = 20;
   totalRow.eachCell((cell) => {
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E293B" } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: BW.dark } };
     applyBorder(cell, "medium");
     if (Number(cell.col) >= 4) {
-      cell.font = { bold: true, size: 12, color: { argb: "FFFFFFFF" } };
+      cell.font = { bold: true, size: 12, color: { argb: BW.white } };
       cell.alignment = { horizontal: "right" };
     }
   });
   totalRow.getCell(5).numFmt = "$#,##0.00";
 
-  // Notes
   if (invoice.notes) {
     ws.addRow([]);
     const notesRow = ws.addRow(["Notes", invoice.notes]);
-    notesRow.getCell(1).font = { bold: true, color: { argb: "FF64748B" } };
+    notesRow.getCell(1).font = { bold: true, color: { argb: BW.black } };
   }
 }
 
@@ -228,21 +229,21 @@ async function exportAllToExcel(invoices: BillingInvoice[], period: string) {
   const titleRow = summaryWs.addRow([`BILLING SUMMARY — ${periodLabel(period)}`]);
   summaryWs.mergeCells(`A1:${String.fromCharCode(65 + 1 + BILLING_CATEGORIES.length)}1`);
   titleRow.height = 22;
-  titleRow.getCell(1).font = { bold: true, size: 13, color: { argb: "FFFFFFFF" } };
-  titleRow.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E293B" } };
-  titleRow.getCell(1).alignment = { vertical: "middle" };
+  titleRow.getCell(1).font = { bold: true, size: 13, color: { argb: BW.white } };
+  titleRow.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: BW.dark } };
+  titleRow.getCell(1).alignment = { vertical: "middle", indent: 1 };
   applyBorder(titleRow.getCell(1), "medium");
 
   const genRow = summaryWs.addRow(["Generated", new Date().toLocaleDateString("en-US")]);
-  genRow.getCell(1).font = { bold: true, color: { argb: "FF64748B" } };
+  genRow.getCell(1).font = { bold: true, color: { argb: BW.black } };
   summaryWs.addRow([]);
 
-  // Column headers
+  // Column headers — mid gray bg, white bold
   const hdrs = ["Customer", "Customer Code", ...BILLING_CATEGORIES, "TOTAL"];
   const hdrRow = summaryWs.addRow(hdrs);
   hdrRow.eachCell((cell) => {
-    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF334155" } };
+    cell.font = { bold: true, color: { argb: BW.white } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: BW.mid } };
     cell.alignment = { horizontal: Number(cell.col) <= 2 ? "left" : "right" };
     applyBorder(cell, "medium");
   });
@@ -256,7 +257,8 @@ async function exportAllToExcel(invoices: BillingInvoice[], period: string) {
       inv.total,
     ]);
     dataRow.eachCell((cell) => {
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFFFF" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: BW.white } };
+      cell.font = { color: { argb: BW.black } };
       applyBorder(cell);
       if (Number(cell.col) > 2) {
         cell.numFmt = "$#,##0.00";
@@ -265,7 +267,7 @@ async function exportAllToExcel(invoices: BillingInvoice[], period: string) {
     });
   }
 
-  // Totals row
+  // Totals row — dark bg, white bold
   const totRow = summaryWs.addRow([
     "TOTAL", "",
     ...BILLING_CATEGORIES.map((c) =>
@@ -274,8 +276,8 @@ async function exportAllToExcel(invoices: BillingInvoice[], period: string) {
     invoices.reduce((s, inv) => s + inv.total, 0),
   ]);
   totRow.eachCell((cell) => {
-    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E293B" } };
+    cell.font = { bold: true, color: { argb: BW.white } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: BW.dark } };
     applyBorder(cell, "medium");
     if (Number(cell.col) > 2) {
       cell.numFmt = "$#,##0.00";
