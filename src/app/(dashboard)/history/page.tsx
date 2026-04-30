@@ -57,6 +57,8 @@ export default function HistoryPage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
+  const [savePct, setSavePct] = useState(0);
+  const [saveStatus, setSaveStatus] = useState("");
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
 
@@ -108,18 +110,60 @@ export default function HistoryPage() {
   async function saveNow() {
     setSaving(true);
     setSaveMsg("");
+    setSavePct(0);
+    setSaveStatus("Connecting…");
+
     try {
-      const res = await fetch(`/api/cron/snapshot?secret=${process.env.NEXT_PUBLIC_CRON_SECRET ?? "sdjoeporgfds"}`);
-      const json = await res.json();
-      if (json.ok) {
-        const errPart = json.errors?.length ? ` | ${json.errors.length} error(s): ${json.errors.slice(0,3).join(" / ")}` : "";
-        setSaveMsg(`Saved — ${json.inserted.toLocaleString()} rows (${json.warehouses} warehouse(s))${errPart}`);
-      } else {
-        setSaveMsg(`Error: ${json.error}`);
+      const secret = process.env.NEXT_PUBLIC_CRON_SECRET ?? "sdjoeporgfds";
+      const res = await fetch(`/api/cron/snapshot?secret=${secret}`);
+      if (!res.ok || !res.body) {
+        const json = await res.json().catch(() => ({}));
+        setSaveMsg(`Error: ${(json as Record<string,unknown>).error ?? res.status}`);
+        setSaving(false);
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+
+        // Parse SSE lines
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? ""; // keep incomplete last line
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const ev = JSON.parse(line.slice(6));
+            if (ev.type === "status") {
+              setSavePct(ev.pct ?? 0);
+              setSaveStatus(ev.msg ?? "");
+            } else if (ev.type === "done") {
+              const errPart = ev.errors?.length
+                ? ` | ${ev.errors.length} error(s): ${ev.errors.slice(0, 3).join(" / ")}`
+                : "";
+              setSaveMsg(
+                `Saved — ${(ev.inserted as number).toLocaleString()} rows (${ev.warehouses} warehouse(s))${errPart}`
+              );
+              setSavePct(100);
+              setSaveStatus("");
+            } else if (ev.type === "error") {
+              setSaveMsg(`Error: ${ev.msg}`);
+              setSaveStatus("");
+            }
+          } catch { /* ignore malformed event */ }
+        }
       }
     } catch (e) {
       setSaveMsg(`Request failed: ${String(e)}`);
+      setSaveStatus("");
     }
+
     setSaving(false);
   }
 
@@ -161,10 +205,10 @@ export default function HistoryPage() {
           <button
             onClick={saveNow}
             disabled={saving}
-            className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Save className="w-4 h-4" />
-            {saving ? "Saving..." : "Save Now"}
+            <Save className={`w-4 h-4 ${saving ? "animate-pulse" : ""}`} />
+            {saving ? `Saving… ${savePct}%` : "Save Now"}
           </button>
           <button
             onClick={downloadExcel}
@@ -176,6 +220,22 @@ export default function HistoryPage() {
           </button>
         </div>
       </div>
+
+      {/* Progress bar (shown while saving) */}
+      {saving && (
+        <div className="mb-5 bg-white border border-slate-200 rounded-xl px-5 py-4 shadow-sm">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm text-slate-600 font-medium truncate pr-4">{saveStatus || "Working…"}</span>
+            <span className="text-sm font-semibold text-blue-600 tabular-nums flex-shrink-0">{savePct}%</span>
+          </div>
+          <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+            <div
+              className="h-2 rounded-full bg-blue-500 transition-all duration-300"
+              style={{ width: `${savePct}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       {saveMsg && (
         <div className={`rounded-xl px-4 py-3 text-sm mb-5 border ${saveMsg.startsWith("Error") || saveMsg.startsWith("Request failed") ? "bg-red-50 border-red-200 text-red-700" : "bg-green-50 border-green-200 text-green-700"}`}>
