@@ -75,14 +75,22 @@ export default function ReceivingPage() {
     try {
       const LIMIT = 100;
       const allRows: Row[] = [];
-      let page = 1;
+      let pageNum = 1;
 
-      // Keep fetching until the API returns an empty page
+      const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+      // Keep fetching until the API returns an empty page,
+      // with a short human-like delay between requests
       while (true) {
+        if (pageNum > 1) {
+          // 400–700 ms random delay between pages
+          await sleep(400 + Math.random() * 300);
+        }
+
         const res = await fetch("/api/wms/receiving/list", {
           method: "POST",
           headers,
-          body: JSON.stringify({ page, limit: LIMIT }),
+          body: JSON.stringify({ page: pageNum, limit: LIMIT }),
         });
         const json = await res.json();
         const list: Row[] = json?.data?.list ?? json?.data ?? json?.list ?? json ?? [];
@@ -90,8 +98,8 @@ export default function ReceivingPage() {
         if (!Array.isArray(list) || list.length === 0) break;
 
         allRows.push(...list);
+        setData([...allRows]); // update UI incrementally as pages arrive
 
-        // Check total from response to see if we already have everything
         const total: number =
           json?.data?.total ??
           json?.data?.totalCount ??
@@ -100,12 +108,12 @@ export default function ReceivingPage() {
           0;
 
         if (total > 0 && allRows.length >= total) break;
-        if (list.length < LIMIT) break; // last page (partial)
+        if (list.length < LIMIT) break;
 
-        page++;
+        pageNum++;
       }
 
-      setData(allRows);
+      setData([...allRows]);
     } catch {
       setError("Failed to load receiving data.");
     } finally {
