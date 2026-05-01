@@ -55,6 +55,27 @@ const COL_LABELS: Record<string, string> = {
   comment: "Comment",
 };
 
+/* ── Task types for comment builder ── */
+const TASK_TYPES = [
+  "Labels",
+  "Amazon Labels",
+  "Inserts",
+  "Picking per Piece",
+  "Picking per Carton",
+  "Picking per Pallet",
+  "Packing with Customer Box",
+  "Palletizing and Wrapping",
+  "Out per Carton",
+  "Out per Pallet",
+  "Wrapping",
+  "FBA Bundling",
+  "FBA Labeling",
+  "FBA Repacking",
+  "Supplies Size and Qty",
+] as const;
+
+type TaskItem = { type: string; qty: number };
+
 /* ── Field display / edit helper ── */
 function Field({ label, value, onChange }: { label: string; value: unknown; onChange?: (v: string) => void }) {
   const v = value == null || value === "" ? "-" : String(value);
@@ -112,6 +133,11 @@ export default function ShippingTypePage() {
   const [editData,      setEditData]      = useState<Order>({});
   const [saving,        setSaving]        = useState(false);
   const [saveError,     setSaveError]     = useState("");
+
+  /* ── Task comment builder ── */
+  const [taskItems,  setTaskItems]  = useState<TaskItem[]>([]);
+  const [taskType,   setTaskType]   = useState<string>(TASK_TYPES[0]);
+  const [taskQty,    setTaskQty]    = useState<number | "">(1);
 
   const headers = useMemo(
     () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
@@ -218,6 +244,27 @@ export default function ShippingTypePage() {
   function closeDetail() {
     setSelected(null); setDetail(null); setItemsRaw([]);
     setEditMode(false); setEditData({}); setSaveError("");
+    setTaskItems([]); setTaskType(TASK_TYPES[0]); setTaskQty(1);
+  }
+
+  function addTaskItem() {
+    if (!taskType || !taskQty || Number(taskQty) <= 0) return;
+    setTaskItems((prev) => {
+      const existing = prev.findIndex((t) => t.type === taskType);
+      if (existing >= 0) {
+        // overwrite qty if same type already added
+        return prev.map((t, i) => i === existing ? { ...t, qty: Number(taskQty) } : t);
+      }
+      return [...prev, { type: taskType, qty: Number(taskQty) }];
+    });
+  }
+
+  function removeTaskItem(type: string) {
+    setTaskItems((prev) => prev.filter((t) => t.type !== type));
+  }
+
+  function buildTaskText(items: TaskItem[]): string {
+    return items.map((t) => `${t.type}×${t.qty}`).join(", ");
   }
 
   function startEdit() {
@@ -236,9 +283,17 @@ export default function ShippingTypePage() {
     setSaving(true);
     setSaveError("");
     try {
+      // Append task items to comment if any were added
+      const mergedData = { ...editData };
+      if (taskItems.length > 0) {
+        const taskText = buildTaskText(taskItems);
+        const existing = String(mergedData.comment ?? "").trim();
+        mergedData.comment = existing ? `${existing} | ${taskText}` : taskText;
+      }
+
       // API는 flat primitive 필드만 받음 — 배열/중첩 객체 제거
       const payload = Object.fromEntries(
-        Object.entries(editData).filter(([, v]) =>
+        Object.entries(mergedData).filter(([, v]) =>
           v === null || typeof v === "string" || typeof v === "number" || typeof v === "boolean"
         )
       );
@@ -249,8 +304,9 @@ export default function ShippingTypePage() {
       });
       const json = await res.json().catch(() => null);
       if (res.ok && json?.isSuccess !== false) {
-        setDetail(editData);
+        setDetail(mergedData);
         setEditMode(false);
+        setTaskItems([]);
         setSaving(false);
         return;
       }
@@ -673,6 +729,76 @@ export default function ShippingTypePage() {
                     <div>
                       <Field label="Comment" {...ef("comment")} />
                     </div>
+
+                    {/* ── Task Comment Builder ── */}
+                    {editMode && (
+                      <div className="border border-slate-200 rounded-xl overflow-hidden">
+                        <div className="bg-slate-50 border-b border-slate-200 px-4 py-2.5 flex items-center justify-between">
+                          <span className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Task / Work Order</span>
+                          {taskItems.length > 0 && (
+                            <span className="text-xs text-slate-400 font-mono truncate max-w-xs">
+                              → {buildTaskText(taskItems)}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Add row */}
+                        <div className="p-4 flex items-center gap-2">
+                          <select
+                            value={taskType}
+                            onChange={(e) => setTaskType(e.target.value)}
+                            className="flex-1 text-sm border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white text-slate-800"
+                          >
+                            {TASK_TYPES.map((t) => (
+                              <option key={t} value={t}>{t}</option>
+                            ))}
+                          </select>
+                          <input
+                            type="number"
+                            min={1}
+                            value={taskQty}
+                            onChange={(e) => setTaskQty(e.target.value === "" ? "" : Number(e.target.value))}
+                            placeholder="Qty"
+                            className="w-20 text-sm border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white text-right tabular-nums"
+                          />
+                          <button
+                            onClick={addTaskItem}
+                            className="text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap"
+                          >
+                            + Add
+                          </button>
+                        </div>
+
+                        {/* Added task list */}
+                        {taskItems.length > 0 && (
+                          <div className="border-t border-slate-100 px-4 pb-3 pt-2 space-y-1.5">
+                            {taskItems.map((t) => (
+                              <div key={t.type} className="flex items-center justify-between bg-blue-50 border border-blue-100 rounded-lg px-3 py-1.5">
+                                <span className="text-sm text-slate-700">{t.type}</span>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-semibold tabular-nums text-blue-700">×{t.qty}</span>
+                                  <button
+                                    onClick={() => removeTaskItem(t.type)}
+                                    className="text-slate-400 hover:text-red-500 transition-colors text-xs leading-none"
+                                  >✕</button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {taskItems.length === 0 && (
+                          <p className="text-xs text-slate-400 px-4 pb-3">Select a task type and quantity, then click Add. Tasks will be appended to the comment on save.</p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Show tasks read-only when not editing */}
+                    {!editMode && taskItems.length > 0 && (
+                      <div className="text-xs text-slate-400 italic">
+                        Pending tasks (unsaved): {buildTaskText(taskItems)}
+                      </div>
+                    )}
                     {(() => {
                       const src = editMode ? editData : d;
                       const extra = Object.entries(src).filter(([k, v]) =>
