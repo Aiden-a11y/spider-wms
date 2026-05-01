@@ -29,6 +29,7 @@ export type BillingInvoice = {
   rateVersion: string;
   createdAt: string;
   updatedAt: string;
+  groupId?: string;        // shared ID for combined invoices created together
 };
 
 // ─── Calculation ──────────────────────────────────────────────────────────────

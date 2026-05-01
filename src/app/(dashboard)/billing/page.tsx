@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import {
   Receipt,
@@ -600,10 +600,12 @@ export default function BillingPage() {
   async function createMultiInvoice() {
     if (selectedCustomers.length === 0) return;
     const period = `${newYear}-${newMonth}`;
+    const groupId = `grp_${Date.now()}`;
     const invs: BillingInvoice[] = [];
     for (const code of selectedCustomers) {
       const name = customers.find(c => c.code === code)?.name ?? code;
       const inv = buildNewInvoice(code, name, period);
+      inv.groupId = groupId;
       try {
         const res = await fetch(`/api/billing/rates?customer=${encodeURIComponent(code)}`);
         if (res.ok) {
@@ -623,6 +625,16 @@ export default function BillingPage() {
     setStorage15(null); setStorageLast(null);
     setShowNewForm(false); setFetchMsg("");
     setSelectedCustomers([]);
+  }
+
+  // ── open a grouped (combined) invoice set ──
+  function openGroupInvoice(group: BillingInvoice[]) {
+    const cloned = group.map(inv => JSON.parse(JSON.stringify(inv)));
+    setEditGroup(cloned);
+    setActiveIdx(0);
+    setEditing(cloned[0]);
+    setStorage15(null); setStorageLast(null);
+    setFetchMsg(""); setWmsSource(null); setShowSource(false);
   }
 
   // ── get full group with current editing merged in at activeIdx ──
@@ -1010,6 +1022,37 @@ export default function BillingPage() {
   const currentTotal = editing ? calcTotal(editing.lineItems) : 0;
   const isMultiMode = editGroup.length > 1;
   const years = [2024, 2025, 2026, 2027].map(String);
+
+  // Group invoices for list view: grouped by groupId, singles stay as-is
+  type InvoiceListItem =
+    | { type: "single"; invoice: BillingInvoice }
+    | { type: "group"; groupId: string; invoices: BillingInvoice[] };
+
+  const invoiceListItems = useMemo<InvoiceListItem[]>(() => {
+    const groups = new Map<string, BillingInvoice[]>();
+    const singles: BillingInvoice[] = [];
+    for (const inv of invoices) {
+      if (inv.groupId) {
+        const g = groups.get(inv.groupId) ?? [];
+        g.push(inv);
+        groups.set(inv.groupId, g);
+      } else {
+        singles.push(inv);
+      }
+    }
+    const result: InvoiceListItem[] = [];
+    // Merge singles and groups, sorted by latest updatedAt
+    for (const inv of singles) result.push({ type: "single", invoice: inv });
+    groups.forEach((invs, groupId) => result.push({ type: "group", groupId, invoices: invs }));
+    result.sort((a, b) => {
+      const aDate = a.type === "single" ? a.invoice.updatedAt : a.invoices[0].updatedAt;
+      const bDate = b.type === "single" ? b.invoice.updatedAt : b.invoices[0].updatedAt;
+      return bDate.localeCompare(aDate);
+    });
+    return result;
+  }, [invoices]);
+
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
   // ─────────────────────────────────────────────────────────────────────────────
   // RENDER
@@ -1911,52 +1954,131 @@ export default function BillingPage() {
               </tr>
             </thead>
             <tbody>
-              {invoices.map((inv) => (
-                <tr
-                  key={inv.id}
-                  onClick={() => openInvoice(inv)}
-                  className="border-b border-slate-100 last:border-0 hover:bg-blue-50 cursor-pointer transition-colors"
-                >
-                  <td className="px-5 py-3.5">
-                    <p className="font-medium text-slate-900">{inv.customerName || inv.customer}</p>
-                    <p className="text-xs text-slate-400 font-mono">{inv.customer}</p>
-                  </td>
-                  <td className="px-5 py-3.5 text-slate-700">{periodLabel(inv.period)}</td>
-                  <td className="px-5 py-3.5 text-right font-bold text-slate-900 tabular-nums">
-                    {formatUSD(inv.total)}
-                  </td>
-                  <td className="px-5 py-3.5 text-center">
-                    <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
-                      inv.status === "final"
-                        ? "bg-green-100 text-green-700"
-                        : "bg-amber-100 text-amber-700"
-                    }`}>
-                      {inv.status === "final" ? "Final" : "Draft"}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3.5 text-right text-slate-400 text-xs">
-                    {new Date(inv.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-                  </td>
-                  <td className="px-5 py-3.5 text-right" onClick={(e) => e.stopPropagation()}>
-                    <div className="flex items-center justify-end gap-1">
-                      <button
-                        onClick={() => exportInvoiceToExcel(inv).catch(console.error)}
-                        className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                        title="Export Excel"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => deleteInvoice(inv.id)}
-                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                        title="Delete"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {invoiceListItems.map((item) => {
+                if (item.type === "single") {
+                  const inv = item.invoice;
+                  return (
+                    <tr key={inv.id} onClick={() => openInvoice(inv)}
+                      className="border-b border-slate-100 last:border-0 hover:bg-blue-50 cursor-pointer transition-colors">
+                      <td className="px-5 py-3.5">
+                        <p className="font-medium text-slate-900">{inv.customerName || inv.customer}</p>
+                        <p className="text-xs text-slate-400 font-mono">{inv.customer}</p>
+                      </td>
+                      <td className="px-5 py-3.5 text-slate-700">{periodLabel(inv.period)}</td>
+                      <td className="px-5 py-3.5 text-right font-bold text-slate-900 tabular-nums">{formatUSD(inv.total)}</td>
+                      <td className="px-5 py-3.5 text-center">
+                        <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${inv.status === "final" ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>
+                          {inv.status === "final" ? "Final" : "Draft"}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3.5 text-right text-slate-400 text-xs">
+                        {new Date(inv.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                      </td>
+                      <td className="px-5 py-3.5 text-right" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-end gap-1">
+                          <button onClick={() => exportInvoiceToExcel(inv).catch(console.error)}
+                            className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Export Excel">
+                            <Download className="w-3.5 h-3.5" />
+                          </button>
+                          <button onClick={() => deleteInvoice(inv.id)}
+                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Delete">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                }
+
+                // ── Group row ──
+                const { groupId, invoices: ginvs } = item;
+                const isExpanded = expandedGroups.has(groupId);
+                const groupTotal = ginvs.reduce((s, inv) => s + inv.total, 0);
+                const groupStatus = ginvs.every(inv => inv.status === "final") ? "final" : "draft";
+                const groupPeriod = ginvs[0].period;
+                const groupUpdated = ginvs.reduce((latest, inv) =>
+                  inv.updatedAt > latest ? inv.updatedAt : latest, ginvs[0].updatedAt);
+
+                return (
+                  <React.Fragment key={groupId}>
+                    {/* Group header row */}
+                    <tr onClick={() => openGroupInvoice(ginvs)}
+                      className="border-b border-slate-100 hover:bg-blue-50 cursor-pointer transition-colors bg-blue-50/30">
+                      <td className="px-5 py-3.5">
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setExpandedGroups(prev => {
+                                const next = new Set(prev);
+                                if (next.has(groupId)) next.delete(groupId); else next.add(groupId);
+                                return next;
+                              });
+                            }}
+                            className="text-slate-400 hover:text-slate-700 flex-shrink-0"
+                          >
+                            {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                          </button>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-semibold bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">Combined</span>
+                              <p className="font-medium text-slate-900 text-sm">
+                                {ginvs.map(inv => inv.customerName || inv.customer).join(", ")}
+                              </p>
+                            </div>
+                            <p className="text-xs text-slate-400 mt-0.5">{ginvs.length} customers</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-5 py-3.5 text-slate-700">{periodLabel(groupPeriod)}</td>
+                      <td className="px-5 py-3.5 text-right font-bold text-slate-900 tabular-nums">{formatUSD(groupTotal)}</td>
+                      <td className="px-5 py-3.5 text-center">
+                        <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${groupStatus === "final" ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>
+                          {groupStatus === "final" ? "Final" : "Draft"}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3.5 text-right text-slate-400 text-xs">
+                        {new Date(groupUpdated).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                      </td>
+                      <td className="px-5 py-3.5 text-right" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-end gap-1">
+                          <button onClick={() => exportAllToExcel(ginvs, groupPeriod).catch(console.error)}
+                            className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Export Combined Excel">
+                            <Download className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+
+                    {/* Expanded: individual rows */}
+                    {isExpanded && ginvs.map((inv) => (
+                      <tr key={inv.id} onClick={() => openGroupInvoice(ginvs)}
+                        className="border-b border-slate-50 last:border-0 hover:bg-blue-50/60 cursor-pointer transition-colors bg-slate-50/60">
+                        <td className="pl-14 pr-5 py-2.5">
+                          <p className="text-sm text-slate-700 font-medium">{inv.customerName || inv.customer}</p>
+                          <p className="text-xs text-slate-400 font-mono">{inv.customer}</p>
+                        </td>
+                        <td className="px-5 py-2.5 text-slate-500 text-xs">{periodLabel(inv.period)}</td>
+                        <td className="px-5 py-2.5 text-right text-slate-700 font-semibold tabular-nums text-xs">{formatUSD(inv.total)}</td>
+                        <td className="px-5 py-2.5 text-center">
+                          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${inv.status === "final" ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>
+                            {inv.status === "final" ? "Final" : "Draft"}
+                          </span>
+                        </td>
+                        <td className="px-5 py-2.5 text-right text-slate-400 text-xs">
+                          {new Date(inv.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                        </td>
+                        <td className="px-5 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+                          <button onClick={() => exportInvoiceToExcel(inv).catch(console.error)}
+                            className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Export Excel">
+                            <Download className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </React.Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
