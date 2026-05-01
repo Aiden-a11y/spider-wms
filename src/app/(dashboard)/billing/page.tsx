@@ -407,69 +407,98 @@ export default function BillingPage() {
   const [showSource, setShowSource] = useState(false);
 
   // ── Storage import ──
-  const [storageRows, setStorageRows] = useState<StorageRow[]>([]);
-  const [storageUploading, setStorageUploading] = useState(false);
+  type StorageSnap = { data: Record<string, number>; file: string };
+  const [storage15, setStorage15] = useState<StorageSnap | null>(null);
+  const [storageLast, setStorageLast] = useState<StorageSnap | null>(null);
+  const [storageUploading15, setStorageUploading15] = useState(false);
+  const [storageUploadingLast, setStorageUploadingLast] = useState(false);
 
-  async function downloadStorageTemplate() {
-    const { utils, writeFile } = await import("xlsx");
-    const ws = utils.aoa_to_sheet([
-      ["Storage Type", "15th Day Qty", "Last Day Qty"],
-      ...STORAGE_TEMPLATE_ROWS.map(r => [r.label, 0, 0]),
-    ]);
-    ws["!cols"] = [{ wch: 20 }, { wch: 14 }, { wch: 14 }];
-    const wb = utils.book_new();
-    utils.book_append_sheet(wb, ws, "Storage");
-    writeFile(wb, `Storage_Template_${editing?.period ?? "period"}.xlsx`);
+  // Derived: merge 15일 + 말일 → avg
+  const storageRows = useMemo<StorageRow[]>(() => {
+    if (!storage15 && !storageLast) return [];
+    return STORAGE_TEMPLATE_ROWS
+      .map(r => {
+        const qty15   = storage15?.data[r.key]   ?? 0;
+        const qtyLast = storageLast?.data[r.key] ?? 0;
+        return { key: r.key, label: r.label, qty15, qtyLast, avg: (qty15 + qtyLast) / 2 };
+      })
+      .filter(r => r.qty15 > 0 || r.qtyLast > 0);
+  }, [storage15, storageLast]);
+
+  // Parse WMS inventory export → count distinct locations per Location Type
+  async function parseInventoryFile(file: File, customerCode: string): Promise<Record<string, number>> {
+    const buf = await file.arrayBuffer();
+    const { read, utils } = await import("xlsx");
+    const wb = read(buf);
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = utils.sheet_to_json<string[]>(ws, { header: 1 }) as string[][];
+
+    // Find header row: must have "location" and "location type" columns
+    let headerIdx = -1, colLoc = -1, colLocType = -1, colCustomer = -1;
+    for (let i = 0; i < Math.min(8, rows.length); i++) {
+      const hdrs = rows[i].map(h => String(h ?? "").toLowerCase().replace(/\s+/g, " ").trim());
+      const iType = hdrs.findIndex(h => h === "location type" || h === "loc type" || h === "type");
+      const iLoc  = hdrs.findIndex(h => h === "location" || h === "loc");
+      if (iType >= 0 && iLoc >= 0) {
+        headerIdx = i;
+        colLocType = iType;
+        colLoc = iLoc;
+        colCustomer = hdrs.findIndex(h => h.includes("customer"));
+        break;
+      }
+    }
+    if (headerIdx < 0) throw new Error("헤더를 찾을 수 없습니다. Location / Location Type 컬럼이 필요합니다.");
+
+    // Count distinct Location values per storage key (optionally filtered by customer)
+    const locSets: Record<string, Set<string>> = {};
+    for (let i = headerIdx + 1; i < rows.length; i++) {
+      const row = rows[i];
+      const locType = String(row[colLocType] ?? "").trim().toLowerCase();
+      const loc     = String(row[colLoc]     ?? "").trim();
+      if (!locType || !loc) continue;
+
+      // Customer filter — skip if customer column exists and doesn't match
+      if (colCustomer >= 0 && customerCode) {
+        const cust = String(row[colCustomer] ?? "").trim().toLowerCase();
+        if (cust && !cust.toLowerCase().includes(customerCode.toLowerCase())) continue;
+      }
+
+      const key = STORAGE_LABEL_MAP[locType];
+      if (!key) continue;
+      (locSets[key] ??= new Set()).add(loc);
+    }
+
+    const result: Record<string, number> = {};
+    for (const [k, s] of Object.entries(locSets)) result[k] = s.size;
+    return result;
   }
 
-  async function handleStorageUpload(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleUpload15(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (!file) return;
-    setStorageUploading(true);
+    if (!file || !editing) return;
+    setStorageUploading15(true);
     try {
-      const buf = await file.arrayBuffer();
-      const { read, utils } = await import("xlsx");
-      const wb = read(buf);
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows: unknown[][] = utils.sheet_to_json(ws, { header: 1 });
-      // Find header row (contains "15" and "last"/"30" case-insensitive)
-      let headerIdx = 0;
-      let col15 = 1, colLast = 2;
-      for (let i = 0; i < Math.min(5, rows.length); i++) {
-        const row = rows[i] as string[];
-        const headers = row.map(h => String(h ?? "").toLowerCase());
-        const idx15 = headers.findIndex(h => h.includes("15"));
-        const idxLast = headers.findIndex(h => h.includes("last") || h.includes("30") || h.includes("31") || h.includes("end"));
-        if (idx15 >= 0 && idxLast >= 0) {
-          headerIdx = i;
-          col15 = idx15;
-          colLast = idxLast;
-          break;
-        }
-      }
-      const parsed: StorageRow[] = [];
-      for (let i = headerIdx + 1; i < rows.length; i++) {
-        const row = rows[i] as (string | number)[];
-        const typeName = String(row[0] ?? "").trim().toLowerCase();
-        if (!typeName) continue;
-        const key = STORAGE_LABEL_MAP[typeName];
-        if (!key) continue;
-        const qty15 = Number(row[col15] ?? 0) || 0;
-        const qtyLast = Number(row[colLast] ?? 0) || 0;
-        const avg = (qty15 + qtyLast) / 2;
-        parsed.push({
-          key,
-          label: STORAGE_TEMPLATE_ROWS.find(r => r.key === key)?.label ?? typeName,
-          qty15,
-          qtyLast,
-          avg,
-        });
-      }
-      setStorageRows(parsed);
+      const data = await parseInventoryFile(file, editing.customer);
+      setStorage15({ data, file: file.name });
     } catch (err) {
-      console.error("Storage Excel parse error:", err);
+      alert(err instanceof Error ? err.message : "파일 파싱 오류");
     } finally {
-      setStorageUploading(false);
+      setStorageUploading15(false);
+      e.target.value = "";
+    }
+  }
+
+  async function handleUploadLast(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !editing) return;
+    setStorageUploadingLast(true);
+    try {
+      const data = await parseInventoryFile(file, editing.customer);
+      setStorageLast({ data, file: file.name });
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "파일 파싱 오류");
+    } finally {
+      setStorageUploadingLast(false);
       e.target.value = "";
     }
   }
@@ -546,7 +575,7 @@ export default function BillingPage() {
     }
 
     setEditing(inv);
-    setStorageRows([]);
+    setStorage15(null); setStorageLast(null);
     setShowNewForm(false);
     setFetchMsg("");
   }
@@ -554,7 +583,7 @@ export default function BillingPage() {
   // ── open existing invoice ──
   function openInvoice(inv: BillingInvoice) {
     setEditing(JSON.parse(JSON.stringify(inv))); // deep clone
-    setStorageRows([]);
+    setStorage15(null); setStorageLast(null);
     setFetchMsg("");
     setWmsSource(null);
     setShowSource(false);
@@ -1281,64 +1310,74 @@ export default function BillingPage() {
 
         {/* ── Storage Import Panel ── */}
         <div className="bg-white border border-purple-200 rounded-xl overflow-hidden shadow-sm mb-4">
+          {/* Header */}
           <div className="flex items-center justify-between px-5 py-3.5 border-b border-purple-100 bg-purple-50/60">
             <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold px-2 py-0.5 rounded-full border bg-purple-50 border-purple-200 text-purple-800">
-                Storage
-              </span>
-              <span className="text-xs text-purple-600 font-medium">
-                월 15일 · 말일 수량 → 평균 자동입력
-              </span>
+              <span className="text-xs font-semibold px-2 py-0.5 rounded-full border bg-purple-50 border-purple-200 text-purple-800">Storage</span>
+              <span className="text-xs text-purple-600 font-medium">인벤토리 스냅샷 업로드 → Location Type별 평균 자동계산</span>
             </div>
-            <div className="flex items-center gap-2">
-              {/* Download template */}
+            {(storage15 || storageLast) && (
               <button
-                onClick={downloadStorageTemplate}
-                className="flex items-center gap-1.5 text-xs border border-purple-200 rounded-lg px-3 py-1.5 text-purple-700 hover:bg-purple-50 transition-colors"
+                onClick={() => { setStorage15(null); setStorageLast(null); }}
+                className="text-xs text-slate-400 hover:text-red-500 transition-colors"
               >
-                <Download className="w-3.5 h-3.5" />
-                템플릿 다운로드
+                초기화
               </button>
-              {/* Upload */}
-              <label className={`flex items-center gap-1.5 text-xs border rounded-lg px-3 py-1.5 transition-colors cursor-pointer ${
-                storageUploading
-                  ? "border-purple-200 text-purple-400 opacity-60"
-                  : "border-purple-300 text-purple-700 hover:bg-purple-50"
-              }`}>
-                {storageUploading
-                  ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" />읽는 중…</>
-                  : <><Upload className="w-3.5 h-3.5" />Excel 업로드</>}
-                <input
-                  type="file"
-                  accept=".xlsx,.xls,.csv"
-                  className="hidden"
-                  disabled={storageUploading}
-                  onChange={handleStorageUpload}
-                />
-              </label>
-            </div>
+            )}
           </div>
 
-          {/* Preview table — only when rows are parsed */}
-          {storageRows.length > 0 ? (
-            <div>
+          {/* Two upload zones */}
+          <div className="grid grid-cols-2 divide-x divide-purple-100">
+            {/* 15일 */}
+            {[
+              { label: "15일 데이터", snap: storage15, uploading: storageUploading15, handler: handleUpload15, color: "blue" },
+              { label: "말일 데이터", snap: storageLast, uploading: storageUploadingLast, handler: handleUploadLast, color: "indigo" },
+            ].map(({ label, snap, uploading, handler, color }) => (
+              <div key={label} className="p-4 flex flex-col gap-2">
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{label}</p>
+                {snap ? (
+                  <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
+                    <span className="text-xs text-green-700 truncate font-medium">{snap.file}</span>
+                    <span className="text-xs text-green-600 ml-auto flex-shrink-0">{Object.values(snap.data).reduce((s,v)=>s+v,0)}개 location</span>
+                  </div>
+                ) : (
+                  <label className={`flex items-center justify-center gap-2 border-2 border-dashed rounded-lg px-4 py-4 cursor-pointer transition-colors ${
+                    uploading ? "border-slate-200 opacity-60" : `border-${color}-200 hover:border-${color}-400 hover:bg-${color}-50`
+                  }`}>
+                    {uploading
+                      ? <><RefreshCw className="w-4 h-4 animate-spin text-slate-400" /><span className="text-xs text-slate-400">읽는 중…</span></>
+                      : <><Upload className="w-4 h-4 text-slate-400" /><span className="text-xs text-slate-500">Excel 파일 선택</span></>}
+                    <input type="file" accept=".xlsx,.xls,.csv" className="hidden" disabled={uploading} onChange={handler} />
+                  </label>
+                )}
+                <p className="text-[10px] text-slate-400">
+                  컬럼: Location / Location Type / Customer / SKU / Product Name / Qty …
+                </p>
+              </div>
+            ))}
+          </div>
+
+          {/* Preview table — shown when at least one file uploaded */}
+          {storageRows.length > 0 && (
+            <div className="border-t border-purple-100">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="bg-slate-50 border-b border-slate-100">
+                  <tr className="bg-slate-50">
                     <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-400 uppercase tracking-wide">Storage Type</th>
-                    <th className="px-4 py-2.5 text-right text-xs font-semibold text-slate-400 uppercase tracking-wide">15일 수량</th>
-                    <th className="px-4 py-2.5 text-right text-xs font-semibold text-slate-400 uppercase tracking-wide">말일 수량</th>
+                    <th className="px-4 py-2.5 text-right text-xs font-semibold text-blue-500 uppercase tracking-wide">15일</th>
+                    <th className="px-4 py-2.5 text-right text-xs font-semibold text-indigo-500 uppercase tracking-wide">말일</th>
                     <th className="px-4 py-2.5 text-right text-xs font-semibold text-purple-600 uppercase tracking-wide">평균 (청구)</th>
                   </tr>
                 </thead>
                 <tbody>
                   {storageRows.map((r) => (
-                    <tr key={r.key} className="border-b border-slate-50 last:border-0">
+                    <tr key={r.key} className="border-t border-slate-50">
                       <td className="px-4 py-2 text-slate-700 font-medium">{r.label}</td>
-                      <td className="px-4 py-2 text-right tabular-nums text-slate-500">{r.qty15.toLocaleString()}</td>
-                      <td className="px-4 py-2 text-right tabular-nums text-slate-500">{r.qtyLast.toLocaleString()}</td>
+                      <td className="px-4 py-2 text-right tabular-nums text-slate-500">{r.qty15 > 0 ? r.qty15.toLocaleString() : <span className="text-slate-300">—</span>}</td>
+                      <td className="px-4 py-2 text-right tabular-nums text-slate-500">{r.qtyLast > 0 ? r.qtyLast.toLocaleString() : <span className="text-slate-300">—</span>}</td>
                       <td className="px-4 py-2 text-right tabular-nums font-bold text-purple-700">
-                        {r.avg % 1 === 0 ? r.avg.toLocaleString() : r.avg.toFixed(2)}
+                        {r.avg % 1 === 0 ? r.avg.toLocaleString() : r.avg.toFixed(1)}
                       </td>
                     </tr>
                   ))}
@@ -1346,29 +1385,25 @@ export default function BillingPage() {
               </table>
               <div className="px-5 py-3 flex items-center justify-between border-t border-purple-100 bg-purple-50/40">
                 <p className="text-xs text-slate-500">
-                  평균 = (15일 수량 + 말일 수량) ÷ 2 · {storageRows.length}개 항목
+                  평균 = (15일 + 말일) ÷ 2 · {storageRows.length}개 타입
+                  {!storage15 && <span className="ml-2 text-amber-500">⚠ 15일 데이터 없음</span>}
+                  {!storageLast && <span className="ml-2 text-amber-500">⚠ 말일 데이터 없음</span>}
                 </p>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setStorageRows([])}
-                    className="text-xs text-slate-400 hover:text-slate-600 px-3 py-1.5"
-                  >
-                    초기화
-                  </button>
-                  <button
-                    onClick={applyStorageToInvoice}
-                    className="flex items-center gap-1.5 text-xs bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-lg px-4 py-1.5 transition-colors"
-                  >
-                    <BarChart3 className="w-3.5 h-3.5" />
-                    인보이스에 적용
-                  </button>
-                </div>
+                <button
+                  onClick={applyStorageToInvoice}
+                  className="flex items-center gap-1.5 text-xs bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-lg px-4 py-1.5 transition-colors"
+                >
+                  <BarChart3 className="w-3.5 h-3.5" />
+                  인보이스에 적용
+                </button>
               </div>
             </div>
-          ) : (
-            <div className="px-5 py-4 text-xs text-slate-400 flex items-center gap-2">
-              <span className="text-purple-300">①</span> 템플릿 다운로드 후 15일·말일 수량 입력
-              <span className="text-purple-300 ml-2">②</span> Excel 업로드하면 평균이 자동 계산됩니다
+          )}
+
+          {/* Empty state */}
+          {storageRows.length === 0 && !storage15 && !storageLast && (
+            <div className="px-5 py-3 text-xs text-slate-400">
+              15일 · 말일 WMS 인벤토리 Excel을 각각 업로드하면 Location Type별로 자동 집계됩니다
             </div>
           )}
         </div>
