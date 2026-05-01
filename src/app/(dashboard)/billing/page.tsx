@@ -24,7 +24,28 @@ type WmsSource = {
   b2b:       Record<string, unknown>[];
   b2c:       Record<string, unknown>[];
   returns:   Record<string, unknown>[];
+  b2bWarnings?: string[]; // order codes where piece picking exists but no Out info
 };
+
+// ── Task comment parser ───────────────────────────────────────────────────────
+// Parses "existing comment | Labels×5, Picking per Piece×12, Out per Carton×3"
+// Returns map of task type → qty
+function parseTaskComment(comment: string): Record<string, number> {
+  const result: Record<string, number> = {};
+  if (!comment) return result;
+  // Take the part after the last " | " separator (task section)
+  const parts = comment.split(" | ");
+  const taskPart = parts[parts.length - 1];
+  // Match "TaskName×qty" pairs
+  const re = /([^,]+?)×(\d+(?:\.\d+)?)/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(taskPart)) !== null) {
+    const type = match[1].trim();
+    const qty  = parseFloat(match[2]);
+    if (type && !isNaN(qty)) result[type] = (result[type] ?? 0) + qty;
+  }
+  return result;
+}
 import ExcelJS from "exceljs";
 import {
   buildNewInvoice,
@@ -477,8 +498,46 @@ export default function BillingPage() {
       if (Array.isArray(list) && list.length > 0) {
         source.b2b = list;
         updates["b2b_order"] = list.length;
-        const pieces = list.reduce((s, o) => s + Number(o.totalQty ?? o.orderQty ?? 0), 0);
-        if (pieces > 0) updates["b2b_pick_piece"] = pieces;
+
+        // Parse task comments to get per-order picking/out quantities
+        let pickPiece = 0, pickCarton = 0, pickPallet = 0;
+        let cartonPacking = 0, palletizing = 0;
+        const b2bWarnings: string[] = [];
+
+        for (const order of list) {
+          const tasks = parseTaskComment(String(order.comment ?? ""));
+
+          const pp  = tasks["Picking per Piece"]   ?? 0;
+          const pc  = tasks["Picking per Carton"]  ?? 0;
+          const ppl = tasks["Picking per Pallet"]  ?? 0;
+          const oc  = tasks["Out per Carton"]      ?? 0;
+          const op  = tasks["Out per Pallet"]      ?? 0;
+
+          pickPiece   += pp;
+          pickCarton  += pc;
+          pickPallet  += ppl;
+
+          // Carton Packing: charge Out per Carton UNLESS it equals Picking per Carton
+          // (if same qty → cartons were just picked as-is, no repacking needed)
+          if (oc > 0 && oc !== pc) cartonPacking += oc;
+
+          // Palletizing: charge Out per Pallet UNLESS it equals Picking per Pallet
+          // (if same qty → pallets were just picked as-is, no palletizing needed)
+          if (op > 0 && op !== ppl) palletizing += op;
+
+          // Warning: piece-level picking but no outbound container info
+          if (pp > 0 && oc === 0 && op === 0) {
+            const code = String(order.shippingOrderCode ?? order.orderCode ?? "");
+            b2bWarnings.push(code);
+          }
+        }
+
+        if (pickPiece   > 0) updates["b2b_pick_piece"]    = pickPiece;
+        if (pickCarton  > 0) updates["b2b_pick_carton"]   = pickCarton;
+        if (pickPallet  > 0) updates["b2b_pick_pallet"]   = pickPallet;
+        if (cartonPacking > 0) updates["b2b_carton_packing"] = cartonPacking;
+        if (palletizing > 0) updates["b2b_palletizing"]   = palletizing;
+        if (b2bWarnings.length > 0) source.b2bWarnings    = b2bWarnings;
       }
     } catch {}
 
@@ -819,36 +878,76 @@ export default function BillingPage() {
                     wmsSource.b2b.length === 0 ? (
                       <p className="text-center text-sm text-slate-400 py-8">No B2B orders this period</p>
                     ) : (
-                      <table className="w-full text-xs">
-                        <thead className="bg-slate-50 sticky top-0">
-                          <tr>
-                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">Order Code</th>
-                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">Date</th>
-                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">Total Qty</th>
-                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">+1 Order</th>
-                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">+Pieces</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {wmsSource.b2b.map((o, i) => {
-                            const qty = Number(o.totalQty ?? o.orderQty ?? 0);
-                            return (
-                              <tr key={i} className="border-b border-slate-50">
-                                <td className="px-3 py-1.5 font-mono text-emerald-600">{String(o.shipOrderCode ?? o.orderCode ?? "—")}</td>
-                                <td className="px-3 py-1.5 text-slate-500">{String(o.orderDate ?? "—")}</td>
-                                <td className="px-3 py-1.5 text-right">{qty}</td>
-                                <td className="px-3 py-1.5 text-right font-semibold text-emerald-600">1</td>
-                                <td className="px-3 py-1.5 text-right font-semibold text-emerald-600">{qty}</td>
-                              </tr>
-                            );
-                          })}
-                          <tr className="bg-emerald-50 border-t border-emerald-100 font-semibold text-emerald-700">
-                            <td colSpan={3} className="px-3 py-1.5">Total</td>
-                            <td className="px-3 py-1.5 text-right">{wmsSource.b2b.length}</td>
-                            <td className="px-3 py-1.5 text-right">{wmsSource.b2b.reduce((s, o) => s + Number(o.totalQty ?? o.orderQty ?? 0), 0)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
+                      <div>
+                        {/* Warning banner */}
+                        {(wmsSource.b2bWarnings?.length ?? 0) > 0 && (
+                          <div className="flex items-start gap-2 bg-amber-50 border-b border-amber-200 px-4 py-2.5 text-xs text-amber-700">
+                            <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                            <span>
+                              <b>{wmsSource.b2bWarnings!.length} order(s)</b> have Picking per Piece but no Out per Carton/Pallet info — check comments:{" "}
+                              <span className="font-mono">{wmsSource.b2bWarnings!.join(", ")}</span>
+                            </span>
+                          </div>
+                        )}
+                        <table className="w-full text-xs">
+                          <thead className="bg-slate-50 sticky top-0">
+                            <tr>
+                              <th className="px-3 py-2 text-left text-slate-500 font-semibold">Order Code</th>
+                              <th className="px-3 py-2 text-left text-slate-500 font-semibold">Date</th>
+                              <th className="px-3 py-2 text-right text-slate-500 font-semibold">Pick/Piece</th>
+                              <th className="px-3 py-2 text-right text-slate-500 font-semibold">Pick/Carton</th>
+                              <th className="px-3 py-2 text-right text-slate-500 font-semibold">Pick/Pallet</th>
+                              <th className="px-3 py-2 text-right text-slate-500 font-semibold">Out/Carton</th>
+                              <th className="px-3 py-2 text-right text-slate-500 font-semibold">Out/Pallet</th>
+                              <th className="px-3 py-2 text-right text-slate-500 font-semibold">Packing✓</th>
+                              <th className="px-3 py-2 text-right text-slate-500 font-semibold">Palletize✓</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {wmsSource.b2b.map((o, i) => {
+                              const tasks = parseTaskComment(String(o.comment ?? ""));
+                              const pp  = tasks["Picking per Piece"]  ?? 0;
+                              const pc  = tasks["Picking per Carton"] ?? 0;
+                              const ppl = tasks["Picking per Pallet"] ?? 0;
+                              const oc  = tasks["Out per Carton"]     ?? 0;
+                              const op  = tasks["Out per Pallet"]     ?? 0;
+                              const packingCharged  = oc > 0 && oc !== pc;
+                              const palletizeCharged = op > 0 && op !== ppl;
+                              const warn = pp > 0 && oc === 0 && op === 0;
+                              return (
+                                <tr key={i} className={`border-b border-slate-50 ${warn ? "bg-amber-50" : ""}`}>
+                                  <td className="px-3 py-1.5 font-mono text-emerald-600">
+                                    {String(o.shippingOrderCode ?? o.orderCode ?? "—")}
+                                    {warn && <span className="ml-1 text-amber-500">⚠</span>}
+                                  </td>
+                                  <td className="px-3 py-1.5 text-slate-500">{String(o.orderDate ?? "—")}</td>
+                                  <td className="px-3 py-1.5 text-right">{pp || "—"}</td>
+                                  <td className="px-3 py-1.5 text-right">{pc || "—"}</td>
+                                  <td className="px-3 py-1.5 text-right">{ppl || "—"}</td>
+                                  <td className="px-3 py-1.5 text-right">{oc || "—"}</td>
+                                  <td className="px-3 py-1.5 text-right">{op || "—"}</td>
+                                  <td className="px-3 py-1.5 text-right font-semibold">
+                                    {oc > 0 ? (packingCharged ? <span className="text-emerald-600">{oc}</span> : <span className="text-slate-400 line-through">{oc}</span>) : "—"}
+                                  </td>
+                                  <td className="px-3 py-1.5 text-right font-semibold">
+                                    {op > 0 ? (palletizeCharged ? <span className="text-emerald-600">{op}</span> : <span className="text-slate-400 line-through">{op}</span>) : "—"}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                            <tr className="bg-emerald-50 border-t border-emerald-100 font-semibold text-emerald-700">
+                              <td colSpan={2} className="px-3 py-1.5">Total ({wmsSource.b2b.length} orders)</td>
+                              <td className="px-3 py-1.5 text-right">{wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Picking per Piece"] ?? 0), 0) || "—"}</td>
+                              <td className="px-3 py-1.5 text-right">{wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Picking per Carton"] ?? 0), 0) || "—"}</td>
+                              <td className="px-3 py-1.5 text-right">{wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Picking per Pallet"] ?? 0), 0) || "—"}</td>
+                              <td className="px-3 py-1.5 text-right">{wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Out per Carton"] ?? 0), 0) || "—"}</td>
+                              <td className="px-3 py-1.5 text-right">{wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Out per Pallet"] ?? 0), 0) || "—"}</td>
+                              <td className="px-3 py-1.5 text-right">{wmsSource.b2b.reduce((s, o) => { const t = parseTaskComment(String(o.comment ?? "")); const oc = t["Out per Carton"] ?? 0; const pc = t["Picking per Carton"] ?? 0; return s + (oc > 0 && oc !== pc ? oc : 0); }, 0) || "—"}</td>
+                              <td className="px-3 py-1.5 text-right">{wmsSource.b2b.reduce((s, o) => { const t = parseTaskComment(String(o.comment ?? "")); const op = t["Out per Pallet"] ?? 0; const ppl = t["Picking per Pallet"] ?? 0; return s + (op > 0 && op !== ppl ? op : 0); }, 0) || "—"}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
                     )
                   )}
 
