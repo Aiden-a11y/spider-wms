@@ -16,6 +16,8 @@ import {
   X,
   AlertCircle,
   Table2,
+  Upload,
+  BarChart3,
 } from "lucide-react";
 
 // Raw WMS orders collected during auto-fetch (shown in Source Data panel)
@@ -25,6 +27,14 @@ type WmsSource = {
   b2c:       Record<string, unknown>[];
   returns:   Record<string, unknown>[];
   b2bWarnings?: string[]; // order codes where piece picking exists but no Out info
+};
+
+type StorageRow = {
+  key: string; // StorageRateKey
+  label: string;
+  qty15: number;
+  qtyLast: number;
+  avg: number;
 };
 
 // ── Task comment parser ───────────────────────────────────────────────────────
@@ -329,6 +339,28 @@ async function exportAllToExcel(invoices: BillingInvoice[], period: string) {
   await downloadWorkbook(wb, `Invoice_ALL_${period}.xlsx`);
 }
 
+// ─── Storage import constants ─────────────────────────────────────────────────
+
+const STORAGE_LABEL_MAP: Record<string, string> = {
+  "bin": "storage_bin",
+  "shelf": "storage_shelf",
+  "carton": "storage_carton",
+  "pallet short": "storage_pallet_short",
+  "pallet regular": "storage_pallet_regular",
+  "pallet tall": "storage_pallet_tall",
+  "open floor": "storage_open_floor",
+};
+
+const STORAGE_TEMPLATE_ROWS = [
+  { key: "storage_bin",            label: "Bin" },
+  { key: "storage_shelf",          label: "Shelf" },
+  { key: "storage_carton",         label: "Carton" },
+  { key: "storage_pallet_short",   label: "Pallet Short" },
+  { key: "storage_pallet_regular", label: "Pallet Regular" },
+  { key: "storage_pallet_tall",    label: "Pallet Tall" },
+  { key: "storage_open_floor",     label: "Open Floor" },
+];
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function BillingPage() {
@@ -373,6 +405,93 @@ export default function BillingPage() {
   const [wmsSource, setWmsSource] = useState<WmsSource | null>(null);
   const [sourceTab, setSourceTab] = useState<"receiving" | "b2b" | "b2c" | "returns">("receiving");
   const [showSource, setShowSource] = useState(false);
+
+  // ── Storage import ──
+  const [storageRows, setStorageRows] = useState<StorageRow[]>([]);
+  const [storageUploading, setStorageUploading] = useState(false);
+
+  async function downloadStorageTemplate() {
+    const { utils, writeFile } = await import("xlsx");
+    const ws = utils.aoa_to_sheet([
+      ["Storage Type", "15th Day Qty", "Last Day Qty"],
+      ...STORAGE_TEMPLATE_ROWS.map(r => [r.label, 0, 0]),
+    ]);
+    ws["!cols"] = [{ wch: 20 }, { wch: 14 }, { wch: 14 }];
+    const wb = utils.book_new();
+    utils.book_append_sheet(wb, ws, "Storage");
+    writeFile(wb, `Storage_Template_${editing?.period ?? "period"}.xlsx`);
+  }
+
+  async function handleStorageUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setStorageUploading(true);
+    try {
+      const buf = await file.arrayBuffer();
+      const { read, utils } = await import("xlsx");
+      const wb = read(buf);
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows: unknown[][] = utils.sheet_to_json(ws, { header: 1 });
+      // Find header row (contains "15" and "last"/"30" case-insensitive)
+      let headerIdx = 0;
+      let col15 = 1, colLast = 2;
+      for (let i = 0; i < Math.min(5, rows.length); i++) {
+        const row = rows[i] as string[];
+        const headers = row.map(h => String(h ?? "").toLowerCase());
+        const idx15 = headers.findIndex(h => h.includes("15"));
+        const idxLast = headers.findIndex(h => h.includes("last") || h.includes("30") || h.includes("31") || h.includes("end"));
+        if (idx15 >= 0 && idxLast >= 0) {
+          headerIdx = i;
+          col15 = idx15;
+          colLast = idxLast;
+          break;
+        }
+      }
+      const parsed: StorageRow[] = [];
+      for (let i = headerIdx + 1; i < rows.length; i++) {
+        const row = rows[i] as (string | number)[];
+        const typeName = String(row[0] ?? "").trim().toLowerCase();
+        if (!typeName) continue;
+        const key = STORAGE_LABEL_MAP[typeName];
+        if (!key) continue;
+        const qty15 = Number(row[col15] ?? 0) || 0;
+        const qtyLast = Number(row[colLast] ?? 0) || 0;
+        const avg = (qty15 + qtyLast) / 2;
+        parsed.push({
+          key,
+          label: STORAGE_TEMPLATE_ROWS.find(r => r.key === key)?.label ?? typeName,
+          qty15,
+          qtyLast,
+          avg,
+        });
+      }
+      setStorageRows(parsed);
+    } catch (err) {
+      console.error("Storage Excel parse error:", err);
+    } finally {
+      setStorageUploading(false);
+      e.target.value = "";
+    }
+  }
+
+  function applyStorageToInvoice() {
+    if (!editing || storageRows.length === 0) return;
+    const updates: Record<string, number> = {};
+    storageRows.forEach(r => {
+      updates[r.key] = Math.round(r.avg * 100) / 100; // round to 2 decimals
+    });
+    setEditing(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        lineItems: prev.lineItems.map(item =>
+          updates[item.id] !== undefined
+            ? { ...item, qty: updates[item.id], autoFetched: true }
+            : item
+        ),
+      };
+    });
+  }
 
   // ── load invoice list ──
   async function loadList() {
@@ -427,6 +546,7 @@ export default function BillingPage() {
     }
 
     setEditing(inv);
+    setStorageRows([]);
     setShowNewForm(false);
     setFetchMsg("");
   }
@@ -434,6 +554,7 @@ export default function BillingPage() {
   // ── open existing invoice ──
   function openInvoice(inv: BillingInvoice) {
     setEditing(JSON.parse(JSON.stringify(inv))); // deep clone
+    setStorageRows([]);
     setFetchMsg("");
     setWmsSource(null);
     setShowSource(false);
@@ -1157,6 +1278,100 @@ export default function BillingPage() {
             )}
           </div>
         )}
+
+        {/* ── Storage Import Panel ── */}
+        <div className="bg-white border border-purple-200 rounded-xl overflow-hidden shadow-sm mb-4">
+          <div className="flex items-center justify-between px-5 py-3.5 border-b border-purple-100 bg-purple-50/60">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold px-2 py-0.5 rounded-full border bg-purple-50 border-purple-200 text-purple-800">
+                Storage
+              </span>
+              <span className="text-xs text-purple-600 font-medium">
+                월 15일 · 말일 수량 → 평균 자동입력
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              {/* Download template */}
+              <button
+                onClick={downloadStorageTemplate}
+                className="flex items-center gap-1.5 text-xs border border-purple-200 rounded-lg px-3 py-1.5 text-purple-700 hover:bg-purple-50 transition-colors"
+              >
+                <Download className="w-3.5 h-3.5" />
+                템플릿 다운로드
+              </button>
+              {/* Upload */}
+              <label className={`flex items-center gap-1.5 text-xs border rounded-lg px-3 py-1.5 transition-colors cursor-pointer ${
+                storageUploading
+                  ? "border-purple-200 text-purple-400 opacity-60"
+                  : "border-purple-300 text-purple-700 hover:bg-purple-50"
+              }`}>
+                {storageUploading
+                  ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" />읽는 중…</>
+                  : <><Upload className="w-3.5 h-3.5" />Excel 업로드</>}
+                <input
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  className="hidden"
+                  disabled={storageUploading}
+                  onChange={handleStorageUpload}
+                />
+              </label>
+            </div>
+          </div>
+
+          {/* Preview table — only when rows are parsed */}
+          {storageRows.length > 0 ? (
+            <div>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-100">
+                    <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-400 uppercase tracking-wide">Storage Type</th>
+                    <th className="px-4 py-2.5 text-right text-xs font-semibold text-slate-400 uppercase tracking-wide">15일 수량</th>
+                    <th className="px-4 py-2.5 text-right text-xs font-semibold text-slate-400 uppercase tracking-wide">말일 수량</th>
+                    <th className="px-4 py-2.5 text-right text-xs font-semibold text-purple-600 uppercase tracking-wide">평균 (청구)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {storageRows.map((r) => (
+                    <tr key={r.key} className="border-b border-slate-50 last:border-0">
+                      <td className="px-4 py-2 text-slate-700 font-medium">{r.label}</td>
+                      <td className="px-4 py-2 text-right tabular-nums text-slate-500">{r.qty15.toLocaleString()}</td>
+                      <td className="px-4 py-2 text-right tabular-nums text-slate-500">{r.qtyLast.toLocaleString()}</td>
+                      <td className="px-4 py-2 text-right tabular-nums font-bold text-purple-700">
+                        {r.avg % 1 === 0 ? r.avg.toLocaleString() : r.avg.toFixed(2)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="px-5 py-3 flex items-center justify-between border-t border-purple-100 bg-purple-50/40">
+                <p className="text-xs text-slate-500">
+                  평균 = (15일 수량 + 말일 수량) ÷ 2 · {storageRows.length}개 항목
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setStorageRows([])}
+                    className="text-xs text-slate-400 hover:text-slate-600 px-3 py-1.5"
+                  >
+                    초기화
+                  </button>
+                  <button
+                    onClick={applyStorageToInvoice}
+                    className="flex items-center gap-1.5 text-xs bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-lg px-4 py-1.5 transition-colors"
+                  >
+                    <BarChart3 className="w-3.5 h-3.5" />
+                    인보이스에 적용
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="px-5 py-4 text-xs text-slate-400 flex items-center gap-2">
+              <span className="text-purple-300">①</span> 템플릿 다운로드 후 15일·말일 수량 입력
+              <span className="text-purple-300 ml-2">②</span> Excel 업로드하면 평균이 자동 계산됩니다
+            </div>
+          )}
+        </div>
 
         {/* Category sections */}
         <div className="space-y-4">
