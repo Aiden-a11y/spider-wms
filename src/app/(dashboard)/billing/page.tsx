@@ -406,6 +406,14 @@ export default function BillingPage() {
   const [sourceTab, setSourceTab] = useState<"receiving" | "b2b" | "b2c" | "returns">("receiving");
   const [showSource, setShowSource] = useState(false);
 
+  // ── multi-customer combined invoice ──
+  const [editGroup, setEditGroup] = useState<BillingInvoice[]>([]);
+  const [activeIdx, setActiveIdx] = useState(0);
+
+  // ── new invoice form: multi-select ──
+  const [isMultiSelect, setIsMultiSelect] = useState(false);
+  const [selectedCustomers, setSelectedCustomers] = useState<string[]>([]);
+
   // ── Storage import ──
   type StorageSnap = { data: Record<string, number>; file: string };
   const [storage15, setStorage15] = useState<StorageSnap | null>(null);
@@ -581,14 +589,93 @@ export default function BillingPage() {
     }
 
     setEditing(inv);
+    setEditGroup([inv]);
+    setActiveIdx(0);
     setStorage15(null); setStorageLast(null);
     setShowNewForm(false);
     setFetchMsg("");
   }
 
+  // ── create combined invoice for multiple customers ──
+  async function createMultiInvoice() {
+    if (selectedCustomers.length === 0) return;
+    const period = `${newYear}-${newMonth}`;
+    const invs: BillingInvoice[] = [];
+    for (const code of selectedCustomers) {
+      const name = customers.find(c => c.code === code)?.name ?? code;
+      const inv = buildNewInvoice(code, name, period);
+      try {
+        const res = await fetch(`/api/billing/rates?customer=${encodeURIComponent(code)}`);
+        if (res.ok) {
+          const master: CustomerRateMaster | null = await res.json();
+          if (master) {
+            inv.lineItems = applyRateMaster(inv.lineItems, master.rates);
+            inv.rateVersion = `custom (${new Date(master.updatedAt).toLocaleDateString("en-US")})`;
+            inv.subtotals = calcSubtotals(inv.lineItems);
+          }
+        }
+      } catch { /* use default rates */ }
+      invs.push(inv);
+    }
+    setEditGroup(invs);
+    setActiveIdx(0);
+    setEditing(invs[0]);
+    setStorage15(null); setStorageLast(null);
+    setShowNewForm(false); setFetchMsg("");
+    setSelectedCustomers([]);
+  }
+
+  // ── get full group with current editing merged in at activeIdx ──
+  function getCurrentGroup(): BillingInvoice[] {
+    if (!editing) return editGroup;
+    return editGroup.map((inv, i) =>
+      i === activeIdx
+        ? { ...editing, subtotals: calcSubtotals(editing.lineItems), total: calcTotal(editing.lineItems) }
+        : inv
+    );
+  }
+
+  // ── switch tab: save current editing → group, load new tab ──
+  function switchTab(idx: number) {
+    if (!editing || idx === activeIdx) return;
+    const group = getCurrentGroup();
+    setEditGroup(group);
+    setEditing(JSON.parse(JSON.stringify(group[idx])));
+    setActiveIdx(idx);
+    setStorage15(null); setStorageLast(null);
+    setFetchMsg(""); setWmsSource(null); setShowSource(false);
+  }
+
+  // ── save all invoices in combined group ──
+  async function saveAllMulti(status: "draft" | "final") {
+    if (!editing) return;
+    setSaving(true); setSaveError("");
+    const group = getCurrentGroup();
+    try {
+      for (const inv of group) {
+        const payload: BillingInvoice = { ...inv, status, updatedAt: new Date().toISOString() };
+        const res = await fetch("/api/billing/invoices", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) throw new Error(`Save failed for ${inv.customer}`);
+      }
+      await loadList();
+      setEditing(null); setEditGroup([]); setActiveIdx(0);
+    } catch (e) {
+      setSaveError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   // ── open existing invoice ──
   function openInvoice(inv: BillingInvoice) {
-    setEditing(JSON.parse(JSON.stringify(inv))); // deep clone
+    const cloned = JSON.parse(JSON.stringify(inv));
+    setEditing(cloned);
+    setEditGroup([cloned]);
+    setActiveIdx(0);
     setStorage15(null); setStorageLast(null);
     setFetchMsg("");
     setWmsSource(null);
@@ -875,9 +962,10 @@ export default function BillingPage() {
     }
   }
 
-  // ── save invoice ──
+  // ── save invoice (single or multi) ──
   async function saveInvoice(status: "draft" | "final") {
     if (!editing) return;
+    if (editGroup.length > 1) { await saveAllMulti(status); return; }
     setSaving(true);
     setSaveError("");
     try {
@@ -895,7 +983,7 @@ export default function BillingPage() {
       });
       if (!res.ok) throw new Error("Save failed");
       await loadList();
-      setEditing(null);
+      setEditing(null); setEditGroup([]); setActiveIdx(0);
     } catch (e) {
       setSaveError(String(e instanceof Error ? e.message : e));
     } finally {
@@ -920,6 +1008,7 @@ export default function BillingPage() {
 
   // ── Derived ──
   const currentTotal = editing ? calcTotal(editing.lineItems) : 0;
+  const isMultiMode = editGroup.length > 1;
   const years = [2024, 2025, 2026, 2027].map(String);
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -930,16 +1019,18 @@ export default function BillingPage() {
     return (
       <div className="pt-8 pb-8 px-8 w-full">
         {/* Header */}
-        <div className="flex items-center gap-3 mb-6">
+        <div className="flex items-center gap-3 mb-4">
           <button
-            onClick={() => setEditing(null)}
+            onClick={() => { setEditing(null); setEditGroup([]); setActiveIdx(0); }}
             className="text-slate-400 hover:text-slate-700 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
           <div className="flex-1">
             <h1 className="text-xl font-bold text-slate-900">
-              {editing.customerName || editing.customer} — {periodLabel(editing.period)}
+              {isMultiMode
+                ? `Combined Invoice — ${periodLabel(editing.period)} (${editGroup.length} customers)`
+                : `${editing.customerName || editing.customer} — ${periodLabel(editing.period)}`}
             </h1>
             <p className="text-slate-400 text-xs mt-0.5">Rate ver. {editing.rateVersion}</p>
           </div>
@@ -955,11 +1046,15 @@ export default function BillingPage() {
             </button>
             {/* Export */}
             <button
-              onClick={() => exportInvoiceToExcel({ ...editing, total: currentTotal }).catch(console.error)}
+              onClick={() => {
+                const group = getCurrentGroup();
+                if (isMultiMode) exportAllToExcel(group, editing.period).catch(console.error);
+                else exportInvoiceToExcel({ ...editing, total: currentTotal }).catch(console.error);
+              }}
               className="flex items-center gap-1.5 text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-600 hover:bg-slate-50 transition-colors"
             >
               <Download className="w-4 h-4" />
-              Export Excel
+              {isMultiMode ? "Export Combined" : "Export Excel"}
             </button>
             {/* Save draft */}
             <button
@@ -968,7 +1063,7 @@ export default function BillingPage() {
               className="flex items-center gap-1.5 text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-colors"
             >
               {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
-              Save Draft
+              {isMultiMode ? "Save All" : "Save Draft"}
             </button>
             {/* Finalize */}
             <button
@@ -977,10 +1072,34 @@ export default function BillingPage() {
               className="flex items-center gap-1.5 text-sm bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white rounded-lg px-3 py-2 font-medium transition-colors"
             >
               <CheckCircle2 className="w-4 h-4" />
-              Finalize
+              {isMultiMode ? "Finalize All" : "Finalize"}
             </button>
           </div>
         </div>
+
+        {/* ── Customer tabs (multi-mode) ── */}
+        {isMultiMode && (
+          <div className="flex gap-0 border-b border-slate-200 mb-5 -mx-8 px-8">
+            {editGroup.map((inv, i) => (
+              <button
+                key={inv.customer}
+                onClick={() => switchTab(i)}
+                className={`px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
+                  i === activeIdx
+                    ? "border-blue-600 text-blue-700 bg-blue-50/60"
+                    : "border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50"
+                }`}
+              >
+                {inv.customerName || inv.customer}
+                {inv.total > 0 && (
+                  <span className={`ml-2 text-xs font-semibold ${i === activeIdx ? "text-blue-500" : "text-slate-400"}`}>
+                    {formatUSD(inv.total)}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Fetch message */}
         {fetchMsg && (
@@ -1549,11 +1668,41 @@ export default function BillingPage() {
               />
             </div>
             <div className="text-right flex-shrink-0">
-              <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Total</p>
+              <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">
+                {isMultiMode ? `${editing.customerName || editing.customer} Subtotal` : "Total"}
+              </p>
               <p className="text-3xl font-bold text-slate-900 tabular-nums">{formatUSD(currentTotal)}</p>
             </div>
           </div>
         </div>
+
+        {/* ── Combined grand total bar (multi-mode) ── */}
+        {isMultiMode && (() => {
+          const group = getCurrentGroup();
+          const grandTotal = group.reduce((s, inv) => s + inv.total, 0);
+          return (
+            <div className="mt-4 bg-slate-900 rounded-xl px-6 py-4 flex items-center gap-6 flex-wrap shadow-lg">
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex-shrink-0">Combined Total</p>
+              {group.map((inv, i) => (
+                <div key={inv.customer} className="flex items-center gap-2">
+                  <button
+                    onClick={() => switchTab(i)}
+                    className={`text-xs font-medium px-2 py-0.5 rounded transition-colors ${
+                      i === activeIdx ? "bg-blue-600 text-white" : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    {inv.customerName || inv.customer}
+                  </button>
+                  <span className="text-sm font-semibold text-slate-200 tabular-nums">{formatUSD(inv.total)}</span>
+                </div>
+              ))}
+              <div className="ml-auto text-right flex-shrink-0">
+                <p className="text-xs text-slate-400 uppercase tracking-wide">Grand Total</p>
+                <p className="text-2xl font-bold text-white tabular-nums">{formatUSD(grandTotal)}</p>
+              </div>
+            </div>
+          );
+        })()}
       </div>
     );
   }
@@ -1589,116 +1738,144 @@ export default function BillingPage() {
       {/* New invoice form */}
       {showNewForm && (
         <div className="bg-white border border-blue-200 rounded-xl p-5 mb-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-slate-900 mb-4">New Invoice</h2>
-          <div className="flex flex-wrap gap-3 items-end">
-            {/* Customer */}
-            <div>
-              <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">Customer</label>
-              {customers.length > 0 ? (
-                <select
-                  value={newCustomer}
-                  onChange={(e) => {
-                    setNewCustomer(e.target.value);
-                    setNewCustomerName(customers.find((c) => c.code === e.target.value)?.name ?? "");
-                    setAllExportMsg("");
-                  }}
-                  className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 w-56"
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-sm font-semibold text-slate-900">New Invoice</h2>
+            {customers.length > 0 && (
+              <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
+                <button
+                  onClick={() => { setIsMultiSelect(false); setSelectedCustomers([]); }}
+                  className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${!isMultiSelect ? "bg-white shadow text-slate-900" : "text-slate-500 hover:text-slate-700"}`}
                 >
-                  <option value="">— Select —</option>
-                  <option value="__ALL__">★ All Customers</option>
-                  {customers.map((c) => (
-                    <option key={c.code} value={c.code}>{c.code} {c.name && `— ${c.name}`}</option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  type="text"
-                  value={newCustomer}
-                  onChange={(e) => setNewCustomer(e.target.value)}
-                  placeholder="e.g. STL001"
-                  className="border border-slate-200 rounded-lg px-3 py-2 text-sm w-36 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              )}
-            </div>
-
-            {/* Customer Name (manual if not from dropdown) */}
-            {customers.length === 0 && (
-              <div>
-                <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">Customer Name</label>
-                <input
-                  type="text"
-                  value={newCustomerName}
-                  onChange={(e) => setNewCustomerName(e.target.value)}
-                  placeholder="e.g. STL Logistics"
-                  className="border border-slate-200 rounded-lg px-3 py-2 text-sm w-44 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                  Single
+                </button>
+                <button
+                  onClick={() => { setIsMultiSelect(true); setNewCustomer(""); }}
+                  className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${isMultiSelect ? "bg-white shadow text-slate-900" : "text-slate-500 hover:text-slate-700"}`}
+                >
+                  Multiple
+                </button>
               </div>
             )}
+          </div>
 
-            {/* Year */}
+          {/* Period row (shared) */}
+          <div className="flex flex-wrap gap-3 items-end mb-4">
             <div>
               <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">Year</label>
-              <select
-                value={newYear}
-                onChange={(e) => setNewYear(e.target.value)}
-                className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
+              <select value={newYear} onChange={(e) => setNewYear(e.target.value)}
+                className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
                 {years.map((y) => <option key={y} value={y}>{y}</option>)}
               </select>
             </div>
-
-            {/* Month */}
             <div>
               <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">Month</label>
-              <select
-                value={newMonth}
-                onChange={(e) => setNewMonth(e.target.value)}
-                className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
+              <select value={newMonth} onChange={(e) => setNewMonth(e.target.value)}
+                className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
                 {MONTHS.map((m, i) => (
                   <option key={m} value={String(i + 1).padStart(2, "0")}>{m}</option>
                 ))}
               </select>
             </div>
-
-            {/* Action button — changes based on All vs single */}
-            {newCustomer === "__ALL__" ? (
-              <button
-                onClick={exportAllCustomers}
-                disabled={allExporting || customers.length === 0}
-                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-300 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-              >
-                {allExporting
-                  ? <RefreshCw className="w-4 h-4 animate-spin" />
-                  : <Download className="w-4 h-4" />}
-                {allExporting ? "Exporting..." : "Export All Customers"}
-              </button>
-            ) : (
-              <button
-                onClick={createInvoice}
-                disabled={!newCustomer}
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-              >
-                <Receipt className="w-4 h-4" />
-                Create
-              </button>
-            )}
-            <button
-              onClick={() => { setShowNewForm(false); setAllExportMsg(""); }}
-              className="text-sm text-slate-400 hover:text-slate-600 px-3 py-2"
-            >
-              Cancel
-            </button>
           </div>
+
+          {/* ── Single mode ── */}
+          {!isMultiSelect && (
+            <div className="flex flex-wrap gap-3 items-end">
+              <div>
+                <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">Customer</label>
+                {customers.length > 0 ? (
+                  <select value={newCustomer}
+                    onChange={(e) => { setNewCustomer(e.target.value); setNewCustomerName(customers.find(c => c.code === e.target.value)?.name ?? ""); setAllExportMsg(""); }}
+                    className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 w-56">
+                    <option value="">— Select —</option>
+                    <option value="__ALL__">★ All Customers (Export Only)</option>
+                    {customers.map((c) => (
+                      <option key={c.code} value={c.code}>{c.code}{c.name && ` — ${c.name}`}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input type="text" value={newCustomer} onChange={(e) => setNewCustomer(e.target.value)}
+                    placeholder="e.g. STL001"
+                    className="border border-slate-200 rounded-lg px-3 py-2 text-sm w-36 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                )}
+              </div>
+              {customers.length === 0 && (
+                <div>
+                  <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">Customer Name</label>
+                  <input type="text" value={newCustomerName} onChange={(e) => setNewCustomerName(e.target.value)}
+                    placeholder="e.g. STL Logistics"
+                    className="border border-slate-200 rounded-lg px-3 py-2 text-sm w-44 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+              )}
+              {newCustomer === "__ALL__" ? (
+                <button onClick={exportAllCustomers} disabled={allExporting || customers.length === 0}
+                  className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-300 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+                  {allExporting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                  {allExporting ? "Exporting..." : "Export All"}
+                </button>
+              ) : (
+                <button onClick={createInvoice} disabled={!newCustomer}
+                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+                  <Receipt className="w-4 h-4" /> Create
+                </button>
+              )}
+              <button onClick={() => { setShowNewForm(false); setAllExportMsg(""); setIsMultiSelect(false); setSelectedCustomers([]); }}
+                className="text-sm text-slate-400 hover:text-slate-600 px-3 py-2">Cancel</button>
+            </div>
+          )}
+
+          {/* ── Multi mode ── */}
+          {isMultiSelect && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs text-slate-500 uppercase tracking-wide">Select Customers</label>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setSelectedCustomers(customers.map(c => c.code))}
+                    className="text-xs text-blue-600 hover:text-blue-800">Select All</button>
+                  <span className="text-slate-300">|</span>
+                  <button onClick={() => setSelectedCustomers([])}
+                    className="text-xs text-slate-400 hover:text-slate-600">Clear</button>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-1.5 max-h-48 overflow-y-auto border border-slate-200 rounded-xl p-3 mb-4">
+                {customers.map((c) => {
+                  const checked = selectedCustomers.includes(c.code);
+                  return (
+                    <label key={c.code}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-colors text-sm ${
+                        checked ? "bg-blue-50 border border-blue-200" : "hover:bg-slate-50 border border-transparent"
+                      }`}>
+                      <input type="checkbox" checked={checked}
+                        onChange={(e) => setSelectedCustomers(prev =>
+                          e.target.checked ? [...prev, c.code] : prev.filter(x => x !== c.code)
+                        )}
+                        className="accent-blue-600" />
+                      <div className="min-w-0">
+                        <p className="font-medium text-slate-800 truncate">{c.code}</p>
+                        {c.name && <p className="text-[10px] text-slate-400 truncate">{c.name}</p>}
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+              <div className="flex items-center gap-3">
+                <button onClick={createMultiInvoice} disabled={selectedCustomers.length < 2}
+                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+                  <Receipt className="w-4 h-4" />
+                  Create Combined ({selectedCustomers.length} customers)
+                </button>
+                <button onClick={() => { setShowNewForm(false); setIsMultiSelect(false); setSelectedCustomers([]); }}
+                  className="text-sm text-slate-400 hover:text-slate-600 px-3 py-2">Cancel</button>
+              </div>
+            </div>
+          )}
 
           {/* All-customers export progress/result */}
           {allExportMsg && (
             <div className={`mt-3 flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm border ${
-              allExportMsg.startsWith("✓")
-                ? "bg-green-50 border-green-200 text-green-800"
-                : allExportMsg.startsWith("Export failed")
-                ? "bg-red-50 border-red-200 text-red-700"
-                : "bg-blue-50 border-blue-200 text-blue-700"
+              allExportMsg.startsWith("✓") ? "bg-green-50 border-green-200 text-green-800"
+              : allExportMsg.startsWith("Export failed") ? "bg-red-50 border-red-200 text-red-700"
+              : "bg-blue-50 border-blue-200 text-blue-700"
             }`}>
               {allExporting && <RefreshCw className="w-3.5 h-3.5 animate-spin flex-shrink-0" />}
               {allExportMsg}
