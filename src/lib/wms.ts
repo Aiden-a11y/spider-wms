@@ -3,6 +3,7 @@ export const WMS_BASE = "https://us-wms-api.stload.com/api";
 export interface InventoryItem {
   locationId?: string;
   locationCode?: string;
+  occupancyInfo?: string;
   zone: string;
   aisle: string;
   bay: string;
@@ -17,6 +18,75 @@ export interface InventoryItem {
   expireDate?: string;
   uom?: string;
   customerCode?: string;
+}
+
+type LocationLike = Record<string, unknown>;
+
+function normalizeLocationKey(value: string) {
+  return value.replace(/[-_\s]/g, "").toUpperCase();
+}
+
+function compactLocationParts(parts: string[]) {
+  return parts
+    .filter(Boolean)
+    .map((part) => (/^\d+$/.test(part) ? part.padStart(2, "0") : part))
+    .join("");
+}
+
+function locationParts(row: LocationLike) {
+  return [
+    row.zoneNm ?? row.zoneName ?? row.zone ?? row.zoneCode,
+    row.aisleNm ?? row.aisleName ?? row.aisle ?? row.aisleCode,
+    row.bayNm ?? row.bayName ?? row.bay ?? row.bayCode,
+    row.levelNm ?? row.levelName ?? row.level ?? row.levelCode,
+    row.positionNm ?? row.positionName ?? row.position ?? row.positionCode ?? row.slotCode,
+  ].map((value) => String(value ?? "").trim());
+}
+
+export function locationLookupKeys(row: LocationLike): string[] {
+  const keys = new Set<string>();
+  const rawKeys = [
+    row.locationCode,
+    row.location,
+    row.remark,
+    row.barcode,
+    row.locationBarcode,
+  ];
+
+  for (const raw of rawKeys) {
+    const key = normalizeLocationKey(String(raw ?? "").trim());
+    if (key) keys.add(key);
+  }
+
+  const parts = locationParts(row);
+  if (parts.some(Boolean)) {
+    keys.add(normalizeLocationKey(parts.filter(Boolean).join("-")));
+    keys.add(normalizeLocationKey(parts.filter(Boolean).join("")));
+    keys.add(normalizeLocationKey(compactLocationParts(parts)));
+  }
+
+  return Array.from(keys);
+}
+
+export function buildLocationOccupancyLookup(locations: LocationLike[]) {
+  const lookup = new Map<string, string>();
+  for (const loc of locations) {
+    const occupancyInfo = String(loc.occupancyInfo ?? "").trim();
+    if (!occupancyInfo) continue;
+    for (const key of locationLookupKeys(loc)) lookup.set(key, occupancyInfo);
+  }
+  return lookup;
+}
+
+export function getLocationOccupancyInfo(
+  lookup: Map<string, string>,
+  row: LocationLike
+) {
+  for (const key of locationLookupKeys(row)) {
+    const occupancyInfo = lookup.get(key);
+    if (occupancyInfo) return occupancyInfo;
+  }
+  return "";
 }
 
 export interface LocationNode {

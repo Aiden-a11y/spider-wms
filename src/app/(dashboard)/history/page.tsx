@@ -3,6 +3,10 @@
 import { useState, useMemo, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/auth-context";
+import {
+  buildLocationOccupancyLookup,
+  getLocationOccupancyInfo,
+} from "@/lib/wms";
 import { Download, Search, Calendar, Save } from "lucide-react";
 
 interface SnapshotRow {
@@ -61,6 +65,47 @@ export default function HistoryPage() {
   const [saveStatus, setSaveStatus] = useState("");
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
+  const [occupancyLookup, setOccupancyLookup] = useState<Map<string, string>>(() => new Map());
+
+  function parseLocationArr(json: unknown): Record<string, unknown>[] {
+    const j = json as Record<string, unknown>;
+    const d = j?.data as Record<string, unknown> | undefined;
+    if (Array.isArray(d?.list)) return d!.list as Record<string, unknown>[];
+    if (Array.isArray(d)) return d as unknown as Record<string, unknown>[];
+    if (Array.isArray(json)) return json as Record<string, unknown>[];
+    return [];
+  }
+
+  async function loadOccupancyLookup(whCode: string) {
+    try {
+      const res = await fetch("/api/wms/warehouse/location/list", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${user!.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ page: 1, pageSize: 9999, warehouseCode: whCode, search: "", sortField: "WarehouseCode", sortDir: "asc" }),
+      });
+      const text = await res.text();
+      const json = text.trim() ? JSON.parse(text) : {};
+      return buildLocationOccupancyLookup(parseLocationArr(json));
+    } catch {
+      return new Map<string, string>();
+    }
+  }
+
+  function rowOccupancyInfo(row: SnapshotRow) {
+    const [zone, aisle, bay, level, position] = row.location.split("-");
+    return getLocationOccupancyInfo(occupancyLookup, {
+      location: row.location,
+      locationCode: row.location,
+      zone,
+      aisle,
+      bay,
+      level,
+      position,
+    });
+  }
 
   useEffect(() => {
     if (!user?.token) return;
@@ -94,6 +139,7 @@ export default function HistoryPage() {
     setLoading(true);
     setError("");
     setRows([]);
+    setOccupancyLookup(await loadOccupancyLookup(warehouseCode));
 
     const { data, error: err } = await supabase
       .from("inventory_history")
@@ -178,9 +224,10 @@ export default function HistoryPage() {
       r.sku?.toLowerCase().includes(q) ||
       r.product_name?.toLowerCase().includes(q) ||
       r.location?.toLowerCase().includes(q) ||
+      rowOccupancyInfo(r).toLowerCase().includes(q) ||
       r.lot?.toLowerCase().includes(q)
     );
-  }, [rows, search]);
+  }, [rows, search, occupancyLookup]);
 
   const totalQty = useMemo(() => filtered.reduce((s, r) => s + r.qty, 0), [filtered]);
 
@@ -189,6 +236,7 @@ export default function HistoryPage() {
     const sheet = utils.json_to_sheet(filtered.map(r => ({
       Date: r.captured_date,
       Location: r.location,
+      occupancyInfo: rowOccupancyInfo(r),
       SKU: r.sku,
       "Product Name": r.product_name ?? "",
       Qty: r.qty,
@@ -329,6 +377,7 @@ export default function HistoryPage() {
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200">
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Location</th>
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">occupancyInfo</th>
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">SKU</th>
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Product Name</th>
                 <th className="px-4 py-2.5 text-right text-slate-500 font-medium">Qty</th>
@@ -341,6 +390,7 @@ export default function HistoryPage() {
               {filtered.map((r) => (
                 <tr key={r.id} className="hover:bg-slate-50 border-b border-slate-100 last:border-0">
                   <td className="px-4 py-2.5 font-mono text-slate-600 whitespace-nowrap">{r.location}</td>
+                  <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap">{rowOccupancyInfo(r) || "-"}</td>
                   <td className="px-4 py-2.5">
                     <span className="font-mono font-medium text-slate-900 bg-slate-100 px-2 py-0.5 rounded">{r.sku}</span>
                   </td>

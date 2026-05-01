@@ -4,6 +4,8 @@ import { useEffect, useState, useMemo, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/auth-context";
 import {
+  buildLocationOccupancyLookup,
+  getLocationOccupancyInfo,
   normalizeInventory,
   type InventoryItem,
   type Warehouse,
@@ -55,6 +57,30 @@ export default function InventoryPage() {
     const j = json as Record<string, unknown>;
     const arr = Array.isArray(j?.data) ? j.data : Array.isArray(json) ? json : [];
     return arr as Record<string, unknown>[];
+  }
+
+  function parseLocationArr(json: unknown): Record<string, unknown>[] {
+    const j = json as Record<string, unknown>;
+    const d = j?.data as Record<string, unknown> | undefined;
+    if (Array.isArray(d?.list)) return d!.list as Record<string, unknown>[];
+    if (Array.isArray(d)) return d as unknown as Record<string, unknown>[];
+    if (Array.isArray(json)) return json as Record<string, unknown>[];
+    return [];
+  }
+
+  async function loadOccupancyLookup(whCode: string) {
+    try {
+      const res = await fetch("/api/wms/warehouse/location/list", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ page: 1, pageSize: 9999, warehouseCode: whCode, search: "", sortField: "WarehouseCode", sortDir: "asc" }),
+      });
+      const text = await res.text();
+      const json = text.trim() ? JSON.parse(text) : {};
+      return buildLocationOccupancyLookup(parseLocationArr(json));
+    } catch {
+      return new Map<string, string>();
+    }
   }
 
   // 1. 창고 목록 로드
@@ -147,6 +173,7 @@ export default function InventoryPage() {
     const { utils, writeFile } = await import("xlsx");
     const rows = sortedItems.map((item) => ({
       Location: [item.zone, item.aisle, item.bay, item.level, item.position].join("-"),
+      occupancyInfo: item.occupancyInfo ?? "",
       Customer: item.customerCode ?? "",
       SKU: item.sku,
       "Product Name": item.productName,
@@ -271,8 +298,21 @@ export default function InventoryPage() {
         status: 200,
       }));
 
-      setItems(allItems);
-      saveSnapshot(whCode, allItems);
+      const occupancyLookup = await loadOccupancyLookup(whCode);
+      const mappedItems = allItems.map((item) => ({
+        ...item,
+        occupancyInfo: getLocationOccupancyInfo(occupancyLookup, {
+          locationCode: item.locationCode,
+          zone: item.zone,
+          aisle: item.aisle,
+          bay: item.bay,
+          level: item.level,
+          position: item.position,
+        }),
+      }));
+
+      setItems(mappedItems);
+      saveSnapshot(whCode, mappedItems);
     } catch (e) {
       setError(`Request failed: ${String(e)}`);
     }
@@ -306,6 +346,7 @@ export default function InventoryPage() {
         item.sku.toLowerCase().includes(q) ||
         item.productName.toLowerCase().includes(q) ||
         item.lot?.toLowerCase().includes(q) ||
+        item.occupancyInfo?.toLowerCase().includes(q) ||
         item.locationCode?.toLowerCase().includes(q);
       return matchCustomer && matchLoc && matchSearch;
     });
@@ -474,6 +515,7 @@ export default function InventoryPage() {
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200">
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Location</th>
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">occupancyInfo</th>
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Customer</th>
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">SKU</th>
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Product Name</th>
@@ -489,6 +531,7 @@ export default function InventoryPage() {
                 return (
                   <tr key={`${item.locationId}-${item.sku}-${idx}`} className="hover:bg-slate-50 border-b border-slate-100 last:border-0">
                     <td className="px-4 py-2.5 font-mono text-slate-600 whitespace-nowrap">{loc}</td>
+                    <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap">{item.occupancyInfo || "-"}</td>
                     <td className="px-4 py-2.5 text-slate-500 font-mono">{item.customerCode || "-"}</td>
                     <td className="px-4 py-2.5">
                       <span className="font-mono font-medium text-slate-900 bg-slate-100 px-2 py-0.5 rounded">{item.sku || "-"}</span>
