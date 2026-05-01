@@ -631,6 +631,207 @@ export default function BillingPage() {
   const [isMultiSelect, setIsMultiSelect] = useState(false);
   const [selectedCustomers, setSelectedCustomers] = useState<string[]>([]);
 
+  // ── Inbound Report export ──
+  const [inboundReportPeriod, setInboundReportPeriod] = useState<string>(() => {
+    const d = new Date(); d.setMonth(d.getMonth() - 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
+  const [inboundExporting, setInboundExporting] = useState(false);
+  const [inboundMsg, setInboundMsg] = useState("");
+
+  async function exportInboundReport() {
+    setInboundExporting(true);
+    setInboundMsg("Fetching inbound orders…");
+    try {
+      const [y, m] = inboundReportPeriod.split("-");
+      const lastDay = new Date(Number(y), Number(m), 0).getDate();
+      const startDash = `${y}-${m}-01`;
+      const endDash   = `${y}-${m}-${String(lastDay).padStart(2, "0")}`;
+      const yyyymm    = `${y}${m}`;
+      const normDate  = (v: unknown) => String(v ?? "").replace(/[-/.]/g, "").slice(0, 8);
+
+      // 1. Fetch order list
+      const listRes = await fetch("/api/wms/receiving/list", {
+        method: "POST", headers,
+        body: JSON.stringify({ page: 1, limit: 2000,
+          startDate: startDash, endDate: endDash,
+          fromDate: startDash,  toDate: endDash }),
+      });
+      const listJson = await listRes.json();
+      const rawOrders: Record<string, unknown>[] =
+        listJson?.data?.list ?? listJson?.data ?? listJson?.list ?? [];
+      // Filter by inDate in period
+      const orders = (Array.isArray(rawOrders) ? rawOrders : []).filter((ord) => {
+        const d = normDate(ord.inDate ?? ord.receiveDate ?? ord.orderDate ?? "");
+        return !d || d.length < 6 || d.startsWith(yyyymm);
+      });
+
+      setInboundMsg(`Fetching detail for ${orders.length} orders…`);
+
+      // 2. For each order fetch item-level detail (5 concurrent max)
+      type InboundRow = {
+        orderCode: string; sku: string; shortName: string;
+        orderDate: string; inDate: string; orderQty: number;
+        expireDate: string; location: string; comment: string;
+      };
+      const rows: InboundRow[] = [];
+
+      const chunks: Record<string, unknown>[][] = [];
+      for (let i = 0; i < orders.length; i += 5) chunks.push(orders.slice(i, i + 5));
+
+      for (const chunk of chunks) {
+        await Promise.all(chunk.map(async (ord) => {
+          const code = String(
+            ord.receivingOrderCode ?? ord.inboundOrderCode ?? ord.orderCode ?? ord.receiveCode ?? ""
+          );
+          if (!code) return;
+
+          const comment = String(ord.comment ?? ord.additionalComment ?? ord.memo ?? ord.remark ?? "");
+          const orderDate = String(ord.orderDate ?? ord.createdDate ?? ord.receiveOrderDate ?? "");
+          const inDate    = String(ord.inDate ?? ord.receiveDate ?? ord.completedDate ?? "");
+
+          // Try several detail endpoint patterns
+          let items: Record<string, unknown>[] = [];
+
+          const tryEndpoints = [
+            `/api/wms/receiving/detail/${code}`,
+            `/api/wms/receiving/items/${code}`,
+            `/api/wms/inbound/detail/${code}`,
+          ];
+          for (const ep of tryEndpoints) {
+            if (items.length > 0) break;
+            try {
+              const r = await fetch(ep, { headers: { Authorization: `Bearer ${user!.token}` } });
+              if (!r.ok) continue;
+              const j = await r.json();
+              const raw =
+                j?.data?.items ?? j?.data?.list ?? j?.data?.productList ??
+                j?.items ?? j?.list ?? (Array.isArray(j?.data) ? j.data : null) ?? [];
+              if (Array.isArray(raw) && raw.length > 0) items = raw;
+            } catch { /* try next */ }
+          }
+
+          if (items.length > 0) {
+            for (const item of items) {
+              rows.push({
+                orderCode: code,
+                sku:        String(item.sku ?? item.productSku ?? item.skuCode ?? item.itemCode ?? ""),
+                shortName:  String(item.shortName ?? item.productName ?? item.itemName ?? item.productShortName ?? ""),
+                orderDate,
+                inDate,
+                orderQty:   Number(item.qty ?? item.orderQty ?? item.receiveQty ?? item.totalQty ?? 0),
+                expireDate: String(item.expireDate ?? item.expiryDate ?? item.expDate ?? item.lotExpireDate ?? ""),
+                location:   String(item.location ?? item.locationCode ?? item.locationName ?? item.binCode ?? ""),
+                comment,
+              });
+            }
+          } else {
+            // Fallback: order-level row if no items returned
+            rows.push({
+              orderCode: code,
+              sku:        String(ord.sku ?? ord.productSku ?? ""),
+              shortName:  String(ord.shortName ?? ord.productName ?? ""),
+              orderDate,
+              inDate,
+              orderQty:   Number(ord.totalQty ?? ord.orderQty ?? ord.qty ?? 0),
+              expireDate: String(ord.expireDate ?? ord.expiryDate ?? ""),
+              location:   String(ord.location ?? ord.locationCode ?? ""),
+              comment,
+            });
+          }
+        }));
+      }
+
+      // Sort by orderCode then sku
+      rows.sort((a, b) => a.orderCode.localeCompare(b.orderCode) || a.sku.localeCompare(b.sku));
+
+      // 3. Build Excel
+      const wb = new ExcelJS.Workbook();
+      const iws = wb.addWorksheet("Inbound");
+      iws.columns = [
+        { width: 22 }, // ORDER#
+        { width: 20 }, // SKU
+        { width: 38 }, // SHORT_NAME
+        { width: 14 }, // Order Date
+        { width: 14 }, // In Date
+        { width: 12 }, // Order Q'ty
+        { width: 14 }, // Expire Date
+        { width: 20 }, // Location
+        { width: 45 }, // Comment
+      ];
+
+      // Title row
+      const t1 = iws.addRow([`Inbound Orders — ${periodLabel(inboundReportPeriod)}`]);
+      t1.height = 26; iws.mergeCells(`A1:I1`);
+      Object.assign(t1.getCell(1), {
+        font:      { bold: true, size: 15, color: { argb: C.white }, name: "Calibri" },
+        fill:      { type: "pattern", pattern: "solid", fgColor: { argb: C.navy } },
+        alignment: { vertical: "middle", horizontal: "center" },
+      }); applyBorder(t1.getCell(1), "medium");
+
+      const t2 = iws.addRow([`In Date: ${periodLabel(inboundReportPeriod)}  |  Total orders: ${orders.length}  |  Total rows: ${rows.length}`]);
+      t2.height = 16; iws.mergeCells(`A2:I2`);
+      Object.assign(t2.getCell(1), {
+        font:      { size: 10, italic: true, color: { argb: C.black } },
+        fill:      { type: "pattern", pattern: "solid", fgColor: { argb: C.rowAlt } },
+        alignment: { vertical: "middle", horizontal: "center" },
+      }); applyBorder(t2.getCell(1));
+
+      // Column headers
+      const colNames = ["ORDER#", "SKU", "SHORT_NAME", "Order Date", "In Date", "Order Q'ty", "Expire Date", "Location", "Comment"];
+      const hdr = iws.addRow(colNames);
+      hdr.height = 17;
+      hdr.eachCell((cell) => {
+        cell.font  = { bold: true, color: { argb: C.white }, size: 10 };
+        cell.fill  = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
+        cell.alignment = { vertical: "middle", horizontal: "center" };
+        applyBorder(cell, "medium");
+      });
+
+      // Data rows — shade by order group
+      let prevCode = "";
+      let groupShade = false;
+      rows.forEach((row) => {
+        if (row.orderCode !== prevCode) { groupShade = !groupShade; prevCode = row.orderCode; }
+        const dr = iws.addRow([
+          row.orderCode, row.sku, row.shortName,
+          row.orderDate, row.inDate, row.orderQty,
+          row.expireDate, row.location, row.comment,
+        ]);
+        dr.height = 15;
+        const bg = groupShade ? C.white : C.rowAlt;
+        dr.eachCell((cell, col) => {
+          cell.fill  = { type: "pattern", pattern: "solid", fgColor: { argb: bg } };
+          cell.font  = { size: 10, color: { argb: C.black } };
+          cell.alignment = { vertical: "middle", horizontal: col >= 4 && col <= 7 ? "center" : "left" };
+          applyBorder(cell);
+        });
+        dr.getCell(6).numFmt = "#,##0";
+      });
+
+      // Total row
+      const totalQty = rows.reduce((s, r) => s + r.orderQty, 0);
+      iws.addRow([]);
+      const sumRow = iws.addRow(["", "", "", "", "TOTAL", totalQty, "", "", ""]);
+      sumRow.height = 18;
+      [5, 6].forEach((col) => {
+        const cell = sumRow.getCell(col);
+        cell.font  = { bold: true, size: 11, color: { argb: C.white } };
+        cell.fill  = { type: "pattern", pattern: "solid", fgColor: { argb: C.greenBg } };
+        cell.alignment = { vertical: "middle", horizontal: col === 6 ? "right" : "left" };
+        applyBorder(cell, "medium");
+        if (col === 6) cell.numFmt = "#,##0";
+      });
+
+      await downloadWorkbook(wb, `Inbound_${inboundReportPeriod}.xlsx`);
+      setInboundMsg(`✓ Exported ${rows.length} rows (${orders.length} orders) → Inbound_${inboundReportPeriod}.xlsx`);
+    } catch (e) {
+      setInboundMsg(`Export failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setInboundExporting(false);
+    }
+  }
+
   // ── Storage import ──
   type StorageSnap = { data: Record<string, number>; file: string };
   const [storage15, setStorage15] = useState<StorageSnap | null>(null);
@@ -1993,6 +2194,38 @@ export default function BillingPage() {
             New Invoice
           </button>
         </div>
+      </div>
+
+      {/* ── Inbound Report export panel ── */}
+      <div className="bg-white border border-slate-200 rounded-xl p-4 mb-6 flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+          <Table2 className="w-4 h-4 text-blue-500" />
+          Inbound Report
+        </div>
+        <div className="flex items-center gap-1.5">
+          <label className="text-xs text-slate-500">Period</label>
+          <input
+            type="month"
+            value={inboundReportPeriod}
+            onChange={(e) => { setInboundReportPeriod(e.target.value); setInboundMsg(""); }}
+            className="border border-slate-200 rounded-lg px-2 py-1 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-300"
+          />
+        </div>
+        <button
+          onClick={exportInboundReport}
+          disabled={inboundExporting}
+          className="flex items-center gap-1.5 text-sm bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white rounded-lg px-3 py-1.5 font-medium transition-colors"
+        >
+          {inboundExporting
+            ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+            : <Download className="w-3.5 h-3.5" />}
+          {inboundExporting ? "Exporting…" : "Export Excel"}
+        </button>
+        {inboundMsg && (
+          <span className={`text-xs ${inboundMsg.startsWith("✓") ? "text-green-600" : inboundMsg.startsWith("Export failed") ? "text-red-500" : "text-slate-500"}`}>
+            {inboundMsg}
+          </span>
+        )}
       </div>
 
       {/* New invoice form */}
