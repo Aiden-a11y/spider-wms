@@ -465,25 +465,56 @@ export default function BillingPage() {
     period: string
   ): Promise<{ updates: Record<string, number>; source: WmsSource }> {
     const [year, month] = period.split("-").map(Number);
-    const startDate = `${period}-01`;
     const lastDay = new Date(year, month, 0).getDate();
-    const endDate = `${period}-${String(lastDay).padStart(2, "0")}`;
+
+    // Send both formats — WMS APIs differ on which they accept
+    const yyyymm     = `${year}${String(month).padStart(2, "0")}`;         // "202605"
+    const startDash  = `${period}-01`;                                      // "2026-05-01"
+    const endDash    = `${period}-${String(lastDay).padStart(2, "0")}`;    // "2026-05-31"
+    const startCompact = `${yyyymm}01`;                                     // "20260501"
+    const endCompact   = `${yyyymm}${String(lastDay).padStart(2, "0")}`;   // "20260531"
+
+    // Helper: check if an order's date falls within this period (client-side guard)
+    // WMS dates come as "20260428" (YYYYMMDD) or "2026-04-28"
+    function inPeriod(order: Record<string, unknown>): boolean {
+      const raw = String(
+        order.orderDate ?? order.inDate ?? order.receiveDate ??
+        order.shippingDate ?? order.requestDate ?? ""
+      ).replace(/-/g, "");  // normalize to YYYYMMDD
+      if (!raw || raw.length < 6) return true; // no date field → keep
+      return raw.startsWith(yyyymm);
+    }
+
     const updates: Record<string, number> = {};
     const source: WmsSource = { receiving: [], b2b: [], b2c: [], returns: [] };
 
     try {
       const j = await fetch("/api/wms/receiving/list", {
         method: "POST", headers,
-        body: JSON.stringify({ page: 1, limit: 500, customerCode: customer, startDate, endDate }),
+        body: JSON.stringify({
+          page: 1, limit: 2000,
+          customerCode: customer,
+          // try all common param names
+          startDate: startDash, endDate: endDash,
+          fromDate: startDash,  toDate: endDash,
+          orderDateFrom: startDash, orderDateTo: endDash,
+          startOrderDate: startCompact, endOrderDate: endCompact,
+        }),
       }).then((r) => r.json());
-      const list: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
-      if (Array.isArray(list)) {
+      const raw: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
+      // Client-side filter by period in case API ignores date params
+      const list = Array.isArray(raw) ? raw.filter(inPeriod) : [];
+      if (list.length > 0) {
         source.receiving = list;
         let cartons = 0;
         for (const ord of list) {
           const type = String(ord.inboundType ?? ord.receiveType ?? "").toLowerCase();
-          if (!type.includes("container") && !type.includes("cont"))
-            cartons += Number(ord.totalQty ?? ord.itemCount ?? 1);
+          // Container = charged separately, skip for per-carton count
+          if (!type.includes("container") && !type.includes("cont")) {
+            // Use carton-specific field if available, fall back to 1 per receiving order
+            const cartonQty = ord.cartonQty ?? ord.boxQty ?? ord.packageQty ?? ord.cartonCount;
+            cartons += cartonQty != null ? Number(cartonQty) : 1;
+          }
         }
         if (cartons > 0) updates["inbound_carton"] = cartons;
       }
@@ -492,10 +523,19 @@ export default function BillingPage() {
     try {
       const j = await fetch("/api/wms/shipping/list", {
         method: "POST", headers,
-        body: JSON.stringify({ page: 1, limit: 500, orderType: "B2B", customerCode: customer, startDate, endDate }),
+        body: JSON.stringify({
+          page: 1, limit: 2000,
+          orderType: "B2B", customerCode: customer,
+          startDate: startDash, endDate: endDash,
+          fromDate: startDash,  toDate: endDash,
+          orderDateFrom: startDash, orderDateTo: endDash,
+          startOrderDate: startCompact, endOrderDate: endCompact,
+        }),
       }).then((r) => r.json());
-      const list: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
-      if (Array.isArray(list) && list.length > 0) {
+      const rawB2B: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
+      // Client-side date filter
+      const list = Array.isArray(rawB2B) ? rawB2B.filter(inPeriod) : [];
+      if (list.length > 0) {
         source.b2b = list;
         updates["b2b_order"] = list.length;
 
@@ -532,25 +572,33 @@ export default function BillingPage() {
           }
         }
 
-        if (pickPiece   > 0) updates["b2b_pick_piece"]    = pickPiece;
-        if (pickCarton  > 0) updates["b2b_pick_carton"]   = pickCarton;
-        if (pickPallet  > 0) updates["b2b_pick_pallet"]   = pickPallet;
+        if (pickPiece   > 0) updates["b2b_pick_piece"]      = pickPiece;
+        if (pickCarton  > 0) updates["b2b_pick_carton"]     = pickCarton;
+        if (pickPallet  > 0) updates["b2b_pick_pallet"]     = pickPallet;
         if (cartonPacking > 0) updates["b2b_carton_packing"] = cartonPacking;
-        if (palletizing > 0) updates["b2b_palletizing"]   = palletizing;
-        if (b2bWarnings.length > 0) source.b2bWarnings    = b2bWarnings;
+        if (palletizing > 0) updates["b2b_palletizing"]     = palletizing;
+        if (b2bWarnings.length > 0) source.b2bWarnings      = b2bWarnings;
       }
     } catch {}
 
     try {
       const j = await fetch("/api/wms/shipping/list", {
         method: "POST", headers,
-        body: JSON.stringify({ page: 1, limit: 500, orderType: "B2C", customerCode: customer, startDate, endDate }),
+        body: JSON.stringify({
+          page: 1, limit: 2000,
+          orderType: "B2C", customerCode: customer,
+          startDate: startDash, endDate: endDash,
+          fromDate: startDash,  toDate: endDash,
+          orderDateFrom: startDash, orderDateTo: endDash,
+          startOrderDate: startCompact, endOrderDate: endCompact,
+        }),
       }).then((r) => r.json());
-      const list: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
-      if (Array.isArray(list) && list.length > 0) {
-        source.b2c = list;
-        updates["b2c_order"] = list.length;
-        const extraPicks = list.reduce((s, o) => s + Math.max(0, Number(o.totalQty ?? o.orderQty ?? 0) - 5), 0);
+      const rawB2C: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
+      const listB2C = Array.isArray(rawB2C) ? rawB2C.filter(inPeriod) : [];
+      if (listB2C.length > 0) {
+        source.b2c = listB2C;
+        updates["b2c_order"] = listB2C.length;
+        const extraPicks = listB2C.reduce((s, o) => s + Math.max(0, Number(o.totalQty ?? o.orderQty ?? 0) - 5), 0);
         if (extraPicks > 0) updates["b2c_pick_piece"] = extraPicks;
       }
     } catch {}
@@ -558,15 +606,23 @@ export default function BillingPage() {
     try {
       const r = await fetch("/api/wms/returns/list", {
         method: "POST", headers,
-        body: JSON.stringify({ page: 1, limit: 500, customerCode: customer, startDate, endDate }),
+        body: JSON.stringify({
+          page: 1, limit: 2000,
+          customerCode: customer,
+          startDate: startDash, endDate: endDash,
+          fromDate: startDash,  toDate: endDash,
+          orderDateFrom: startDash, orderDateTo: endDash,
+          startOrderDate: startCompact, endOrderDate: endCompact,
+        }),
       });
       if (r.ok) {
         const j = await r.json();
-        const list: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
-        if (Array.isArray(list) && list.length > 0) {
-          source.returns = list;
-          updates["return_receiving"] = list.length;
-          const pieces = list.reduce((s, o) => s + Number(o.totalQty ?? o.qty ?? 0), 0);
+        const rawRet: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
+        const listRet = Array.isArray(rawRet) ? rawRet.filter(inPeriod) : [];
+        if (listRet.length > 0) {
+          source.returns = listRet;
+          updates["return_receiving"] = listRet.length;
+          const pieces = listRet.reduce((s, o) => s + Number(o.totalQty ?? o.qty ?? 0), 0);
           if (pieces > 0) updates["return_restock"] = pieces;
         }
       }
