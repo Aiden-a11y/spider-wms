@@ -433,23 +433,29 @@ export default function BillingPage() {
     const ws = wb.Sheets[wb.SheetNames[0]];
     const rows = utils.sheet_to_json<string[]>(ws, { header: 1 }) as string[][];
 
-    // Find header row: must have "location" and "location type" columns
+    // Normalize header: lowercase, strip spaces/underscores for flexible matching
+    // e.g. "occupancyInfo" → "occupancyinfo", "Location Type" → "locationtype"
+    const norm = (s: unknown) => String(s ?? "").toLowerCase().replace(/[\s_]/g, "");
+
     let headerIdx = -1, colLoc = -1, colLocType = -1, colCustomer = -1;
     for (let i = 0; i < Math.min(8, rows.length); i++) {
-      const hdrs = rows[i].map(h => String(h ?? "").toLowerCase().replace(/\s+/g, " ").trim());
-      const iType = hdrs.findIndex(h => h === "location type" || h === "loc type" || h === "type");
-      const iLoc  = hdrs.findIndex(h => h === "location" || h === "loc");
-      if (iType >= 0 && iLoc >= 0) {
-        headerIdx = i;
-        colLocType = iType;
-        colLoc = iLoc;
+      const hdrs = rows[i].map(norm);
+      // occupancyInfo takes priority; fallback to "location type" / "loctype"
+      const iOcc  = hdrs.findIndex(h => h === "occupancyinfo" || h === "occupancy");
+      const iType = hdrs.findIndex(h => h === "locationtype"  || h === "loctype");
+      const iLoc  = hdrs.findIndex(h => h === "location"      || h === "loc");
+      const iUsed = iOcc >= 0 ? iOcc : iType;
+      if (iUsed >= 0 && iLoc >= 0) {
+        headerIdx  = i;
+        colLocType = iUsed;
+        colLoc     = iLoc;
         colCustomer = hdrs.findIndex(h => h.includes("customer"));
         break;
       }
     }
-    if (headerIdx < 0) throw new Error("Header row not found. File must contain 'Location' and 'Location Type' columns.");
+    if (headerIdx < 0) throw new Error("Header row not found. File must contain 'Location' and 'occupancyInfo' (or 'Location Type') columns.");
 
-    // Count distinct Location values per storage key (optionally filtered by customer)
+    // Count distinct Location values per storage key, filtered by exact customer code
     const locSets: Record<string, Set<string>> = {};
     for (let i = headerIdx + 1; i < rows.length; i++) {
       const row = rows[i];
@@ -457,10 +463,10 @@ export default function BillingPage() {
       const loc     = String(row[colLoc]     ?? "").trim();
       if (!locType || !loc) continue;
 
-      // Customer filter — skip if customer column exists and doesn't match
+      // Exact customer code match (case-insensitive)
       if (colCustomer >= 0 && customerCode) {
         const cust = String(row[colCustomer] ?? "").trim().toLowerCase();
-        if (cust && !cust.toLowerCase().includes(customerCode.toLowerCase())) continue;
+        if (cust && cust !== customerCode.toLowerCase()) continue;
       }
 
       const key = STORAGE_LABEL_MAP[locType];
@@ -1351,7 +1357,7 @@ export default function BillingPage() {
                   </label>
                 )}
                 <p className="text-[10px] text-slate-400">
-                  Columns: Location / Location Type / Customer / SKU / Product Name / Qty …
+                  Columns: Location / occupancyInfo / Customer / SKU / Product Name / Qty …
                 </p>
               </div>
             ))}
