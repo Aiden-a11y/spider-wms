@@ -447,7 +447,7 @@ export default function BillingPage() {
         break;
       }
     }
-    if (headerIdx < 0) throw new Error("헤더를 찾을 수 없습니다. Location / Location Type 컬럼이 필요합니다.");
+    if (headerIdx < 0) throw new Error("Header row not found. File must contain 'Location' and 'Location Type' columns.");
 
     // Count distinct Location values per storage key (optionally filtered by customer)
     const locSets: Record<string, Set<string>> = {};
@@ -481,7 +481,7 @@ export default function BillingPage() {
       const data = await parseInventoryFile(file, editing.customer);
       setStorage15({ data, file: file.name });
     } catch (err) {
-      alert(err instanceof Error ? err.message : "파일 파싱 오류");
+      alert(err instanceof Error ? err.message : "Failed to parse file.");
     } finally {
       setStorageUploading15(false);
       e.target.value = "";
@@ -496,7 +496,7 @@ export default function BillingPage() {
       const data = await parseInventoryFile(file, editing.customer);
       setStorageLast({ data, file: file.name });
     } catch (err) {
-      alert(err instanceof Error ? err.message : "파일 파싱 오류");
+      alert(err instanceof Error ? err.message : "Failed to parse file.");
     } finally {
       setStorageUploadingLast(false);
       e.target.value = "";
@@ -1314,24 +1314,23 @@ export default function BillingPage() {
           <div className="flex items-center justify-between px-5 py-3.5 border-b border-purple-100 bg-purple-50/60">
             <div className="flex items-center gap-2">
               <span className="text-xs font-semibold px-2 py-0.5 rounded-full border bg-purple-50 border-purple-200 text-purple-800">Storage</span>
-              <span className="text-xs text-purple-600 font-medium">인벤토리 스냅샷 업로드 → Location Type별 평균 자동계산</span>
+              <span className="text-xs text-purple-600 font-medium">Upload inventory snapshots → auto-calculate average by Location Type</span>
             </div>
             {(storage15 || storageLast) && (
               <button
                 onClick={() => { setStorage15(null); setStorageLast(null); }}
                 className="text-xs text-slate-400 hover:text-red-500 transition-colors"
               >
-                초기화
+                Reset
               </button>
             )}
           </div>
 
           {/* Two upload zones */}
           <div className="grid grid-cols-2 divide-x divide-purple-100">
-            {/* 15일 */}
             {[
-              { label: "15일 데이터", snap: storage15, uploading: storageUploading15, handler: handleUpload15, color: "blue" },
-              { label: "말일 데이터", snap: storageLast, uploading: storageUploadingLast, handler: handleUploadLast, color: "indigo" },
+              { label: "15th Day Data", snap: storage15, uploading: storageUploading15, handler: handleUpload15, color: "blue" },
+              { label: "Last Day Data", snap: storageLast, uploading: storageUploadingLast, handler: handleUploadLast, color: "indigo" },
             ].map(({ label, snap, uploading, handler, color }) => (
               <div key={label} className="p-4 flex flex-col gap-2">
                 <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{label}</p>
@@ -1339,35 +1338,35 @@ export default function BillingPage() {
                   <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
                     <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
                     <span className="text-xs text-green-700 truncate font-medium">{snap.file}</span>
-                    <span className="text-xs text-green-600 ml-auto flex-shrink-0">{Object.values(snap.data).reduce((s,v)=>s+v,0)}개 location</span>
+                    <span className="text-xs text-green-600 ml-auto flex-shrink-0">{Object.values(snap.data).reduce((s,v)=>s+v,0)} locations</span>
                   </div>
                 ) : (
                   <label className={`flex items-center justify-center gap-2 border-2 border-dashed rounded-lg px-4 py-4 cursor-pointer transition-colors ${
                     uploading ? "border-slate-200 opacity-60" : `border-${color}-200 hover:border-${color}-400 hover:bg-${color}-50`
                   }`}>
                     {uploading
-                      ? <><RefreshCw className="w-4 h-4 animate-spin text-slate-400" /><span className="text-xs text-slate-400">읽는 중…</span></>
-                      : <><Upload className="w-4 h-4 text-slate-400" /><span className="text-xs text-slate-500">Excel 파일 선택</span></>}
+                      ? <><RefreshCw className="w-4 h-4 animate-spin text-slate-400" /><span className="text-xs text-slate-400">Reading…</span></>
+                      : <><Upload className="w-4 h-4 text-slate-400" /><span className="text-xs text-slate-500">Select Excel file</span></>}
                     <input type="file" accept=".xlsx,.xls,.csv" className="hidden" disabled={uploading} onChange={handler} />
                   </label>
                 )}
                 <p className="text-[10px] text-slate-400">
-                  컬럼: Location / Location Type / Customer / SKU / Product Name / Qty …
+                  Columns: Location / Location Type / Customer / SKU / Product Name / Qty …
                 </p>
               </div>
             ))}
           </div>
 
-          {/* Preview table — shown when at least one file uploaded */}
+          {/* Preview table */}
           {storageRows.length > 0 && (
             <div className="border-t border-purple-100">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-slate-50">
                     <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-400 uppercase tracking-wide">Storage Type</th>
-                    <th className="px-4 py-2.5 text-right text-xs font-semibold text-blue-500 uppercase tracking-wide">15일</th>
-                    <th className="px-4 py-2.5 text-right text-xs font-semibold text-indigo-500 uppercase tracking-wide">말일</th>
-                    <th className="px-4 py-2.5 text-right text-xs font-semibold text-purple-600 uppercase tracking-wide">평균 (청구)</th>
+                    <th className="px-4 py-2.5 text-right text-xs font-semibold text-blue-500 uppercase tracking-wide">15th Day</th>
+                    <th className="px-4 py-2.5 text-right text-xs font-semibold text-indigo-500 uppercase tracking-wide">Last Day</th>
+                    <th className="px-4 py-2.5 text-right text-xs font-semibold text-purple-600 uppercase tracking-wide">Avg (Billed)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1385,16 +1384,16 @@ export default function BillingPage() {
               </table>
               <div className="px-5 py-3 flex items-center justify-between border-t border-purple-100 bg-purple-50/40">
                 <p className="text-xs text-slate-500">
-                  평균 = (15일 + 말일) ÷ 2 · {storageRows.length}개 타입
-                  {!storage15 && <span className="ml-2 text-amber-500">⚠ 15일 데이터 없음</span>}
-                  {!storageLast && <span className="ml-2 text-amber-500">⚠ 말일 데이터 없음</span>}
+                  Avg = (15th + Last) ÷ 2 · {storageRows.length} type{storageRows.length > 1 ? "s" : ""}
+                  {!storage15 && <span className="ml-2 text-amber-500">⚠ 15th day data missing</span>}
+                  {!storageLast && <span className="ml-2 text-amber-500">⚠ Last day data missing</span>}
                 </p>
                 <button
                   onClick={applyStorageToInvoice}
                   className="flex items-center gap-1.5 text-xs bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-lg px-4 py-1.5 transition-colors"
                 >
                   <BarChart3 className="w-3.5 h-3.5" />
-                  인보이스에 적용
+                  Apply to Invoice
                 </button>
               </div>
             </div>
@@ -1403,7 +1402,7 @@ export default function BillingPage() {
           {/* Empty state */}
           {storageRows.length === 0 && !storage15 && !storageLast && (
             <div className="px-5 py-3 text-xs text-slate-400">
-              15일 · 말일 WMS 인벤토리 Excel을 각각 업로드하면 Location Type별로 자동 집계됩니다
+              Upload the 15th-day and last-day WMS inventory exports to auto-summarize by Location Type
             </div>
           )}
         </div>
