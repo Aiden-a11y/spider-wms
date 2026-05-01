@@ -491,8 +491,10 @@ export default function BillingPage() {
       return outRaw.startsWith(yyyymm);
     }
 
-    // Inbound receiving: filter by in/receive date (no strict status filter)
+    // Inbound receiving: status=DA (Complete) + inDate in period
     function isInboundInPeriod(order: Record<string, unknown>): boolean {
+      const status = String(order.status ?? order.orderStatus ?? "");
+      if (status && status !== "DA") return false;
       const raw = normDate(
         order.inDate ?? order.receiveDate ?? order.orderDate ?? ""
       );
@@ -932,7 +934,7 @@ export default function BillingPage() {
                             return (
                               <tr key={i} className={`border-b border-slate-50 ${isContainer ? "opacity-40" : ""}`}>
                                 <td className="px-3 py-1.5 font-mono text-blue-600">{String(o.receiveOrderCode ?? o.orderCode ?? "—")}</td>
-                                <td className="px-3 py-1.5 text-slate-500">{String(o.orderDate ?? "—")}</td>
+                                <td className="px-3 py-1.5 text-slate-500">{String(o.inDate ?? o.receiveDate ?? o.orderDate ?? "—")}</td>
                                 <td className="px-3 py-1.5 text-slate-500">{type || "—"}{isContainer && <span className="ml-1 text-red-400">(excl.)</span>}</td>
                                 <td className="px-3 py-1.5 text-right">{qty}</td>
                                 <td className="px-3 py-1.5 text-right font-semibold text-blue-600">{isContainer ? "—" : qty}</td>
