@@ -772,7 +772,7 @@ export default function BillingPage() {
 
   if (editing) {
     return (
-      <div className="p-8 w-full">
+      <div className="pt-8 pb-8 px-8 w-full">
         {/* Header */}
         <div className="flex items-center gap-3 mb-6">
           <button
@@ -844,13 +844,13 @@ export default function BillingPage() {
           </div>
         )}
 
-        {/* ── WMS Source Data panel ── */}
+        {/* ── WMS Source Data panel ── full-bleed, breaks out of px-8 padding */}
         {wmsSource && (
-          <div className="mb-5 bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+          <div className="mb-5 -mx-8 bg-white border-x-0 border border-slate-200 shadow-sm overflow-hidden">
             {/* Header / toggle */}
             <button
               onClick={() => setShowSource((s) => !s)}
-              className="w-full flex items-center justify-between px-5 py-3 hover:bg-slate-50 transition-colors"
+              className="w-full flex items-center justify-between px-8 py-3 hover:bg-slate-50 transition-colors"
             >
               <div className="flex items-center gap-3 text-sm font-medium text-slate-700">
                 <Table2 className="w-4 h-4 text-slate-400" />
@@ -886,7 +886,7 @@ export default function BillingPage() {
             {showSource && (
               <div className="border-t border-slate-100">
                 {/* Sub-tabs */}
-                <div className="flex border-b border-slate-100 px-5">
+                <div className="flex border-b border-slate-100 px-8">
                   {(
                     [
                       { key: "receiving", label: "Inbound",      count: wmsSource.receiving.length, active: "text-blue-600 border-blue-600" },
@@ -910,7 +910,7 @@ export default function BillingPage() {
                 </div>
 
                 {/* Table area */}
-                <div className="overflow-x-auto" style={{ maxHeight: "28rem" }}>
+                <div className="overflow-x-auto" style={{ maxHeight: "32rem" }}>
                   {/* ── Inbound ── */}
                   {sourceTab === "receiving" && (
                     wmsSource.receiving.length === 0 ? (
