@@ -474,14 +474,38 @@ export default function BillingPage() {
     const startCompact = `${yyyymm}01`;                                     // "20260501"
     const endCompact   = `${yyyymm}${String(lastDay).padStart(2, "0")}`;   // "20260531"
 
-    // Helper: check if an order's date falls within this period (client-side guard)
-    // WMS dates come as "20260428" (YYYYMMDD) or "2026-04-28"
-    function inPeriod(order: Record<string, unknown>): boolean {
-      const raw = String(
-        order.orderDate ?? order.inDate ?? order.receiveDate ??
-        order.shippingDate ?? order.requestDate ?? ""
-      ).replace(/-/g, "");  // normalize to YYYYMMDD
-      if (!raw || raw.length < 6) return true; // no date field → keep
+    // Normalize date string → YYYYMMDD (handles both "20260514" and "2026-05-14")
+    function normDate(d: unknown): string {
+      return String(d ?? "").replace(/-/g, "");
+    }
+
+    // B2B / B2C shipping: filter by OUT DATE and status must be FA (Complete)
+    function isShippingComplete(order: Record<string, unknown>): boolean {
+      const status = String(order.status ?? order.orderStatus ?? "");
+      if (status !== "FA") return false;
+      // out date field candidates
+      const outRaw = normDate(
+        order.outDate ?? order.deliveryDate ?? order.shippingDate ?? order.outboundDate ?? ""
+      );
+      if (!outRaw || outRaw.length < 6) return true; // no out date → keep if FA
+      return outRaw.startsWith(yyyymm);
+    }
+
+    // Inbound receiving: filter by in/receive date (no strict status filter)
+    function isInboundInPeriod(order: Record<string, unknown>): boolean {
+      const raw = normDate(
+        order.inDate ?? order.receiveDate ?? order.orderDate ?? ""
+      );
+      if (!raw || raw.length < 6) return true;
+      return raw.startsWith(yyyymm);
+    }
+
+    // Returns: filter by return date + complete status
+    function isReturnInPeriod(order: Record<string, unknown>): boolean {
+      const raw = normDate(
+        order.returnDate ?? order.inDate ?? order.orderDate ?? ""
+      );
+      if (!raw || raw.length < 6) return true;
       return raw.startsWith(yyyymm);
     }
 
@@ -502,8 +526,7 @@ export default function BillingPage() {
         }),
       }).then((r) => r.json());
       const raw: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
-      // Client-side filter by period in case API ignores date params
-      const list = Array.isArray(raw) ? raw.filter(inPeriod) : [];
+      const list = Array.isArray(raw) ? raw.filter(isInboundInPeriod) : [];
       if (list.length > 0) {
         source.receiving = list;
         let cartons = 0;
@@ -533,8 +556,8 @@ export default function BillingPage() {
         }),
       }).then((r) => r.json());
       const rawB2B: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
-      // Client-side date filter
-      const list = Array.isArray(rawB2B) ? rawB2B.filter(inPeriod) : [];
+      // Out date 기준 + FA(Complete) 상태만
+      const list = Array.isArray(rawB2B) ? rawB2B.filter(isShippingComplete) : [];
       if (list.length > 0) {
         source.b2b = list;
         updates["b2b_order"] = list.length;
@@ -594,7 +617,7 @@ export default function BillingPage() {
         }),
       }).then((r) => r.json());
       const rawB2C: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
-      const listB2C = Array.isArray(rawB2C) ? rawB2C.filter(inPeriod) : [];
+      const listB2C = Array.isArray(rawB2C) ? rawB2C.filter(isShippingComplete) : [];
       if (listB2C.length > 0) {
         source.b2c = listB2C;
         updates["b2c_order"] = listB2C.length;
@@ -618,7 +641,7 @@ export default function BillingPage() {
       if (r.ok) {
         const j = await r.json();
         const rawRet: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
-        const listRet = Array.isArray(rawRet) ? rawRet.filter(inPeriod) : [];
+        const listRet = Array.isArray(rawRet) ? rawRet.filter(isReturnInPeriod) : [];
         if (listRet.length > 0) {
           source.returns = listRet;
           updates["return_receiving"] = listRet.length;
