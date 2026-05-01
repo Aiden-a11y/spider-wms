@@ -772,7 +772,7 @@ export default function BillingPage() {
 
   if (editing) {
     return (
-      <div className="p-8 max-w-6xl">
+      <div className="p-8 w-full">
         {/* Header */}
         <div className="flex items-center gap-3 mb-6">
           <button
@@ -910,43 +910,87 @@ export default function BillingPage() {
                 </div>
 
                 {/* Table area */}
-                <div className="overflow-x-auto" style={{ maxHeight: "16rem" }}>
+                <div className="overflow-x-auto" style={{ maxHeight: "28rem" }}>
                   {/* ── Inbound ── */}
                   {sourceTab === "receiving" && (
                     wmsSource.receiving.length === 0 ? (
                       <p className="text-center text-sm text-slate-400 py-8">No inbound orders this period</p>
                     ) : (
                       <table className="w-full text-xs">
-                        <thead className="bg-slate-50 sticky top-0">
+                        <thead className="bg-slate-50 sticky top-0 z-10">
                           <tr>
                             <th className="px-3 py-2 text-left text-slate-500 font-semibold">Order Code</th>
-                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">Date</th>
+                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">PO / Ref</th>
+                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">In Date</th>
+                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">Status</th>
                             <th className="px-3 py-2 text-left text-slate-500 font-semibold">Type</th>
-                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">Qty</th>
-                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">Counted</th>
+                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">Item Qty</th>
+                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">Carton Field</th>
+                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">Carton Value</th>
+                            <th className="px-3 py-2 text-right text-slate-500 font-semibold text-blue-600">Counted</th>
                           </tr>
                         </thead>
                         <tbody>
                           {wmsSource.receiving.map((o, i) => {
                             const type = String(o.inboundType ?? o.receiveType ?? "");
                             const isContainer = /container|cont/i.test(type);
-                            const qty = Number(o.totalQty ?? o.itemCount ?? 1);
+                            const itemQty = Number(o.totalQty ?? o.itemCount ?? 0);
+                            // Determine which field provides the carton count
+                            const cartonFieldName =
+                              o.cartonQty != null ? "cartonQty" :
+                              o.boxQty != null ? "boxQty" :
+                              o.packageQty != null ? "packageQty" :
+                              o.cartonCount != null ? "cartonCount" :
+                              "default";
+                            const cartonFieldVal =
+                              o.cartonQty ?? o.boxQty ?? o.packageQty ?? o.cartonCount;
+                            const counted = isContainer ? 0 : (cartonFieldVal != null ? Number(cartonFieldVal) : 1);
+                            const isDefault = cartonFieldName === "default";
                             return (
-                              <tr key={i} className={`border-b border-slate-50 ${isContainer ? "opacity-40" : ""}`}>
-                                <td className="px-3 py-1.5 font-mono text-blue-600">{String(o.receiveOrderCode ?? o.orderCode ?? "—")}</td>
-                                <td className="px-3 py-1.5 text-slate-500">{String(o.inDate ?? o.receiveDate ?? o.orderDate ?? "—")}</td>
-                                <td className="px-3 py-1.5 text-slate-500">{type || "—"}{isContainer && <span className="ml-1 text-red-400">(excl.)</span>}</td>
-                                <td className="px-3 py-1.5 text-right">{qty}</td>
-                                <td className="px-3 py-1.5 text-right font-semibold text-blue-600">{isContainer ? "—" : qty}</td>
+                              <tr key={i} className={`border-b border-slate-50 ${isContainer ? "bg-red-50/40" : "hover:bg-slate-50"}`}>
+                                <td className="px-3 py-1.5 font-mono text-blue-600 whitespace-nowrap">{String(o.receiveOrderCode ?? o.orderCode ?? "—")}</td>
+                                <td className="px-3 py-1.5 text-slate-400 font-mono text-[10px]">{String(o.poNo ?? o.poNumber ?? o.referenceNo ?? "—")}</td>
+                                <td className="px-3 py-1.5 text-slate-500 whitespace-nowrap">{String(o.inDate ?? o.receiveDate ?? o.orderDate ?? "—")}</td>
+                                <td className="px-3 py-1.5">
+                                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                                    String(o.status ?? o.orderStatus ?? "") === "DA"
+                                      ? "bg-green-100 text-green-700"
+                                      : "bg-slate-100 text-slate-500"
+                                  }`}>{String(o.status ?? o.orderStatus ?? "—")}</span>
+                                </td>
+                                <td className="px-3 py-1.5 text-slate-500">
+                                  {type || "—"}
+                                  {isContainer && <span className="ml-1 text-[10px] text-red-500 font-medium">(excl.)</span>}
+                                </td>
+                                <td className="px-3 py-1.5 text-right text-slate-500">{itemQty > 0 ? itemQty.toLocaleString() : "—"}</td>
+                                <td className="px-3 py-1.5 text-right">
+                                  {isContainer ? (
+                                    <span className="text-slate-300">—</span>
+                                  ) : (
+                                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${
+                                      isDefault ? "bg-amber-50 text-amber-600" : "bg-blue-50 text-blue-600"
+                                    }`}>{cartonFieldName}</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-1.5 text-right text-slate-500">
+                                  {isContainer ? "—" : (cartonFieldVal != null ? Number(cartonFieldVal).toLocaleString() : <span className="text-amber-500">1 (default)</span>)}
+                                </td>
+                                <td className={`px-3 py-1.5 text-right font-bold ${isContainer ? "text-slate-300" : "text-blue-600"}`}>
+                                  {isContainer ? "—" : counted.toLocaleString()}
+                                </td>
                               </tr>
                             );
                           })}
-                          <tr className="bg-blue-50 border-t border-blue-100 font-semibold text-blue-700">
-                            <td colSpan={4} className="px-3 py-1.5">Total Cartons</td>
-                            <td className="px-3 py-1.5 text-right">
+                          <tr className="bg-blue-50 border-t-2 border-blue-200 font-bold text-blue-700 sticky bottom-0">
+                            <td colSpan={8} className="px-3 py-2 text-right pr-4">Total Cartons (non-container)</td>
+                            <td className="px-3 py-2 text-right text-blue-700">
                               {wmsSource.receiving
                                 .filter((o) => !/container|cont/i.test(String(o.inboundType ?? o.receiveType ?? "")))
-                                .reduce((s, o) => s + Number(o.totalQty ?? o.itemCount ?? 1), 0)}
+                                .reduce((s, o) => {
+                                  const v = o.cartonQty ?? o.boxQty ?? o.packageQty ?? o.cartonCount;
+                                  return s + (v != null ? Number(v) : 1);
+                                }, 0)
+                                .toLocaleString()}
                             </td>
                           </tr>
                         </tbody>
