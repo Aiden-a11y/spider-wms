@@ -343,73 +343,203 @@ async function exportAllToExcel(invoices: BillingInvoice[], period: string, sour
   if (invoices.length === 0) return;
   const wb = new ExcelJS.Workbook();
 
-  // ── Summary sheet ──
-  const summaryWs = wb.addWorksheet("Summary");
-  summaryWs.columns = [
-    { width: 30 }, { width: 16 },
-    ...BILLING_CATEGORIES.map(() => ({ width: 18 })),
-    { width: 16 },
-  ];
+  // ── Summary sheet — same styled layout as individual invoice, aggregated ──
+  const ws = wb.addWorksheet("Summary");
+  ws.columns = COL_WIDTHS_7.map((w) => ({ width: w }));
 
-  // Title
-  const titleRow = summaryWs.addRow([`BILLING SUMMARY — ${periodLabel(period)}`]);
-  summaryWs.mergeCells(`A1:${String.fromCharCode(65 + 1 + BILLING_CATEGORIES.length)}1`);
-  titleRow.height = 22;
-  titleRow.getCell(1).font = { bold: true, size: 13, color: { argb: C.white } };
-  titleRow.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.navy } };
-  titleRow.getCell(1).alignment = { vertical: "middle", indent: 1 };
-  applyBorder(titleRow.getCell(1), "medium");
+  // Helper: merge full row A–G
+  const merge = (rowNum: number) => ws.mergeCells(`A${rowNum}:${LAST_COL_LETTER}${rowNum}`);
 
-  const genRow = summaryWs.addRow(["Generated", new Date().toLocaleDateString("en-US")]);
-  genRow.getCell(1).font = { bold: true, color: { argb: C.black } };
-  summaryWs.addRow([]);
+  // ── Header rows ──
+  const r1 = ws.addRow(["CTK USA, INC."]);
+  r1.height = 28; merge(r1.number);
+  Object.assign(r1.getCell(1), {
+    font: { bold: true, size: 16, color: { argb: C.white }, name: "Calibri" },
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: C.navy } },
+    alignment: { vertical: "middle", horizontal: "center" },
+  }); applyBorder(r1.getCell(1), "medium");
 
-  // Column headers — blue bg, white bold
-  const hdrs = ["Customer", "Customer Code", ...BILLING_CATEGORIES, "TOTAL"];
-  const hdrRow = summaryWs.addRow(hdrs);
-  hdrRow.eachCell((cell) => {
-    cell.font = { bold: true, color: { argb: C.white } };
+  const customerNames = invoices.map(inv => inv.customerName || inv.customer).join(", ");
+  const r2 = ws.addRow([`Combined Invoice — ${customerNames}`]);
+  r2.height = 20; merge(r2.number);
+  Object.assign(r2.getCell(1), {
+    font: { bold: true, size: 12, color: { argb: C.navy } },
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: C.white } },
+    alignment: { vertical: "middle", horizontal: "center" },
+  }); applyBorder(r2.getCell(1));
+
+  const r3 = ws.addRow([`Billing Period: ${periodRange(period)}`]);
+  r3.height = 18; merge(r3.number);
+  Object.assign(r3.getCell(1), {
+    font: { size: 11, color: { argb: C.black } },
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: C.white } },
+    alignment: { vertical: "middle", horizontal: "center" },
+  }); applyBorder(r3.getCell(1));
+
+  // ── Column headers ──
+  const hdr = ws.addRow(["No.", "Category", "Description", "Rate", "Unit", "Qty", "Amount"]);
+  hdr.height = 18;
+  hdr.eachCell((cell, col) => {
+    cell.font = { bold: true, color: { argb: C.white }, size: 10 };
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
-    cell.alignment = { horizontal: Number(cell.col) <= 2 ? "left" : "right" };
+    cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "center" : "right" };
     applyBorder(cell, "medium");
   });
 
-  // Data rows
+  // ── Aggregate line items across all invoices (sum qty by item id) ──
+  // Build a merged item list: use first invoice's item as template, sum qty across all
+  const itemMap = new Map<string, BillingLineItem & { totalQty: number }>();
   for (const inv of invoices) {
-    const dataRow = summaryWs.addRow([
+    for (const item of inv.lineItems) {
+      const existing = itemMap.get(item.id);
+      if (existing) {
+        existing.totalQty += item.qty;
+      } else {
+        itemMap.set(item.id, { ...item, totalQty: item.qty });
+      }
+    }
+  }
+
+  let lineNo = 1;
+  let sectionNo = 1;
+  let grandTotal = 0;
+
+  for (const cat of BILLING_CATEGORIES) {
+    const catItems = Array.from(itemMap.values()).filter(
+      (it) => it.category === cat && it.totalQty !== 0
+    );
+    if (catItems.length === 0) continue;
+
+    // Section header
+    const sec = ws.addRow([`${sectionNo}. ${cat}`]);
+    sec.height = 16; merge(sec.number);
+    Object.assign(sec.getCell(1), {
+      font: { bold: true, size: 10, color: { argb: C.sectionFont } },
+      fill: { type: "pattern", pattern: "solid", fgColor: { argb: C.sectionBg } },
+      alignment: { vertical: "middle", indent: 1 },
+    }); applyBorder(sec.getCell(1), "medium");
+    sectionNo++;
+
+    let catTotal = 0;
+    for (const item of catItems) {
+      // For aggregated qty, recalculate amount
+      const aggQty = item.totalQty;
+      const aggAmt = item.costPlus ? aggQty * 1.1 : aggQty * item.rate;
+      catTotal += aggAmt;
+      grandTotal += aggAmt;
+
+      const r = ws.addRow([
+        lineNo, cat, item.description,
+        item.costPlus ? "cost+10%" : item.rate,
+        item.unit, aggQty, aggAmt,
+      ]);
+      r.height = 15;
+      const isAlt = lineNo % 2 === 0;
+      r.eachCell((cell, col) => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: isAlt ? C.rowAlt : C.white } };
+        cell.font = { size: 10, color: { argb: C.black } };
+        cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
+        applyBorder(cell);
+      });
+      r.getCell(4).font = { size: 10, color: { argb: C.teal } };
+      if (!item.costPlus) r.getCell(4).numFmt = "$#,##0.00";
+      r.getCell(6).numFmt = "#,##0.##";
+      r.getCell(7).numFmt = "$#,##0.00";
+      lineNo++;
+    }
+
+    // Subtotal
+    const sub = ws.addRow(["", "", "", "", "", "Subtotal", catTotal]);
+    sub.height = 15;
+    sub.eachCell((cell, col) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.subtotalBg } };
+      cell.font = { bold: col >= 6, size: 10, color: { argb: C.black } };
+      cell.alignment = { vertical: "middle", horizontal: "right" };
+      applyBorder(cell);
+    });
+    sub.getCell(7).numFmt = "$#,##0.00";
+  }
+
+  // ── Grand Total ──
+  const gt = ws.addRow(["", "", "", "", "", "GRAND TOTAL", grandTotal]);
+  gt.height = 22;
+  gt.eachCell((cell, col) => {
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.greenBg } };
+    applyBorder(cell, "medium");
+    if (col >= 6) {
+      cell.font = { bold: true, size: 12, color: { argb: C.white } };
+      cell.alignment = { vertical: "middle", horizontal: "right" };
+    }
+  });
+  gt.getCell(7).numFmt = "$#,##0.00";
+
+  // ── Per-customer breakdown table ──
+  ws.addRow([]);
+  const bkHdr = ws.addRow(["Per Customer Breakdown"]);
+  bkHdr.height = 16; merge(bkHdr.number);
+  Object.assign(bkHdr.getCell(1), {
+    font: { bold: true, size: 11, color: { argb: C.white } },
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: C.navy } },
+    alignment: { vertical: "middle", indent: 1 },
+  }); applyBorder(bkHdr.getCell(1), "medium");
+
+  // Sub-header: merge cols so it fits — use wide 3-col layout A=Customer, B=Code, C-F=categories merged label, G=Total
+  // Just do a simple flat table with as many cols as needed (reuse cols A–G, some merged)
+  const bkColHdr = ws.addRow(["Customer", "Code", ...BILLING_CATEGORIES, "Total"]);
+  // widen to fit — override widths for these extra cols if needed
+  bkColHdr.height = 16;
+  bkColHdr.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: C.white }, size: 10 };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
+    cell.alignment = { vertical: "middle", horizontal: "center" };
+    applyBorder(cell, "medium");
+  });
+  // Extend sheet columns if needed for breakdown table
+  const extraCols = 2 + BILLING_CATEGORIES.length + 1; // Customer + Code + cats + Total
+  if (extraCols > NCOLS) {
+    // add extra column widths
+    for (let i = NCOLS + 1; i <= extraCols; i++) {
+      ws.getColumn(i).width = 16;
+    }
+  }
+
+  for (let i = 0; i < invoices.length; i++) {
+    const inv = invoices[i];
+    const row = ws.addRow([
       inv.customerName || inv.customer,
       inv.customer,
       ...BILLING_CATEGORIES.map((c) => inv.subtotals?.[c] ?? 0),
       inv.total,
     ]);
-    dataRow.eachCell((cell) => {
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.white } };
-      cell.font = { color: { argb: C.black } };
+    row.height = 15;
+    row.eachCell((cell, col) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: i % 2 === 0 ? C.white : C.rowAlt } };
+      cell.font = { size: 10, color: { argb: C.black } };
+      cell.alignment = { vertical: "middle", horizontal: col <= 2 ? "left" : "right" };
       applyBorder(cell);
-      if (Number(cell.col) > 2) {
-        cell.numFmt = "$#,##0.00";
-        cell.alignment = { horizontal: "right" };
-      }
+      if (col > 2) cell.numFmt = "$#,##0.00";
     });
   }
 
-  // Totals row — dark bg, white bold
-  const totRow = summaryWs.addRow([
+  // Grand total row for breakdown table
+  const bkTot = ws.addRow([
     "TOTAL", "",
-    ...BILLING_CATEGORIES.map((c) =>
-      invoices.reduce((s, inv) => s + (inv.subtotals?.[c] ?? 0), 0)
-    ),
+    ...BILLING_CATEGORIES.map((c) => invoices.reduce((s, inv) => s + (inv.subtotals?.[c] ?? 0), 0)),
     invoices.reduce((s, inv) => s + inv.total, 0),
   ]);
-  totRow.eachCell((cell) => {
-    cell.font = { bold: true, color: { argb: C.white } };
+  bkTot.height = 18;
+  bkTot.eachCell((cell, col) => {
+    cell.font = { bold: true, color: { argb: C.white }, size: 10 };
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.greenBg } };
     applyBorder(cell, "medium");
-    if (Number(cell.col) > 2) {
-      cell.numFmt = "$#,##0.00";
-      cell.alignment = { horizontal: "right" };
-    }
+    if (col > 2) { cell.numFmt = "$#,##0.00"; cell.alignment = { horizontal: "right" }; }
   });
+
+  // Generated note
+  ws.addRow([]);
+  const genR = ws.addRow([`Generated: ${new Date().toLocaleDateString("en-US")}`]);
+  merge(genR.number);
+  genR.getCell(1).font = { italic: true, size: 9, color: { argb: C.border } };
 
   // ── One sheet per customer ──
   const usedNames = new Set<string>();
