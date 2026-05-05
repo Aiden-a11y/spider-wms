@@ -8,6 +8,8 @@
 import { NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+export const maxDuration = 300;
+
 const WMS_BASE = "https://us-wms-api.stload.com/api";
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));

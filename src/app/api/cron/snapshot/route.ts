@@ -8,6 +8,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+// Allow up to 300 seconds (Vercel Pro) — prevents 10-second default timeout
+export const maxDuration = 300;
+
 const WMS_BASE = "https://us-wms-api.stload.com/api";
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -86,6 +89,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Token not found in login response" }, { status: 500 });
   }
 
+  const usingServiceKey = !!process.env.SUPABASE_SERVICE_ROLE_KEY;
   const sb = createClient(supabaseUrl, supabaseKey);
   const capturedAt = new Date().toISOString();
   const today = new Date().toLocaleDateString("en-CA", {
@@ -233,6 +237,7 @@ export async function GET(req: NextRequest) {
     captured_at: capturedAt,
     inserted: totalInserted,
     warehouses: warehouses.length,
+    supabase_key_type: usingServiceKey ? "service_role" : "anon",
     errors: errors.length > 0 ? errors : undefined,
   });
 }
