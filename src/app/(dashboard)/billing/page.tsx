@@ -18,6 +18,7 @@ import {
   Table2,
   Upload,
   BarChart3,
+  Calculator,
 } from "lucide-react";
 
 // Raw WMS orders collected during auto-fetch (shown in Source Data panel)
@@ -1059,6 +1060,10 @@ export default function BillingPage() {
   const [editGroup, setEditGroup] = useState<BillingInvoice[]>([]);
   const [activeIdx, setActiveIdx] = useState(0);
 
+  // ── extra tabs: Rate Table / OM Subsidy ──
+  const [extraTab, setExtraTab] = useState<"none" | "rate-table" | "om-subsidy">("none");
+  const [omWages, setOmWages] = useState<string>("");
+
   // ── new invoice form: multi-select ──
   const [isMultiSelect, setIsMultiSelect] = useState(false);
   const [selectedCustomers, setSelectedCustomers] = useState<string[]>([]);
@@ -1303,6 +1308,7 @@ export default function BillingPage() {
     setEditGroup(group);
     setEditing(JSON.parse(JSON.stringify(group[idx])));
     setActiveIdx(idx);
+    setExtraTab("none");
     setStorage15(null); setStorageLast(null);
     setFetchMsg(""); setWmsSource(null); setShowSource(false);
   }
@@ -1780,29 +1786,238 @@ export default function BillingPage() {
           </div>
         </div>
 
-        {/* ── Customer tabs (multi-mode) ── */}
-        {isMultiMode && (
-          <div className="flex gap-0 border-b border-slate-200 mb-5 -mx-8 px-8">
-            {editGroup.map((inv, i) => (
-              <button
-                key={inv.customer}
-                onClick={() => switchTab(i)}
-                className={`px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
-                  i === activeIdx
-                    ? "border-blue-600 text-blue-700 bg-blue-50/60"
-                    : "border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50"
-                }`}
-              >
-                {inv.customerName || inv.customer}
-                {inv.total > 0 && (
-                  <span className={`ml-2 text-xs font-semibold ${i === activeIdx ? "text-blue-500" : "text-slate-400"}`}>
-                    {formatUSD(inv.total)}
-                  </span>
-                )}
-              </button>
+        {/* ── Tabs: Customer tabs (multi-mode) + Rate Table + OM Subsidy ── */}
+        <div className="flex gap-0 border-b border-slate-200 mb-5 -mx-8 px-8">
+          {/* Customer tabs — only in multi-mode */}
+          {isMultiMode && editGroup.map((inv, i) => (
+            <button
+              key={inv.customer}
+              onClick={() => switchTab(i)}
+              className={`px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
+                extraTab === "none" && i === activeIdx
+                  ? "border-blue-600 text-blue-700 bg-blue-50/60"
+                  : "border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50"
+              }`}
+            >
+              {inv.customerName || inv.customer}
+              {inv.total > 0 && (
+                <span className={`ml-2 text-xs font-semibold ${extraTab === "none" && i === activeIdx ? "text-blue-500" : "text-slate-400"}`}>
+                  {formatUSD(inv.total)}
+                </span>
+              )}
+            </button>
+          ))}
+
+          {/* Divider */}
+          {isMultiMode && <div className="flex-1" />}
+
+          {/* Rate Table tab */}
+          <button
+            onClick={() => setExtraTab(extraTab === "rate-table" ? "none" : "rate-table")}
+            className={`px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+              extraTab === "rate-table"
+                ? "border-slate-700 text-slate-900 bg-slate-50"
+                : "border-transparent text-slate-400 hover:text-slate-700 hover:bg-slate-50"
+            }`}
+          >
+            <FileText className="w-3.5 h-3.5" />
+            Rate Table
+          </button>
+
+          {/* OM Subsidy tab */}
+          <button
+            onClick={() => setExtraTab(extraTab === "om-subsidy" ? "none" : "om-subsidy")}
+            className={`px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+              extraTab === "om-subsidy"
+                ? "border-purple-600 text-purple-700 bg-purple-50/60"
+                : "border-transparent text-slate-400 hover:text-slate-700 hover:bg-slate-50"
+            }`}
+          >
+            <Calculator className="w-3.5 h-3.5" />
+            OM Subsidy
+          </button>
+        </div>
+
+        {/* ── Rate Table panel ── */}
+        {extraTab === "rate-table" && (
+          <div className="space-y-6 pb-8">
+            {(
+              [
+                { label: "1. Inbound Handling", rows: [
+                  ["Standard Inbound — Carton", "$2.00", "per carton"],
+                  ["Standard Inbound — Pallet (LTL/LCL)", "$8.00", "per pallet"],
+                  ["20' Container (Palletized)", "$150.00", "per container"],
+                  ["40' Container (Palletized)", "$250.00", "per container"],
+                  ["40' HC Container (Palletized)", "$300.00", "per container"],
+                  ["20' Container (Floor Loaded)", "$350.00", "per container"],
+                  ["40' Container (Floor Loaded)", "$450.00", "per container"],
+                  ["40' HC Container (Floor Loaded)", "$500.00", "per container"],
+                  ["Additional Labor (QC / Counting)", "$35.00", "per person/hr"],
+                ]},
+                { label: "2. Storage (avg of 15th & last day)", rows: [
+                  ["Bin (8\"×30\"×12\" / 1.7 cuft)", "$0.52", "per bin/month"],
+                  ["Shelf (12.75\"×42\"×22\" / 6.8 cuft)", "$2.10", "per shelf/month"],
+                  ["Carton (16\"×42\"×25.5\" / 9.9 cuft)", "$3.05", "per carton/month"],
+                  ["Pallet Short (48\"×40\"×35.5\" / 39.4 cuft)", "$12.15", "per pallet/month"],
+                  ["Pallet Regular (48\"×40\"×73\" / 81.1 cuft)", "$25.00", "per pallet/month"],
+                  ["Pallet Tall (48\"×40\"×97\" / 107.8 cuft)", "$33.23", "per pallet/month"],
+                  ["Open Floor", "$50.00", "per spot/month"],
+                ]},
+                { label: "3. Fulfillment — B2B", rows: [
+                  ["B2B Order Processing", "$4.00", "per order"],
+                  ["B2B Picking (Piece)", "$0.25", "per piece"],
+                  ["B2B Picking (Full Carton)", "$1.25", "per carton"],
+                  ["B2B Picking (Full Pallet)", "$6.50", "per pallet"],
+                  ["B2B Carton Packing", "$1.25", "per carton/bag"],
+                  ["B2B Palletizing w/ Stretch Wrap", "$12.00", "per pallet"],
+                ]},
+                { label: "4. Fulfillment — B2C", rows: [
+                  ["B2C Order Processing (up to 5 picks)", "$2.00", "per order"],
+                  ["B2C Picking (after 5th pick)", "$0.20", "per pick"],
+                  ["B2C Fragile Pack", "$0.25", "per item"],
+                  ["Order Inserts (BOL, packing list…)", "$0.10", "per insert"],
+                  ["Label", "$0.20", "per label / shipping unit"],
+                ]},
+                { label: "5. Return Management", rows: [
+                  ["Return Receiving (incl. Inspection)", "$1.50", "per order"],
+                  ["Return Restock", "$0.25", "per piece"],
+                  ["Disposal", "Cost + 10%", ""],
+                ]},
+                { label: "6. Warehouse Labor", rows: [
+                  ["Regular Time (General Labor)", "$35.00", "per person/hr"],
+                  ["Weekday After-Hours (1.5× OT)", "$52.50", "per person/hr"],
+                  ["Weekend / Holiday (2× OT)", "$70.00", "per person/hr"],
+                ]},
+              ] as { label: string; rows: string[][] }[]
+            ).map(({ label, rows }) => (
+              <div key={label} className="rounded-xl border border-slate-200 overflow-hidden">
+                <div className="bg-slate-800 text-white text-sm font-semibold px-4 py-2.5">{label}</div>
+                <table className="w-full text-sm">
+                  <tbody>
+                    {rows.map(([desc, rate, unit]) => (
+                      <tr key={desc} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+                        <td className="px-4 py-2.5 text-slate-700 w-full">{desc}</td>
+                        <td className="px-4 py-2.5 text-right font-mono font-semibold text-slate-900 whitespace-nowrap">{rate}</td>
+                        <td className="px-4 py-2.5 text-slate-400 text-xs whitespace-nowrap text-right">{unit}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             ))}
+            <p className="text-xs text-slate-400 text-right">Rate version: {RATE_VERSION}</p>
           </div>
         )}
+
+        {/* ── OM Subsidy panel ── */}
+        {extraTab === "om-subsidy" && (() => {
+          const S = OM_SUBSIDY;
+          const wages = parseFloat(omWages) || 0;
+          // FICA
+          const fica = wages * S.employerTaxRate;
+          // Workers Comp — derive net rate from company-wide blended actual vs expected
+          const wcExpected = S.wcWarehouseExp * S.wcRate + S.wcOfficeExp * S.wcOfficeRate + S.wcSalesExp * S.wcSalesRate;
+          const wcDiscount = 1 - S.wcActualPremium / wcExpected;
+          const wcNetRate = S.wcRate * (1 - wcDiscount);
+          const wc = wages * wcNetRate;
+          // GL Insurance
+          const glRate = S.glAnnualPremium / S.glRevenueBase;
+          const gl = wages * glRate;
+          // Dental + Medical
+          const dental = S.dental;
+          const medical = S.medical;
+          // Total overhead (monthly)
+          const totalOverhead = fica + wc + gl + dental + medical;
+          // STL allocation
+          const stlAlloc = totalOverhead * S.allocToSTL;
+
+          const row = (label: string, value: number | string, highlight = false, sub = false) => (
+            <tr key={label} className={`border-b border-slate-100 last:border-0 ${highlight ? "bg-purple-50" : sub ? "bg-slate-50/50" : ""}`}>
+              <td className={`px-4 py-2.5 ${sub ? "pl-8 text-slate-500 text-sm" : "text-slate-700"}`}>{label}</td>
+              <td className={`px-4 py-2.5 text-right font-mono whitespace-nowrap ${highlight ? "font-bold text-purple-800 text-base" : "text-slate-800"}`}>
+                {typeof value === "number" ? (wages > 0 || highlight ? `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—") : value}
+              </td>
+            </tr>
+          );
+
+          return (
+            <div className="space-y-6 pb-8 max-w-2xl">
+              <div className="rounded-xl border border-slate-200 overflow-hidden">
+                <div className="bg-purple-700 text-white text-sm font-semibold px-4 py-2.5">OM Subsidy Calculator</div>
+                <table className="w-full text-sm">
+                  <tbody>
+                    {/* Input */}
+                    <tr className="border-b border-slate-200 bg-yellow-50">
+                      <td className="px-4 py-3 font-semibold text-slate-800">Total Taxable Wages (monthly)</td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <span className="text-slate-500">$</span>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={omWages}
+                            onChange={e => setOmWages(e.target.value)}
+                            placeholder="0.00"
+                            className="w-36 text-right border border-yellow-300 bg-yellow-50 focus:bg-white focus:border-blue-400 rounded px-2 py-1 text-sm font-mono outline-none"
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                    {row("Employer FICA (7.65%)", fica)}
+                    {row("Workers' Comp (net after discount)", wc)}
+                    {row("GL Insurance", gl)}
+                    {row("Dental (fixed)", dental)}
+                    {row("Medical (fixed)", medical)}
+                    <tr className="border-b border-slate-200 bg-slate-100">
+                      <td className="px-4 py-2.5 font-semibold text-slate-800">Total Overhead</td>
+                      <td className="px-4 py-2.5 text-right font-mono font-semibold text-slate-900">
+                        {wages > 0 ? `$${totalOverhead.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+                      </td>
+                    </tr>
+                    <tr className="border-b border-slate-100 bg-purple-50">
+                      <td className="px-4 py-2.5 font-bold text-purple-900">× 40% STL Allocation</td>
+                      <td className="px-4 py-2.5 text-right font-mono font-bold text-purple-900 text-base">
+                        {wages > 0 ? `$${stlAlloc.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Reference rates */}
+              <div className="rounded-xl border border-slate-200 overflow-hidden">
+                <div className="bg-slate-700 text-white text-sm font-semibold px-4 py-2.5">Reference Rates</div>
+                <table className="w-full text-sm">
+                  <tbody>
+                    <tr className="border-b border-slate-100">
+                      <td className="px-4 py-2 text-slate-500">WC Warehouse Rate</td>
+                      <td className="px-4 py-2 text-right font-mono text-slate-700">{(S.wcRate * 100).toFixed(2)}%</td>
+                    </tr>
+                    <tr className="border-b border-slate-100">
+                      <td className="px-4 py-2 text-slate-500">WC Discount (company-wide)</td>
+                      <td className="px-4 py-2 text-right font-mono text-slate-700">{(wcDiscount * 100).toFixed(2)}%</td>
+                    </tr>
+                    <tr className="border-b border-slate-100">
+                      <td className="px-4 py-2 text-slate-500">WC Net Rate (after discount)</td>
+                      <td className="px-4 py-2 text-right font-mono text-slate-700">{(wcNetRate * 100).toFixed(4)}%</td>
+                    </tr>
+                    <tr className="border-b border-slate-100">
+                      <td className="px-4 py-2 text-slate-500">GL Insurance Rate (annual premium / revenue)</td>
+                      <td className="px-4 py-2 text-right font-mono text-slate-700">{(glRate * 100).toFixed(4)}%</td>
+                    </tr>
+                    <tr>
+                      <td className="px-4 py-2 text-slate-500">STL Allocation</td>
+                      <td className="px-4 py-2 text-right font-mono text-slate-700">{(S.allocToSTL * 100).toFixed(0)}%</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ── Invoice content (hidden when extra tab is active) ── */}
+        {extraTab === "none" && <>
 
         {/* Fetch message */}
         {fetchMsg && (
@@ -2378,6 +2593,9 @@ export default function BillingPage() {
             </div>
           </div>
         </div>
+
+        {/* end extraTab === "none" */}
+        </>}
 
         {/* ── Combined grand total bar (multi-mode) ── */}
         {isMultiMode && (() => {
