@@ -67,9 +67,18 @@ export async function GET(req: NextRequest) {
     latestCount = count;
   }
 
+  // Debug env var presence
+  const svcKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const envDiag = {
+    SERVICE_ROLE_KEY: svcKey === undefined ? "undefined" : svcKey === "" ? "empty_string" : `set(len:${svcKey.length})`,
+    ANON_KEY: anonKey === undefined ? "undefined" : anonKey === "" ? "empty_string" : `set(len:${anonKey.length})`,
+  };
+
   return NextResponse.json({
     ok: true,
-    supabase_key_type: process.env.SUPABASE_SERVICE_ROLE_KEY ? "service_role" : "anon",
+    supabase_key_type: svcKey ? "service_role" : "anon",
+    env_diag: envDiag,
     today_la: new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" }),
     latest_snapshot: dates[0]
       ? {
