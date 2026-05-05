@@ -1659,6 +1659,17 @@ export default function BillingPage() {
     await loadList();
   }
 
+  // ── delete group (all invoices in the combined group) ──
+  async function deleteGroup(ginvs: BillingInvoice[]) {
+    if (!confirm(`Delete all ${ginvs.length} invoices in this group?`)) return;
+    await Promise.all(
+      ginvs.map((inv) =>
+        fetch(`/api/billing/invoices?id=${encodeURIComponent(inv.id)}`, { method: "DELETE" })
+      )
+    );
+    await loadList();
+  }
+
   function toggleCollapse(cat: BillingCategory) {
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -2695,6 +2706,10 @@ export default function BillingPage() {
                           <button onClick={() => exportAllToExcel(ginvs, groupPeriod).catch(console.error)}
                             className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Export Combined Excel">
                             <Download className="w-3.5 h-3.5" />
+                          </button>
+                          <button onClick={() => deleteGroup(ginvs)}
+                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Delete Group">
+                            <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       </td>
