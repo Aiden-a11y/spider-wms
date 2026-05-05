@@ -316,6 +316,434 @@ function addRawDataSheets(wb: ExcelJS.Workbook, source: WmsSource) {
   }
 }
 
+// ── Rate Table sheet ─────────────────────────────────────────────────────────
+function addRateTableSheet(wb: ExcelJS.Workbook) {
+  const ws = wb.addWorksheet("Rate Table");
+  ws.columns = [{ width: 40 }, { width: 16 }, { width: 22 }];
+
+  const addTitle = (text: string) => {
+    const r = ws.addRow([text]);
+    r.height = 18;
+    ws.mergeCells(`A${r.number}:C${r.number}`);
+    Object.assign(r.getCell(1), {
+      font: { bold: true, size: 11, color: { argb: C.white } },
+      fill: { type: "pattern", pattern: "solid", fgColor: { argb: C.navy } },
+      alignment: { horizontal: "center", vertical: "middle" },
+    });
+    applyBorder(r.getCell(1), "medium");
+    return r;
+  };
+  const addHeader = () => {
+    const r = ws.addRow(["Description", "Rate", "Unit"]);
+    r.height = 15;
+    r.eachCell(c => {
+      c.font = { bold: true, size: 10, color: { argb: C.white } };
+      c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
+      c.alignment = { horizontal: "center", vertical: "middle" };
+      applyBorder(c, "medium");
+    });
+  };
+  const addRow = (desc: string, rate: string, unit: string, shade: boolean) => {
+    const r = ws.addRow([desc, rate, unit]);
+    r.height = 14;
+    const bg = shade ? C.rowAlt : C.white;
+    r.eachCell((c, i) => {
+      c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } };
+      c.font = { size: 10 };
+      c.alignment = { horizontal: i === 1 ? "left" : "center", vertical: "middle" };
+      applyBorder(c);
+    });
+  };
+  const blank = () => ws.addRow([]);
+
+  // ── 1. Inbound ──
+  addTitle("1. Inbound Handling");
+  addHeader();
+  const inbound = [
+    ["Order Processing", "Waived", "per receiving order"],
+    ["Standard Inbound — Carton (Small Parcel)", "$2.00", "per carton"],
+    ["Standard Inbound — Pallet (LTL/LCL)", "$8.00", "per pallet"],
+    ["20' Container (Palletized)", "$150.00", "per container"],
+    ["40' Container (Palletized)", "$250.00", "per container"],
+    ["40' HC Container (Palletized)", "$300.00", "per container"],
+    ["20' Container (Floor Loaded)", "$350.00", "per container"],
+    ["40' Container (Floor Loaded)", "$450.00", "per container"],
+    ["40' HC Container (Floor Loaded)", "$500.00", "per container"],
+    ["Additional Labor (QC / Counting)", "$35.00", "per person/hr"],
+  ];
+  inbound.forEach((row, i) => addRow(row[0], row[1], row[2], i % 2 === 1));
+  blank();
+
+  // ── 2. Storage ──
+  addTitle("2. Storage (avg of 15th & last day of month)");
+  addHeader();
+  const storage = [
+    ["Bin (8\"×30\"×12\" / 1.7 cuft)", "$0.52", "per bin/month"],
+    ["Shelf (12.75\"×42\"×22\" / 6.8 cuft)", "$2.10", "per shelf/month"],
+    ["Carton (16\"×42\"×25.5\" / 9.9 cuft)", "$3.05", "per carton/month"],
+    ["Pallet Short (48\"×40\"×35.5\" / 39.4 cuft)", "$12.15", "per pallet/month"],
+    ["Pallet Regular (48\"×40\"×73\" / 81.1 cuft)", "$25.00", "per pallet/month"],
+    ["Pallet Tall (48\"×40\"×97\" / 107.8 cuft)", "$33.23", "per pallet/month"],
+    ["Open Floor", "$50.00", "per spot/month"],
+  ];
+  storage.forEach((row, i) => addRow(row[0], row[1], row[2], i % 2 === 1));
+  blank();
+
+  // ── 3. Fulfillment B2B ──
+  addTitle("3. Fulfillment — B2B");
+  addHeader();
+  const b2b = [
+    ["Order Processing", "$4.00", "per order"],
+    ["Picking — Piece", "$0.25", "per piece"],
+    ["Picking — Full Carton", "$1.25", "per carton"],
+    ["Picking — Full Pallet", "$6.50", "per pallet"],
+    ["Carton Packing", "$1.25", "per carton/bag"],
+    ["Palletizing w/ Stretch Wrap", "$12.00", "per pallet"],
+  ];
+  b2b.forEach((row, i) => addRow(row[0], row[1], row[2], i % 2 === 1));
+  blank();
+
+  // ── 4. Fulfillment B2C ──
+  addTitle("4. Fulfillment — B2C");
+  addHeader();
+  const b2c = [
+    ["Order Processing (up to 5 picks)", "$2.00", "per order"],
+    ["Picking — Piece (after 5th pick)", "$0.20", "per pick"],
+    ["Fragile Pack", "$0.25", "per item"],
+    ["Order Inserts (BOL, packing list…)", "$0.10", "per insert"],
+    ["Label / Shipping Unit", "$0.20", "per label"],
+  ];
+  b2c.forEach((row, i) => addRow(row[0], row[1], row[2], i % 2 === 1));
+  blank();
+
+  // ── 5. Return Management ──
+  addTitle("5. Return Management");
+  addHeader();
+  const returns = [
+    ["Return Receiving (incl. Inspection)", "$1.50", "per order"],
+    ["Return Restock", "$0.25", "per piece"],
+    ["Disposal", "Cost + 10%", ""],
+  ];
+  returns.forEach((row, i) => addRow(row[0], row[1], row[2], i % 2 === 1));
+  blank();
+
+  // ── 6. Warehouse Labor ──
+  addTitle("6. Warehouse Labor");
+  addHeader();
+  const labor = [
+    ["Regular Time", "$35.00", "per person/hr"],
+    ["Weekday After-Hours (1.5×)", "$52.50", "per person/hr"],
+    ["Weekend / Holiday (2×)", "$70.00", "per person/hr"],
+  ];
+  labor.forEach((row, i) => addRow(row[0], row[1], row[2], i % 2 === 1));
+
+  // Footer note
+  blank();
+  const note = ws.addRow(["Rate ver. 2026-02-17  |  CTK Rate Offer for STL"]);
+  note.getCell(1).font = { italic: true, size: 9, color: { argb: "FF888888" } };
+  ws.mergeCells(`A${note.number}:C${note.number}`);
+}
+
+// ── OM Subsidy sheet ──────────────────────────────────────────────────────────
+// Constants (update annually)
+const OM_SUBSIDY = {
+  employerTaxRate:   0.0765,   // FICA
+  dental:            31.39,    // fixed monthly
+  medical:           542.55,   // fixed monthly
+  wcRate:            0.1185,   // workers comp rate (warehouse)
+  // Company-wide WC to derive discount rate
+  wcWarehouseExp:    750685,
+  wcOfficeExp:       480438,
+  wcSalesExp:        52548,
+  wcOfficeRate:      0.0046,
+  wcSalesRate:       0.0069,
+  wcActualPremium:   52482,    // actual premium paid (for discount calc)
+  glAnnualPremium:   122889.91,
+  glRevenueBase:     6600000,
+  allocToSTL:        0.40,
+} as const;
+
+function addOmSubsidySheet(wb: ExcelJS.Workbook) {
+  const ws = wb.addWorksheet("OM Subsidy");
+  ws.columns = [{ width: 32 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 12 }, { width: 18 }, { width: 14 }];
+
+  const S = OM_SUBSIDY;
+
+  // Helpers
+  const title = (text: string) => {
+    const r = ws.addRow([text]);
+    r.height = 22;
+    ws.mergeCells(`A${r.number}:G${r.number}`);
+    Object.assign(r.getCell(1), {
+      font: { bold: true, size: 13, color: { argb: C.white } },
+      fill: { type: "pattern", pattern: "solid", fgColor: { argb: C.navy } },
+      alignment: { horizontal: "center", vertical: "middle" },
+    });
+    applyBorder(r.getCell(1), "medium");
+  };
+  const label = (text: string, indent = false) => {
+    const r = ws.addRow([indent ? `    ${text}` : text]);
+    r.height = 14;
+    r.getCell(1).font = { size: 10, italic: indent };
+    return r;
+  };
+  const dataRow = (desc: string, amount: number | string, pctOf?: number, bold = false, highlight = false) => {
+    const pct = typeof pctOf === "number" && typeof amount === "number"
+      ? `${((amount / pctOf) * 100).toFixed(2)}%` : "";
+    const r = ws.addRow([desc, typeof amount === "number" ? amount : "", pct]);
+    r.height = 15;
+    const amtCell = r.getCell(2);
+    const pctCell = r.getCell(3);
+    amtCell.numFmt = '"$"#,##0.00';
+    amtCell.alignment = { horizontal: "right" };
+    pctCell.alignment = { horizontal: "right" };
+    pctCell.font = { size: 10, color: { argb: "FF666666" } };
+    r.getCell(1).font = { bold, size: 10 };
+    amtCell.font = { bold, size: 10 };
+    if (highlight) {
+      [1,2,3].forEach(i => {
+        r.getCell(i).fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.greenBg } };
+        r.getCell(i).font = { bold: true, size: 11, color: { argb: C.white } };
+      });
+    }
+    [1,2,3].forEach(i => applyBorder(r.getCell(i)));
+    return r;
+  };
+  const inputRow = (rowNum: number) => {
+    // Highlight the input cell yellow
+    const cell = ws.getCell(`B${rowNum}`);
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
+    cell.font = { bold: true, size: 11, color: { argb: "FF333333" } };
+    cell.border = { top: { style: "medium" }, bottom: { style: "medium" }, left: { style: "medium" }, right: { style: "medium" } };
+    const note = ws.getCell(`D${rowNum}`);
+    note.value = "← Enter Total Taxable Wages here";
+    note.font = { italic: true, size: 9, color: { argb: "FFDD6600" } };
+    ws.mergeCells(`D${rowNum}:G${rowNum}`);
+  };
+
+  // ── Header ──
+  title("Subsidy for OM (Aiden Kim)");
+  // Column headers row
+  const hdr = ws.addRow(["Description", "Amount", "% of Gross Wage"]);
+  hdr.height = 15; hdr.eachCell((c, i) => {
+    if (i > 3) return;
+    c.font = { bold: true, size: 10, color: { argb: C.white } };
+    c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
+    c.alignment = { horizontal: "center" };
+    applyBorder(c, "medium");
+  });
+
+  // ── Total Taxable Wages (INPUT) ──
+  // Pre-fill with 0 so formulas don't break; user edits B4
+  const wageRow = ws.addRow(["Total Taxable Wages", 0, "100.00%"]);
+  wageRow.height = 16;
+  wageRow.getCell(1).font = { bold: true, size: 10 };
+  wageRow.getCell(2).numFmt = '"$"#,##0.00';
+  wageRow.getCell(2).alignment = { horizontal: "right" };
+  [1,2,3].forEach(i => applyBorder(wageRow.getCell(i)));
+  const wageRowNum = wageRow.number;
+  inputRow(wageRowNum);
+
+  ws.addRow([]); // blank
+  label("Overhead");
+
+  // ── 1. Employer Tax ──
+  const etRow = ws.addRow(["1. Employer Tax",
+    { formula: `ROUND(B${wageRowNum}*${S.employerTaxRate},2)` },
+    { formula: `IF(B${wageRowNum}>0,ROUND(B${wageRowNum}*${S.employerTaxRate},2)/B${wageRowNum},0)` },
+  ]);
+  etRow.height = 14;
+  etRow.getCell(2).numFmt = '"$"#,##0.00'; etRow.getCell(2).alignment = { horizontal: "right" };
+  etRow.getCell(3).numFmt = "0.00%"; etRow.getCell(3).alignment = { horizontal: "right" };
+  etRow.getCell(3).font = { size: 10, color: { argb: "FF666666" } };
+  [1,2,3].forEach(i => applyBorder(etRow.getCell(i)));
+  const etRowNum = etRow.number;
+
+  ws.addRow([]);
+  label("2. Benefits");
+
+  // Dental
+  const dentalRow = ws.addRow(["    Health Insurance — Dental", S.dental,
+    { formula: `IF(B${wageRowNum}>0,${S.dental}/B${wageRowNum},0)` }]);
+  dentalRow.height = 14; dentalRow.getCell(2).numFmt = '"$"#,##0.00';
+  dentalRow.getCell(2).alignment = { horizontal: "right" };
+  dentalRow.getCell(3).numFmt = "0.00%"; dentalRow.getCell(3).alignment = { horizontal: "right" };
+  dentalRow.getCell(3).font = { size: 10, color: { argb: "FF666666" } };
+  [1,2,3].forEach(i => applyBorder(dentalRow.getCell(i)));
+  const dentalRowNum = dentalRow.number;
+
+  // Medical
+  const medRow = ws.addRow(["    Health Insurance — Medical", S.medical,
+    { formula: `IF(B${wageRowNum}>0,${S.medical}/B${wageRowNum},0)` }]);
+  medRow.height = 14; medRow.getCell(2).numFmt = '"$"#,##0.00';
+  medRow.getCell(2).alignment = { horizontal: "right" };
+  medRow.getCell(3).numFmt = "0.00%"; medRow.getCell(3).alignment = { horizontal: "right" };
+  medRow.getCell(3).font = { size: 10, color: { argb: "FF666666" } };
+  [1,2,3].forEach(i => applyBorder(medRow.getCell(i)));
+  const medRowNum = medRow.number;
+
+  ws.addRow([]);
+  label("3. Insurance");
+
+  // Workers Comp — calculated from company-wide discount
+  // WC base premium (company-wide)
+  const wcBasePremium = S.wcWarehouseExp * S.wcRate + S.wcOfficeExp * S.wcOfficeRate + S.wcSalesExp * S.wcSalesRate;
+  const wcDiscountRate = 1 - S.wcActualPremium / wcBasePremium; // ~42.66%
+  const wcNetRate = S.wcRate * (1 - wcDiscountRate);
+  const wcRow = ws.addRow(["    Workers Comp",
+    { formula: `ROUND(B${wageRowNum}*${wcNetRate.toFixed(6)},2)` },
+    { formula: `IF(B${wageRowNum}>0,ROUND(B${wageRowNum}*${wcNetRate.toFixed(6)},2)/B${wageRowNum},0)` },
+  ]);
+  wcRow.height = 14; wcRow.getCell(2).numFmt = '"$"#,##0.00';
+  wcRow.getCell(2).alignment = { horizontal: "right" };
+  wcRow.getCell(3).numFmt = "0.00%"; wcRow.getCell(3).alignment = { horizontal: "right" };
+  wcRow.getCell(3).font = { size: 10, color: { argb: "FF666666" } };
+  [1,2,3].forEach(i => applyBorder(wcRow.getCell(i)));
+  const wcRowNum = wcRow.number;
+
+  // General Liability
+  const glRate = S.glAnnualPremium / S.glRevenueBase; // ~1.862%
+  const glRow = ws.addRow(["    General Liability Insurance",
+    { formula: `ROUND(B${wageRowNum}*${glRate.toFixed(6)},2)` },
+    { formula: `IF(B${wageRowNum}>0,ROUND(B${wageRowNum}*${glRate.toFixed(6)},2)/B${wageRowNum},0)` },
+  ]);
+  glRow.height = 14; glRow.getCell(2).numFmt = '"$"#,##0.00';
+  glRow.getCell(2).alignment = { horizontal: "right" };
+  glRow.getCell(3).numFmt = "0.00%"; glRow.getCell(3).alignment = { horizontal: "right" };
+  glRow.getCell(3).font = { size: 10, color: { argb: "FF666666" } };
+  [1,2,3].forEach(i => applyBorder(glRow.getCell(i)));
+  const glRowNum = glRow.number;
+
+  ws.addRow([]);
+
+  // Total Overhead
+  const ohRow = ws.addRow(["Total Overhead",
+    { formula: `SUM(B${etRowNum},B${dentalRowNum},B${medRowNum},B${wcRowNum},B${glRowNum})` },
+    { formula: `IF(B${wageRowNum}>0,SUM(B${etRowNum},B${dentalRowNum},B${medRowNum},B${wcRowNum},B${glRowNum})/B${wageRowNum},0)` },
+  ]);
+  ohRow.height = 15;
+  ohRow.getCell(1).font = { bold: true, size: 10 };
+  ohRow.getCell(2).numFmt = '"$"#,##0.00'; ohRow.getCell(2).alignment = { horizontal: "right" };
+  ohRow.getCell(2).font = { bold: true, size: 10 };
+  ohRow.getCell(3).numFmt = "0.00%"; ohRow.getCell(3).alignment = { horizontal: "right" };
+  ohRow.getCell(3).font = { bold: true, size: 10, color: { argb: "FF666666" } };
+  [1,2,3].forEach(i => applyBorder(ohRow.getCell(i)));
+  const ohRowNum = ohRow.number;
+
+  ws.addRow([]);
+
+  // Total Cost
+  const tcRow = ws.addRow(["Total Cost",
+    { formula: `B${wageRowNum}+B${ohRowNum}` },
+  ]);
+  tcRow.height = 15;
+  tcRow.getCell(1).font = { bold: true, size: 10 };
+  tcRow.getCell(2).numFmt = '"$"#,##0.00'; tcRow.getCell(2).alignment = { horizontal: "right" };
+  tcRow.getCell(2).font = { bold: true, size: 10 };
+  [1,2].forEach(i => applyBorder(tcRow.getCell(i)));
+  const tcRowNum = tcRow.number;
+
+  // % Allocated to STL
+  const pctRow = ws.addRow(["% Allocated to STL", S.allocToSTL]);
+  pctRow.height = 14;
+  pctRow.getCell(2).numFmt = "0%"; pctRow.getCell(2).alignment = { horizontal: "right" };
+  [1,2].forEach(i => applyBorder(pctRow.getCell(i)));
+  const pctRowNum = pctRow.number;
+
+  // Charge to STL (highlighted)
+  const chargeRow = ws.addRow(["Charge to STL",
+    { formula: `ROUND(B${tcRowNum}*B${pctRowNum},2)` },
+  ]);
+  chargeRow.height = 18;
+  chargeRow.getCell(2).numFmt = '"$"#,##0.00'; chargeRow.getCell(2).alignment = { horizontal: "right" };
+  [1,2].forEach(i => {
+    chargeRow.getCell(i).fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.greenBg } };
+    chargeRow.getCell(i).font = { bold: true, size: 12, color: { argb: C.white } };
+    applyBorder(chargeRow.getCell(i), "medium");
+  });
+
+  ws.addRow([]);
+  ws.addRow([]);
+
+  // ── Workers Comp detail table ──
+  const wcTitle = ws.addRow(["Workers Comp — Company-wide Detail"]);
+  ws.mergeCells(`A${wcTitle.number}:G${wcTitle.number}`);
+  Object.assign(wcTitle.getCell(1), {
+    font: { bold: true, size: 10, color: { argb: C.white } },
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } },
+    alignment: { horizontal: "center" },
+  }); applyBorder(wcTitle.getCell(1));
+
+  const wcHdr = ws.addRow(["", "Exposure", "Rate", "Premium Base", "%", "Premium after Discount", "Discount Rate"]);
+  wcHdr.height = 14; wcHdr.eachCell(c => {
+    c.font = { bold: true, size: 9, color: { argb: C.white } };
+    c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
+    c.alignment = { horizontal: "center" }; applyBorder(c);
+  });
+
+  const wcWHBase = S.wcWarehouseExp * S.wcRate;
+  const wcOFBase = S.wcOfficeExp * S.wcOfficeRate;
+  const wcSLBase = S.wcSalesExp * S.wcSalesRate;
+  const wcTotalBase = wcWHBase + wcOFBase + wcSLBase;
+  const discPct = 1 - S.wcActualPremium / wcTotalBase;
+
+  const wcDetails = [
+    ["Warehouse", S.wcWarehouseExp, S.wcRate, wcWHBase, wcWHBase/wcTotalBase, wcWHBase*(1-discPct)],
+    ["Office",    S.wcOfficeExp,    S.wcOfficeRate, wcOFBase, wcOFBase/wcTotalBase, wcOFBase*(1-discPct)],
+    ["Sales",     S.wcSalesExp,     S.wcSalesRate,  wcSLBase, wcSLBase/wcTotalBase, wcSLBase*(1-discPct)],
+  ];
+  wcDetails.forEach((d, i) => {
+    const r = ws.addRow([d[0], d[1], d[2], d[3], d[4], d[5], i === 0 ? discPct : ""]);
+    r.height = 14;
+    const bg = i % 2 === 0 ? C.white : C.rowAlt;
+    r.eachCell(c => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } }; c.font = { size: 9 }; applyBorder(c); });
+    r.getCell(2).numFmt = "#,##0"; r.getCell(3).numFmt = "0.00%";
+    r.getCell(4).numFmt = '"$"#,##0.00'; r.getCell(5).numFmt = "0.0%";
+    r.getCell(6).numFmt = '"$"#,##0.00';
+    if (i === 0) { r.getCell(7).numFmt = "0.00%"; r.getCell(7).font = { bold: true, size: 9 }; }
+  });
+  // Total row
+  const wcTot = ws.addRow(["Total", "", "", wcTotalBase, 1, S.wcActualPremium, discPct]);
+  wcTot.height = 14;
+  wcTot.eachCell(c => {
+    c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.rowAlt } };
+    c.font = { bold: true, size: 9 }; applyBorder(c, "medium");
+  });
+  wcTot.getCell(4).numFmt = '"$"#,##0.00'; wcTot.getCell(5).numFmt = "0.0%";
+  wcTot.getCell(6).numFmt = '"$"#,##0.00'; wcTot.getCell(7).numFmt = "0.00%";
+
+  ws.addRow([]);
+
+  // ── GL Insurance detail ──
+  const glTitle = ws.addRow(["General Liability — Annual Reference"]);
+  ws.mergeCells(`A${glTitle.number}:G${glTitle.number}`);
+  Object.assign(glTitle.getCell(1), {
+    font: { bold: true, size: 10, color: { argb: C.white } },
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } },
+    alignment: { horizontal: "center" },
+  }); applyBorder(glTitle.getCell(1));
+
+  const glDetails = [
+    ["Annual Premium", S.glAnnualPremium],
+    ["Revenue Base",   S.glRevenueBase],
+    ["Effective Rate", glRate],
+  ];
+  glDetails.forEach((d, i) => {
+    const r = ws.addRow([d[0], d[1]]);
+    r.height = 14;
+    r.getCell(1).font = { size: 10 };
+    r.getCell(2).numFmt = i === 2 ? "0.000%" : '"$"#,##0.00';
+    r.getCell(2).alignment = { horizontal: "right" };
+    [1,2].forEach(c => applyBorder(r.getCell(c)));
+  });
+
+  // Footer note
+  ws.addRow([]);
+  const fn = ws.addRow(["※ Yellow cell (Total Taxable Wages) is the only manual input. All other values auto-calculate."]);
+  ws.mergeCells(`A${fn.number}:G${fn.number}`);
+  fn.getCell(1).font = { italic: true, size: 9, color: { argb: "FF888888" } };
+}
+
 async function downloadWorkbook(wb: ExcelJS.Workbook, filename: string) {
   const buf = await wb.xlsx.writeBuffer();
   const blob = new Blob([buf], {
@@ -329,12 +757,14 @@ async function downloadWorkbook(wb: ExcelJS.Workbook, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-/** Export a single invoice — one styled sheet + optional raw data tabs */
+/** Export a single invoice — styled sheet + optional raw data tabs + Rate Table + OM Subsidy */
 async function exportInvoiceToExcel(invoice: BillingInvoice, source?: WmsSource | null) {
   const wb = new ExcelJS.Workbook();
   const sheetName = (invoice.customerName || invoice.customer).slice(0, 31);
   fillInvoiceSheet(wb.addWorksheet(sheetName), invoice);
   if (source) addRawDataSheets(wb, source);
+  addRateTableSheet(wb);
+  addOmSubsidySheet(wb);
   await downloadWorkbook(wb, `Invoice_${invoice.customer}_${invoice.period}.xlsx`);
 }
 
@@ -552,6 +982,8 @@ async function exportAllToExcel(invoices: BillingInvoice[], period: string, sour
 
   // ── Raw WMS data tabs ──
   if (source) addRawDataSheets(wb, source);
+  addRateTableSheet(wb);
+  addOmSubsidySheet(wb);
 
   await downloadWorkbook(wb, `Invoice_ALL_${period}.xlsx`);
 }
