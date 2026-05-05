@@ -54,7 +54,7 @@ export async function GET(req: NextRequest) {
   // ── Env check ────────────────────────────────────────────────────────────────
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ??
+    process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SERVICE_ROLE_KEY ??
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!supabaseUrl || !supabaseKey) {
     return NextResponse.json({ error: "Supabase env vars missing" }, { status: 500 });
@@ -89,7 +89,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Token not found in login response" }, { status: 500 });
   }
 
-  const usingServiceKey = !!process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const usingServiceKey = !!(process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SERVICE_ROLE_KEY);
   const sb = createClient(supabaseUrl, supabaseKey);
   const capturedAt = new Date().toISOString();
   const today = new Date().toLocaleDateString("en-CA", {

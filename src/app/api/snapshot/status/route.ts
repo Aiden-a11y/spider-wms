@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ??
+    process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SERVICE_ROLE_KEY ??
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !supabaseKey) {
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
   if (dateErr) {
     return NextResponse.json({
       ok: false,
-      supabase_key_type: process.env.SUPABASE_SERVICE_ROLE_KEY ? "service_role" : "anon",
+      supabase_key_type: process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SERVICE_ROLE_KEY ? "service_role" : "anon",
       error: dateErr.message,
     });
   }
@@ -68,7 +68,7 @@ export async function GET(req: NextRequest) {
   }
 
   // Debug env var presence
-  const svcKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const svcKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SERVICE_ROLE_KEY;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   const envDiag = {
     SERVICE_ROLE_KEY: svcKey === undefined ? "undefined" : svcKey === "" ? "empty_string" : `set(len:${svcKey.length})`,
