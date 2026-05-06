@@ -22,7 +22,7 @@ const TYPE_META: Record<string, {
 };
 
 const STATUS_META: Record<string, { label: string; badge: string }> = {
-  AA: { label: "Pre-Alert",               badge: "bg-yellow-50  text-yellow-700  border-yellow-200"  },
+  AA: { label: "Out-Bound Request",       badge: "bg-yellow-50  text-yellow-700  border-yellow-200"  },
   CA: { label: "Packing Request",         badge: "bg-blue-50    text-blue-700    border-blue-200"    },
   DA: { label: "Packing Complete",        badge: "bg-cyan-50    text-cyan-700    border-cyan-200"    },
   AR: { label: "Auto Label Request",      badge: "bg-violet-50  text-violet-700  border-violet-200"  },
@@ -31,7 +31,7 @@ const STATUS_META: Record<string, { label: string; badge: string }> = {
   L2: { label: "Twinny Cancel Request",   badge: "bg-orange-50  text-orange-700  border-orange-200"  },
   LC: { label: "Twinny Packing Complete", badge: "bg-teal-50    text-teal-700    border-teal-200"    },
   HA: { label: "Hold",                    badge: "bg-red-50     text-red-700     border-red-200"     },
-  CC: { label: "Cancelled",              badge: "bg-slate-100  text-slate-500   border-slate-200"   },
+  CC: { label: "Cancelled Order",         badge: "bg-slate-100  text-slate-500   border-slate-200"   },
   FA: { label: "Complete",               badge: "bg-green-50   text-green-700   border-green-200"   },
 };
 const statusBadge  = (c: string) => STATUS_META[c]?.badge  ?? "bg-slate-100 text-slate-500 border-slate-200";
@@ -864,7 +864,8 @@ export default function ShippingTypePage() {
                   <h2 className="font-semibold text-slate-900 text-sm">{meta.label} — {orderCode}</h2>
                   {!!d.status && (
                     <span className={`text-xs font-medium px-2 py-0.5 rounded-full border mt-0.5 inline-block ${statusBadge(String(d.status ?? d.orderStatus))}`}>
-                      {String(d.status ?? d.orderStatus)} — {d.statusName ? String(d.statusName) : statusLabel(String(d.status ?? d.orderStatus))}
+                      {d.statusName ? String(d.statusName) : statusLabel(String(d.status ?? d.orderStatus))}
+                      {" "}({String(d.status ?? d.orderStatus)})
                     </span>
                   )}
                 </div>
@@ -948,7 +949,8 @@ export default function ShippingTypePage() {
                     <div className="mb-4">
                       <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">Current</p>
                       <span className={`text-xs font-medium px-2.5 py-1 rounded-full border ${statusBadge(String(d.status))}`}>
-                        {String(d.status)} — {statusLabel(String(d.status))}
+                        {d.statusName ? String(d.statusName) : statusLabel(String(d.status))}
+                        {" "}({String(d.status)})
                       </span>
                     </div>
                   )}
@@ -1050,7 +1052,8 @@ export default function ShippingTypePage() {
                       <div>
                         <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">Status</p>
                         <span className={`text-sm font-semibold px-2.5 py-1 rounded-full border ${statusBadge(String(d.status ?? d.orderStatus ?? ""))}`}>
-                          {String(d.status ?? d.orderStatus ?? "-")} — {d.statusName ? String(d.statusName) : statusLabel(String(d.status ?? d.orderStatus ?? "-"))}
+                          {d.statusName ? String(d.statusName) : statusLabel(String(d.status ?? d.orderStatus ?? "-"))}
+                          {" "}({String(d.status ?? d.orderStatus ?? "-")})
                         </span>
                       </div>
                     </div>
