@@ -251,49 +251,61 @@ export default function ShippingTypePage() {
       `/api/wms/shipping/items/${code}`,
     ];
 
-    // fetch detail
-    let detailFound = false;
+    // ── Step 1: set detail from list-row immediately so UI isn't blank
+    setDetail(order); setDetailLoading(false);
+
+    // ── Step 2: try GET detail endpoints for extra fields (address, pkg, etc.)
+    //   Always merge back onto `order` so we never lose status from the list row.
     for (const ep of detailEndpoints) {
       try {
         const res  = await fetch(ep, { headers });
-        const json = await res.json();
-        const d    = json?.data ?? json;
-        if (res.ok && d && typeof d === "object" && !Array.isArray(d)) {
-          setDetail(d as Order); setDetailLoading(false);
-          detailFound = true;
-          break;
-        }
+        const json = await res.json().catch(() => null);
+        if (!res.ok || !json) continue;
+        const fetched = (json?.data ?? json) as Record<string, unknown>;
+        if (!fetched || typeof fetched !== "object" || Array.isArray(fetched)) continue;
+        // Only accept if it looks like a real order (has at least one order-code field)
+        const hasCode = fetched.shippingOrderCode ?? fetched.orderCode ?? fetched.outboundCode;
+        if (!hasCode) continue;
+        // Merge: order (list row) wins for status; detail wins for extra fields
+        const mergedStatus = order.status ?? order.orderStatus ?? fetched.status ?? fetched.orderStatus;
+        const mergedOrderStatus = order.orderStatus ?? order.status ?? fetched.orderStatus ?? fetched.status;
+        setDetail({ ...order, ...fetched, status: mergedStatus, orderStatus: mergedOrderStatus });
+        break;
       } catch { /* try next */ }
     }
-    // fallback: show list row data as-is
-    if (!detailFound) { setDetail(order); setDetailLoading(false); }
 
-    // ── Fresh status fetch: query list endpoint filtered by this order code
-    // to always reflect the real-time WMS status regardless of the detail endpoint
+    // ── Step 3: fresh status from WMS — reload the list, find this order
     {
       const whCode   = String(order.warehouseCode ?? order.warehouse ?? warehouseCode ?? "");
       const custCode = String(order.customerCode ?? "");
-      const body: Record<string, unknown> = {
-        page: 1, pageSize: 10, orderType: meta.orderType,
-        warehouseCode: whCode,
-        shippingOrderCode: code,   // primary filter key
-        orderCode: code,           // fallback field name
+      const listBody: Record<string, unknown> = {
+        page: 1, pageSize: 500, orderType: meta.orderType, warehouseCode: whCode,
       };
-      if (custCode) body.customerCode = custCode;
+      if (custCode) listBody.customerCode = custCode;
       for (const ep of [`/api/wms/shipping/${type}/list`, `/api/wms/shipping/list`, `/api/wms/outbound/list`]) {
         try {
-          const res  = await fetch(ep, { method: "POST", headers, body: JSON.stringify(body) });
+          const res  = await fetch(ep, { method: "POST", headers, body: JSON.stringify(listBody) });
           const json = await res.json().catch(() => null);
+          if (!res.ok || !json) continue;
           const list: Record<string, unknown>[] =
             json?.data?.list ?? json?.data?.items ?? json?.data ?? json?.list ?? json?.items ?? (Array.isArray(json) ? json : []);
-          const match = Array.isArray(list) && list.find((r) => {
+          if (!Array.isArray(list) || list.length === 0) continue;
+          const match = list.find((r) => {
             const rc = String(r.shippingOrderCode ?? r.orderCode ?? r.outboundCode ?? "");
             return rc === code;
           });
           if (match) {
             const freshStatus = match.status ?? match.orderStatus;
             if (freshStatus != null) {
-              setDetail((prev) => prev ? { ...prev, status: freshStatus, orderStatus: freshStatus } : match as Order);
+              // Also update the orders list so the table row reflects fresh status
+              setOrders((prev) => prev.map((o) => {
+                const oc = String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? "");
+                return oc === code ? { ...o, status: freshStatus, orderStatus: freshStatus } : o;
+              }));
+              setDetail((prev) => prev
+                ? { ...prev, status: freshStatus, orderStatus: freshStatus }
+                : match as Order
+              );
             }
             break;
           }
