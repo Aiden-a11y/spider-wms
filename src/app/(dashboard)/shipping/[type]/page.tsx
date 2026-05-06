@@ -617,7 +617,15 @@ export default function ShippingTypePage() {
     if (orders.length === 0) return [];
     const keys     = Object.keys(orders[0]);
     const priority = Object.keys(COL_LABELS);
-    return [...priority.filter((k) => keys.includes(k)), ...keys.filter((k) => !priority.includes(k))].slice(0, 10);
+    const raw = [...priority.filter((k) => keys.includes(k)), ...keys.filter((k) => !priority.includes(k))].slice(0, 10);
+    // De-duplicate aliased columns: if both status+orderStatus or qty+totalQty appear, keep only the first
+    const seen = new Set<string>();
+    return raw.filter((k) => {
+      const group = COL_LABELS[k] ?? k;  // group by display label
+      if (seen.has(group)) return false;
+      seen.add(group);
+      return true;
+    });
   }, [orders]);
 
   const colOptions = useMemo(() => {
@@ -828,8 +836,10 @@ export default function ShippingTypePage() {
               </thead>
               <tbody>
                 {filtered.map((order, idx) => {
-                  // Packing info: stored in comment field as "Labels×3, Picking per Piece×1"
+                  // Task check: tasks are saved as "Labels×3, Picking per Piece×1" (contains ×)
+                  // Only show checkmark if comment has actual task entries (not arbitrary comment text)
                   const comment = String(order.comment ?? order.orderComment ?? order.memo ?? "").trim();
+                  const hasTask = comment.includes("×");
                   return (
                     <tr key={idx} onClick={() => openDetail(order)}
                       className="border-b border-slate-100 last:border-0 hover:bg-blue-50 cursor-pointer transition-colors group">
@@ -849,9 +859,9 @@ export default function ShippingTypePage() {
                           </td>
                         );
                       })}
-                      {/* Packing Info cell — ✓ if task/comment exists, empty otherwise */}
+                      {/* Task cell — ✓ only if task items exist (comment contains ×) */}
                       <td className="px-4 py-2.5 text-center">
-                        {comment ? (
+                        {hasTask ? (
                           <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-emerald-100 text-emerald-600" title={comment}>
                             <CheckCircle2 className="w-4 h-4" />
                           </span>
