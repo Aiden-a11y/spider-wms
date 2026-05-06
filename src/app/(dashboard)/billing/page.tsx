@@ -1475,7 +1475,9 @@ export default function BillingPage() {
         source.b2b = list;
         updates["b2b_order"] = list.length;
 
-        // Parse task comments to get per-order picking/out quantities
+        // ── B2B task comment → billing line items ──────────────────────────────
+        // Each task type maps to a specific billing item.
+        // "Supplies" = supplies used for packing → counted as Carton Packing (b2b_carton_packing)
         let pickPiece = 0, pickCarton = 0, pickPallet = 0;
         let cartonPacking = 0, palletizing = 0;
         let labelQty = 0, insertQty = 0;
@@ -1484,44 +1486,48 @@ export default function BillingPage() {
         for (const order of list) {
           const tasks = parseTaskComment(String(order.comment ?? ""));
 
-          const pp  = tasks["Picking per Piece"]   ?? 0;
-          const pc  = tasks["Picking per Carton"]  ?? 0;
-          const ppl = tasks["Picking per Pallet"]  ?? 0;
-          const oc  = tasks["Out per Carton"]      ?? 0;
-          const op  = tasks["Out per Pallet"]      ?? 0;
+          const pp       = tasks["Picking per Piece"]    ?? 0;
+          const pc       = tasks["Picking per Carton"]   ?? 0;
+          const ppl      = tasks["Picking per Pallet"]   ?? 0;
+          const oc       = tasks["Out per Carton"]       ?? 0;
+          const op       = tasks["Out per Pallet"]       ?? 0;
+          const supplies = tasks["Supplies"]             ?? 0;  // ← NEW
 
-          pickPiece   += pp;
-          pickCarton  += pc;
-          pickPallet  += ppl;
+          pickPiece  += pp;
+          pickCarton += pc;
+          pickPallet += ppl;
 
-          // Labels: "Labels", "Amazon Labels", "FBA Labeling" → fulfillment_label
-          labelQty += (tasks["Labels"] ?? 0)
+          // Labels: "Labels" / "Amazon Labels" / "FBA Labeling" → fulfillment_label
+          labelQty += (tasks["Labels"]        ?? 0)
                     + (tasks["Amazon Labels"] ?? 0)
-                    + (tasks["FBA Labeling"] ?? 0);
+                    + (tasks["FBA Labeling"]  ?? 0);
 
           // Inserts → fulfillment_insert
-          insertQty += (tasks["Inserts"] ?? 0);
+          insertQty += tasks["Inserts"] ?? 0;
 
-          // Carton Packing: charge Out per Carton UNLESS it equals Picking per Carton
+          // Carton Packing:
+          //   1) Out per Carton (when ≠ Picking per Carton — actual repacking)
+          //   2) Supplies used → add that qty as additional carton packing
           if (oc > 0 && oc !== pc) cartonPacking += oc;
+          if (supplies > 0) cartonPacking += supplies;   // Supplies → b2b_carton_packing
 
-          // Palletizing: charge Out per Pallet UNLESS it equals Picking per Pallet
+          // Palletizing: Out per Pallet UNLESS equals Picking per Pallet
           if (op > 0 && op !== ppl) palletizing += op;
 
           // Warning: piece-level picking but no outbound container info
-          if (pp > 0 && oc === 0 && op === 0) {
+          if (pp > 0 && oc === 0 && op === 0 && supplies === 0) {
             const code = String(order.shippingOrderCode ?? order.orderCode ?? "");
             b2bWarnings.push(code);
           }
         }
 
-        if (pickPiece   > 0) updates["b2b_pick_piece"]      = pickPiece;
-        if (pickCarton  > 0) updates["b2b_pick_carton"]     = pickCarton;
-        if (pickPallet  > 0) updates["b2b_pick_pallet"]     = pickPallet;
-        if (cartonPacking > 0) updates["b2b_carton_packing"] = cartonPacking;
-        if (palletizing > 0) updates["b2b_palletizing"]     = palletizing;
-        if (b2bWarnings.length > 0) source.b2bWarnings      = b2bWarnings;
-        // Labels & Inserts (shared across B2B+B2C — accumulated below)
+        if (pickPiece     > 0) updates["b2b_pick_piece"]      = pickPiece;
+        if (pickCarton    > 0) updates["b2b_pick_carton"]     = pickCarton;
+        if (pickPallet    > 0) updates["b2b_pick_pallet"]     = pickPallet;
+        if (cartonPacking > 0) updates["b2b_carton_packing"]  = cartonPacking;
+        if (palletizing   > 0) updates["b2b_palletizing"]     = palletizing;
+        if (b2bWarnings.length > 0) source.b2bWarnings        = b2bWarnings;
+        // Labels & Inserts (B2B portion — B2C will accumulate below)
         updates["fulfillment_label"]  = (updates["fulfillment_label"]  as number ?? 0) + labelQty;
         updates["fulfillment_insert"] = (updates["fulfillment_insert"] as number ?? 0) + insertQty;
       }
@@ -2285,21 +2291,25 @@ export default function BillingPage() {
                               <th className="px-3 py-2 text-right text-slate-500 font-semibold">Pick/Pallet</th>
                               <th className="px-3 py-2 text-right text-slate-500 font-semibold">Out/Carton</th>
                               <th className="px-3 py-2 text-right text-slate-500 font-semibold">Out/Pallet</th>
+                              <th className="px-3 py-2 text-right text-slate-500 font-semibold">Supplies</th>
                               <th className="px-3 py-2 text-right text-slate-500 font-semibold">Packing✓</th>
                               <th className="px-3 py-2 text-right text-slate-500 font-semibold">Palletize✓</th>
                             </tr>
                           </thead>
                           <tbody>
                             {wmsSource.b2b.map((o, i) => {
-                              const tasks = parseTaskComment(String(o.comment ?? ""));
-                              const pp  = tasks["Picking per Piece"]  ?? 0;
-                              const pc  = tasks["Picking per Carton"] ?? 0;
-                              const ppl = tasks["Picking per Pallet"] ?? 0;
-                              const oc  = tasks["Out per Carton"]     ?? 0;
-                              const op  = tasks["Out per Pallet"]     ?? 0;
-                              const packingCharged  = oc > 0 && oc !== pc;
+                              const tasks    = parseTaskComment(String(o.comment ?? ""));
+                              const pp       = tasks["Picking per Piece"]  ?? 0;
+                              const pc       = tasks["Picking per Carton"] ?? 0;
+                              const ppl      = tasks["Picking per Pallet"] ?? 0;
+                              const oc       = tasks["Out per Carton"]     ?? 0;
+                              const op       = tasks["Out per Pallet"]     ?? 0;
+                              const supplies = tasks["Supplies"]           ?? 0;
+                              const packingCharged   = (oc > 0 && oc !== pc) || supplies > 0;
                               const palletizeCharged = op > 0 && op !== ppl;
-                              const warn = pp > 0 && oc === 0 && op === 0;
+                              const warn = pp > 0 && oc === 0 && op === 0 && supplies === 0;
+                              // Total carton packing billed this order
+                              const packingTotal = (oc > 0 && oc !== pc ? oc : 0) + supplies;
                               return (
                                 <tr key={i} className={`border-b border-slate-50 ${warn ? "bg-amber-50" : ""}`}>
                                   <td className="px-3 py-1.5 font-mono text-emerald-600">
@@ -2312,8 +2322,11 @@ export default function BillingPage() {
                                   <td className="px-3 py-1.5 text-right">{ppl || "—"}</td>
                                   <td className="px-3 py-1.5 text-right">{oc || "—"}</td>
                                   <td className="px-3 py-1.5 text-right">{op || "—"}</td>
+                                  <td className="px-3 py-1.5 text-right text-blue-600 font-medium">{supplies || "—"}</td>
                                   <td className="px-3 py-1.5 text-right font-semibold">
-                                    {oc > 0 ? (packingCharged ? <span className="text-emerald-600">{oc}</span> : <span className="text-slate-400 line-through">{oc}</span>) : "—"}
+                                    {packingCharged
+                                      ? <span className="text-emerald-600">{packingTotal}</span>
+                                      : "—"}
                                   </td>
                                   <td className="px-3 py-1.5 text-right font-semibold">
                                     {op > 0 ? (palletizeCharged ? <span className="text-emerald-600">{op}</span> : <span className="text-slate-400 line-through">{op}</span>) : "—"}
@@ -2328,8 +2341,17 @@ export default function BillingPage() {
                               <td className="px-3 py-1.5 text-right">{wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Picking per Pallet"] ?? 0), 0) || "—"}</td>
                               <td className="px-3 py-1.5 text-right">{wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Out per Carton"] ?? 0), 0) || "—"}</td>
                               <td className="px-3 py-1.5 text-right">{wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Out per Pallet"] ?? 0), 0) || "—"}</td>
-                              <td className="px-3 py-1.5 text-right">{wmsSource.b2b.reduce((s, o) => { const t = parseTaskComment(String(o.comment ?? "")); const oc = t["Out per Carton"] ?? 0; const pc = t["Picking per Carton"] ?? 0; return s + (oc > 0 && oc !== pc ? oc : 0); }, 0) || "—"}</td>
-                              <td className="px-3 py-1.5 text-right">{wmsSource.b2b.reduce((s, o) => { const t = parseTaskComment(String(o.comment ?? "")); const op = t["Out per Pallet"] ?? 0; const ppl = t["Picking per Pallet"] ?? 0; return s + (op > 0 && op !== ppl ? op : 0); }, 0) || "—"}</td>
+                              <td className="px-3 py-1.5 text-right text-blue-700">{wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Supplies"] ?? 0), 0) || "—"}</td>
+                              <td className="px-3 py-1.5 text-right">
+                                {wmsSource.b2b.reduce((s, o) => {
+                                  const t = parseTaskComment(String(o.comment ?? ""));
+                                  const oc = t["Out per Carton"] ?? 0; const pc = t["Picking per Carton"] ?? 0;
+                                  return s + (oc > 0 && oc !== pc ? oc : 0) + (t["Supplies"] ?? 0);
+                                }, 0) || "—"}
+                              </td>
+                              <td className="px-3 py-1.5 text-right">
+                                {wmsSource.b2b.reduce((s, o) => { const t = parseTaskComment(String(o.comment ?? "")); const op = t["Out per Pallet"] ?? 0; const ppl = t["Picking per Pallet"] ?? 0; return s + (op > 0 && op !== ppl ? op : 0); }, 0) || "—"}
+                              </td>
                             </tr>
                           </tbody>
                         </table>

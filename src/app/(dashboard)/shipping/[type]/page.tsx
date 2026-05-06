@@ -92,7 +92,7 @@ const TASK_TYPES = [
   "FBA Bundling",
   "FBA Labeling",
   "FBA Repacking",
-  "Supplies Size and Qty",
+  "Supplies",
 ] as const;
 
 type TaskItem = { type: string; qty: number };
