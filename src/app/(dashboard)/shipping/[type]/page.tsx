@@ -268,6 +268,39 @@ export default function ShippingTypePage() {
     // fallback: show list row data as-is
     if (!detailFound) { setDetail(order); setDetailLoading(false); }
 
+    // ── Fresh status fetch: query list endpoint filtered by this order code
+    // to always reflect the real-time WMS status regardless of the detail endpoint
+    {
+      const whCode   = String(order.warehouseCode ?? order.warehouse ?? warehouseCode ?? "");
+      const custCode = String(order.customerCode ?? "");
+      const body: Record<string, unknown> = {
+        page: 1, pageSize: 10, orderType: meta.orderType,
+        warehouseCode: whCode,
+        shippingOrderCode: code,   // primary filter key
+        orderCode: code,           // fallback field name
+      };
+      if (custCode) body.customerCode = custCode;
+      for (const ep of [`/api/wms/shipping/${type}/list`, `/api/wms/shipping/list`, `/api/wms/outbound/list`]) {
+        try {
+          const res  = await fetch(ep, { method: "POST", headers, body: JSON.stringify(body) });
+          const json = await res.json().catch(() => null);
+          const list: Record<string, unknown>[] =
+            json?.data?.list ?? json?.data?.items ?? json?.data ?? json?.list ?? json?.items ?? (Array.isArray(json) ? json : []);
+          const match = Array.isArray(list) && list.find((r) => {
+            const rc = String(r.shippingOrderCode ?? r.orderCode ?? r.outboundCode ?? "");
+            return rc === code;
+          });
+          if (match) {
+            const freshStatus = match.status ?? match.orderStatus;
+            if (freshStatus != null) {
+              setDetail((prev) => prev ? { ...prev, status: freshStatus, orderStatus: freshStatus } : match as Order);
+            }
+            break;
+          }
+        } catch { /* ignore */ }
+      }
+    }
+
     // Helper: extract item array from any response shape
     // Confirmed: shipping/items/{code} returns { assignments: [...] }
     function parseItemList(json: unknown): Record<string, unknown>[] | null {
