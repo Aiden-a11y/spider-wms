@@ -237,38 +237,51 @@ export default function ShippingTypePage() {
     // fallback: show list row data as-is
     if (!detailFound) { setDetail(order); setDetailLoading(false); }
 
-    // fetch items with location/lot/expire (try multiple endpoints)
-    const itemPostEndpoints = [
-      // POST with body — often returns richer data including location/lot
-      { url: `/api/wms/shipping/${type}/item/list`,   body: { shippingOrderCode: code, pageNum: 1, pageSize: 500 } },
-      { url: `/api/wms/shipping/item/list`,            body: { shippingOrderCode: code, pageNum: 1, pageSize: 500 } },
-      { url: `/api/wms/outbound/${type}/item/list`,    body: { shippingOrderCode: code, pageNum: 1, pageSize: 500 } },
-      { url: `/api/wms/outbound/item/list`,            body: { shippingOrderCode: code, pageNum: 1, pageSize: 500 } },
-      { url: `/api/wms/shipping/${type}/pick/list`,    body: { shippingOrderCode: code, pageNum: 1, pageSize: 500 } },
-      { url: `/api/wms/shipping/pick/list`,            body: { shippingOrderCode: code, pageNum: 1, pageSize: 500 } },
-    ];
-    let itemsFetched = false;
-    for (const { url, body } of itemPostEndpoints) {
-      try {
-        const res  = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
-        const json = await res.json().catch(() => null);
-        const list = json?.data?.list ?? json?.data?.items ?? json?.data ?? (Array.isArray(json) ? json : null);
-        if (res.ok && Array.isArray(list) && list.length > 0) {
-          setItemsRaw(list); itemsFetched = true; break;
-        }
-      } catch { /* try next */ }
+    // Helper: extract item array from any response shape
+    // Confirmed: shipping/items/{code} returns { assignments: [...] }
+    function parseItemList(json: unknown): Record<string, unknown>[] | null {
+      if (!json || typeof json !== "object") return null;
+      const j = json as Record<string, unknown>;
+      const candidates = [
+        j?.assignments,             // ← confirmed shape: { assignments: [...] }
+        (j?.data as Record<string, unknown>)?.assignments,
+        (j?.data as Record<string, unknown>)?.list,
+        (j?.data as Record<string, unknown>)?.items,
+        j?.data,
+        j?.list,
+        j?.items,
+        Array.isArray(json) ? json : null,
+      ];
+      for (const c of candidates) {
+        if (Array.isArray(c) && c.length > 0) return c as Record<string, unknown>[];
+      }
+      return null;
     }
-    // fallback: GET endpoints
+
+    // Try GET endpoints first (the confirmed working one is shipping/items/{code})
+    let itemsFetched = false;
+    for (const ep of itemEndpoints) {
+      try {
+        const res  = await fetch(ep, { headers });
+        const json = await res.json().catch(() => null);
+        const list = parseItemList(json);
+        if (res.ok && list) { setItemsRaw(list); itemsFetched = true; break; }
+      } catch { /* ignore */ }
+    }
+    // Fallback: POST endpoints
     if (!itemsFetched) {
-      for (const ep of itemEndpoints) {
+      const itemPostEndpoints = [
+        { url: `/api/wms/shipping/${type}/item/list`, body: { shippingOrderCode: code, pageNum: 1, pageSize: 500 } },
+        { url: `/api/wms/shipping/item/list`,          body: { shippingOrderCode: code, pageNum: 1, pageSize: 500 } },
+        { url: `/api/wms/outbound/item/list`,          body: { shippingOrderCode: code, pageNum: 1, pageSize: 500 } },
+      ];
+      for (const { url, body } of itemPostEndpoints) {
         try {
-          const res  = await fetch(ep, { headers });
+          const res  = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
           const json = await res.json().catch(() => null);
-          const list = json?.data?.items ?? json?.data?.list ?? json?.data ?? (Array.isArray(json) ? json : null);
-          if (res.ok && Array.isArray(list) && list.length > 0) {
-            setItemsRaw(list); break;
-          }
-        } catch { /* ignore */ }
+          const list = parseItemList(json);
+          if (res.ok && list) { setItemsRaw(list); break; }
+        } catch { /* try next */ }
       }
     }
 
@@ -308,15 +321,23 @@ export default function ShippingTypePage() {
       const custCode   = String(d.customerCode ?? "");
 
       const rows = itemList.map((item) => {
-        // Build location string from parts or direct field
-        const location = String(
-          item.location ?? item.locationCode ??
-          [item.zoneName ?? item.zone ?? "", item.aisleName ?? item.aisle ?? "",
-           item.bayName ?? item.bay ?? "", item.levelName ?? item.level ?? "",
-           item.positionName ?? item.position ?? ""].filter(Boolean).join("-")
-        );
+        // Build readable location: zoneNm/aisleNm/bayNm/levelNm/positionNm (confirmed field names)
+        const locationParts = [
+          item.zoneNm ?? item.zoneName ?? item.zone ?? "",
+          item.aisleNm ?? item.aisleName ?? item.aisle ?? "",
+          item.bayNm ?? item.bayName ?? item.bay ?? "",
+          item.levelNm ?? item.levelName ?? item.level ?? "",
+          item.positionNm ?? item.positionName ?? item.position ?? "",
+        ].map(String).filter(Boolean);
+        const location = locationParts.length > 0
+          ? locationParts.join("/")
+          : String(item.location ?? item.locationCode ?? "");
         const occupancyInfo = getLocationOccupancyInfo(occupancyMap, item as Record<string, unknown>)
-          || (location ? occupancyMap.get(location.replace(/[-_\s]/g, "").toUpperCase()) ?? "" : "");
+          || (occupancyMap.get(location.replace(/[-_\s/]/g, "").toUpperCase()) ?? "");
+        // For assignments, qty IS the assigned qty; remain = 0 unless explicitly given
+        const qty         = Number(item.qty ?? item.totalQty ?? 0);
+        const assignedQty = Number(item.assignedQty ?? item.assigned ?? qty);
+        const remainQty   = Number(item.remainQty ?? item.remain ?? 0);
 
         return {
           order_code:      orderCode,
@@ -326,13 +347,14 @@ export default function ShippingTypePage() {
           sku:             String(item.productSku ?? item.sku ?? ""),
           product_name:    String(item.productName ?? item.itemName ?? "") || null,
           location,
+          location_barcode: String(item.location ?? item.locationCode ?? "") || null,
           occupancy_info:  occupancyInfo || null,
           lot:             String(item.lotNo ?? item.lot ?? "") || null,
           expire_date:     String(item.expireDate ?? item.expiryDate ?? "") || null,
-          qty:             Number(item.qty ?? item.totalQty ?? 0),
-          assigned_qty:    Number(item.assignedQty ?? item.assigned ?? item.qty ?? 0),
-          remain_qty:      Number(item.remainQty ?? item.remain ?? 0),
-          item_status:     String(item.status ?? item.itemStatus ?? "") || null,
+          qty,
+          assigned_qty:    assignedQty,
+          remain_qty:      remainQty,
+          item_status:     String(item.status ?? item.itemStatus ?? item.itemCondition ?? "") || null,
         };
       });
 
@@ -993,18 +1015,23 @@ export default function ShippingTypePage() {
                             </thead>
                             <tbody>
                               {itemList.map((item, i) => {
-                                const location = String(
-                                  item.location ?? item.locationCode ??
-                                  [item.zoneName ?? item.zone ?? "", item.aisleName ?? item.aisle ?? "",
-                                   item.bayName ?? item.bay ?? "", item.levelName ?? item.level ?? "",
-                                   item.positionName ?? item.position ?? ""].filter(Boolean).join("-")
-                                );
+                                // Readable location from Nm fields (confirmed: zoneNm/aisleNm/bayNm/levelNm/positionNm)
+                                const locParts = [
+                                  item.zoneNm ?? item.zoneName ?? item.zone ?? "",
+                                  item.aisleNm ?? item.aisleName ?? item.aisle ?? "",
+                                  item.bayNm ?? item.bayName ?? item.bay ?? "",
+                                  item.levelNm ?? item.levelName ?? item.level ?? "",
+                                  item.positionNm ?? item.positionName ?? item.position ?? "",
+                                ].map(String).filter(Boolean);
+                                const location = locParts.length > 0
+                                  ? locParts.join("/")
+                                  : String(item.location ?? item.locationCode ?? "");
                                 const occupancyInfo = getLocationOccupancyInfo(occupancyMap, item as Record<string, unknown>)
-                                  || (occupancyMap.get(location.replace(/[-_\s]/g, "").toUpperCase()) ?? "");
+                                  || (occupancyMap.get(location.replace(/[-_\s/]/g, "").toUpperCase()) ?? "");
                                 const qty      = Number(item.qty ?? item.totalQty ?? 0);
                                 const assigned = Number(item.assignedQty ?? item.assigned ?? qty);
                                 const remain   = Number(item.remainQty ?? item.remain ?? 0);
-                                const status   = String(item.status ?? item.itemStatus ?? "");
+                                const status   = String(item.status ?? item.itemStatus ?? item.itemCondition ?? "");
                                 const isOk     = status.toUpperCase() === "OK" || remain === 0;
                                 return (
                                   <tr key={i} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
