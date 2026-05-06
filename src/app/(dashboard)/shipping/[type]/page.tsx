@@ -5,7 +5,7 @@ import { useAuth } from "@/contexts/auth-context";
 import { useParams } from "next/navigation";
 import {
   RefreshCw, AlertCircle, Truck, Search, Download, X,
-  Building2, User, Store, Globe, MapPin, Save, CheckCircle2,
+  Building2, User, Store, Globe, MapPin, Save, CheckCircle2, ArrowLeftRight,
 } from "lucide-react";
 import { buildLocationOccupancyLookup, getLocationOccupancyInfo } from "@/lib/wms";
 import { supabase } from "@/lib/supabase";
@@ -36,6 +36,25 @@ const STATUS_META: Record<string, { label: string; badge: string }> = {
 };
 const statusBadge  = (c: string) => STATUS_META[c]?.badge  ?? "bg-slate-100 text-slate-500 border-slate-200";
 const statusLabel  = (c: string) => STATUS_META[c]?.label  ?? c;
+
+// All changeable statuses (in logical order)
+const STATUS_OPTIONS = [
+  { code: "CA", label: "CA - Packing Request"         },
+  { code: "DA", label: "DA - Packing Complete"         },
+  { code: "AR", label: "AR - Auto Label Request"       },
+  { code: "AC", label: "AC - Auto Label Complete"      },
+  { code: "LR", label: "LR - Twinny Packing Request"  },
+  { code: "L2", label: "L2 - Twinny Order Cancel Req" },
+  { code: "LC", label: "LC - Twinny Packing Complete" },
+  { code: "HA", label: "HA - Hold"                    },
+  { code: "CC", label: "CC - Cancelled Order"         },
+  { code: "FA", label: "FA - Complete"                },
+] as const;
+
+// Rank for forward-only guard (HA / CC are always allowed)
+const STATUS_RANK: Record<string, number> = {
+  AA: 0, CA: 1, DA: 2, AR: 3, AC: 4, LR: 5, L2: 6, LC: 7, FA: 8,
+};
 
 const COL_LABELS: Record<string, string> = {
   shippingOrderCode: "Order Code", orderCode: "Order Code", outboundCode: "Order Code",
@@ -145,6 +164,13 @@ export default function ShippingTypePage() {
   const [autoAssigning,    setAutoAssigning]    = useState(false);
   const [autoAssignResult, setAutoAssignResult] = useState<"" | "ok" | "error">("");
   const [autoAssignMsg,    setAutoAssignMsg]    = useState("");
+
+  /* ── Change Status state ── */
+  const [statusModal,    setStatusModal]    = useState(false);
+  const [newStatus,      setNewStatus]      = useState("");
+  const [cancelComment,  setCancelComment]  = useState("");
+  const [statusChanging, setStatusChanging] = useState(false);
+  const [statusError,    setStatusError]    = useState("");
 
   /* ── Task comment builder ── */
   const [taskItems,  setTaskItems]  = useState<TaskItem[]>([]);
@@ -315,6 +341,7 @@ export default function ShippingTypePage() {
     setTaskItems([]); setTaskType(TASK_TYPES[0]); setTaskQty(1);
     setOccupancyMap(new Map()); setPickingSaved(false);
     setAutoAssigning(false); setAutoAssignResult(""); setAutoAssignMsg("");
+    setStatusModal(false); setNewStatus(""); setCancelComment(""); setStatusError("");
   }
 
   /* ── Auto Assign: call WMS endpoint, then reload picking items ── */
@@ -367,6 +394,41 @@ export default function ShippingTypePage() {
       setItemsRaw([]);
       setPickingSaved(false);
       await openDetail(selected);
+    }
+  }
+
+  /* ── Change Status ── */
+  async function changeStatus() {
+    if (!newStatus || !selected) return;
+    setStatusChanging(true);
+    setStatusError("");
+    const code   = String(selected.shippingOrderCode ?? selected.orderCode ?? selected.outboundCode ?? "");
+    const whCode = String(selected.warehouseCode ?? selected.warehouse ?? warehouseCode ?? "");
+    const cust   = String(selected.customerCode ?? "");
+    try {
+      const res  = await fetch("/api/wms/shipping/change-status", {
+        method: "POST", headers,
+        body: JSON.stringify({
+          warehouseCode: whCode,
+          customerCode: cust,
+          orderCodes: [code],
+          newStatus,
+          completeDate: "",
+          cancelComment,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(String((json as Record<string, unknown>)?.message ?? `HTTP ${res.status}`));
+      setStatusModal(false);
+      setNewStatus("");
+      setCancelComment("");
+      await loadOrders();
+      const updatedRow = { ...selected, status: newStatus, orderStatus: newStatus };
+      await openDetail(updatedRow);
+    } catch (e) {
+      setStatusError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setStatusChanging(false);
     }
   }
 
@@ -757,7 +819,17 @@ export default function ShippingTypePage() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                {/* Auto Assign button — show when no assignments yet */}
+                {/* Change Status button */}
+                {!editMode && (
+                  <button
+                    onClick={() => { setStatusModal(true); setNewStatus(""); setCancelComment(""); setStatusError(""); }}
+                    className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors"
+                  >
+                    <ArrowLeftRight className="w-3.5 h-3.5" />
+                    Change Status
+                  </button>
+                )}
+                {/* Auto Assign button */}
                 {!editMode && (
                   <button
                     onClick={runAutoAssign}
@@ -809,6 +881,85 @@ export default function ShippingTypePage() {
             )}
             {saveError && (
               <div className="px-6 py-2 bg-red-50 border-b border-red-100 text-xs text-red-600 flex-shrink-0">{saveError}</div>
+            )}
+
+            {/* ── Change Status Sub-modal ── */}
+            {statusModal && (
+              <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/30 rounded-2xl">
+                <div className="bg-white rounded-xl shadow-xl w-80 p-6">
+                  <h3 className="font-semibold text-slate-900 text-sm mb-4 flex items-center gap-2">
+                    <ArrowLeftRight className="w-4 h-4 text-slate-400" />
+                    Change Status
+                  </h3>
+
+                  {/* Current status */}
+                  {d.status != null && (
+                    <div className="mb-4">
+                      <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">Current</p>
+                      <span className={`text-xs font-medium px-2.5 py-1 rounded-full border ${statusBadge(String(d.status))}`}>
+                        {String(d.status)} — {statusLabel(String(d.status))}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* New status select */}
+                  <div className="mb-4">
+                    <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">New Status</label>
+                    <select
+                      value={newStatus}
+                      onChange={(e) => setNewStatus(e.target.value)}
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">-- Select --</option>
+                      {(() => {
+                        const curRank = STATUS_RANK[String(d.status ?? "")] ?? -1;
+                        return STATUS_OPTIONS.filter((s) => {
+                          if (s.code === "HA" || s.code === "CC") return true; // always allowed
+                          const rank = STATUS_RANK[s.code as keyof typeof STATUS_RANK] ?? -1;
+                          return rank > curRank;
+                        });
+                      })().map((s) => (
+                        <option key={s.code} value={s.code}>{s.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Comment for Hold / Cancel */}
+                  {(newStatus === "HA" || newStatus === "CC") && (
+                    <div className="mb-4">
+                      <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">
+                        {newStatus === "HA" ? "Hold Reason" : "Cancel Reason"}
+                      </label>
+                      <textarea
+                        value={cancelComment}
+                        onChange={(e) => setCancelComment(e.target.value)}
+                        rows={2}
+                        className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                        placeholder="Optional reason…"
+                      />
+                    </div>
+                  )}
+
+                  {statusError && (
+                    <p className="text-xs text-red-600 mb-3">{statusError}</p>
+                  )}
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => { setStatusModal(false); setNewStatus(""); setCancelComment(""); setStatusError(""); }}
+                      className="flex-1 text-sm border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-lg py-2 font-medium transition-colors"
+                    >Cancel</button>
+                    <button
+                      onClick={changeStatus}
+                      disabled={!newStatus || statusChanging}
+                      className="flex-1 text-sm bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white rounded-lg py-2 font-medium transition-colors flex items-center justify-center gap-1.5"
+                    >
+                      {statusChanging && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                      {statusChanging ? "Saving…" : "Confirm"}
+                    </button>
+                  </div>
+                </div>
+              </div>
             )}
 
             {/* Tabs */}
