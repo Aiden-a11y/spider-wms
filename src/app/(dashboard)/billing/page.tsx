@@ -1478,6 +1478,7 @@ export default function BillingPage() {
         // Parse task comments to get per-order picking/out quantities
         let pickPiece = 0, pickCarton = 0, pickPallet = 0;
         let cartonPacking = 0, palletizing = 0;
+        let labelQty = 0, insertQty = 0;
         const b2bWarnings: string[] = [];
 
         for (const order of list) {
@@ -1493,12 +1494,18 @@ export default function BillingPage() {
           pickCarton  += pc;
           pickPallet  += ppl;
 
+          // Labels: "Labels", "Amazon Labels", "FBA Labeling" → fulfillment_label
+          labelQty += (tasks["Labels"] ?? 0)
+                    + (tasks["Amazon Labels"] ?? 0)
+                    + (tasks["FBA Labeling"] ?? 0);
+
+          // Inserts → fulfillment_insert
+          insertQty += (tasks["Inserts"] ?? 0);
+
           // Carton Packing: charge Out per Carton UNLESS it equals Picking per Carton
-          // (if same qty → cartons were just picked as-is, no repacking needed)
           if (oc > 0 && oc !== pc) cartonPacking += oc;
 
           // Palletizing: charge Out per Pallet UNLESS it equals Picking per Pallet
-          // (if same qty → pallets were just picked as-is, no palletizing needed)
           if (op > 0 && op !== ppl) palletizing += op;
 
           // Warning: piece-level picking but no outbound container info
@@ -1514,6 +1521,9 @@ export default function BillingPage() {
         if (cartonPacking > 0) updates["b2b_carton_packing"] = cartonPacking;
         if (palletizing > 0) updates["b2b_palletizing"]     = palletizing;
         if (b2bWarnings.length > 0) source.b2bWarnings      = b2bWarnings;
+        // Labels & Inserts (shared across B2B+B2C — accumulated below)
+        updates["fulfillment_label"]  = (updates["fulfillment_label"]  as number ?? 0) + labelQty;
+        updates["fulfillment_insert"] = (updates["fulfillment_insert"] as number ?? 0) + insertQty;
       }
     } catch {}
 
@@ -1536,6 +1546,19 @@ export default function BillingPage() {
         updates["b2c_order"] = listB2C.length;
         const extraPicks = listB2C.reduce((s, o) => s + Math.max(0, Number(o.totalQty ?? o.orderQty ?? 0) - 5), 0);
         if (extraPicks > 0) updates["b2c_pick_piece"] = extraPicks;
+
+        // Parse B2C task comments for labels, inserts, fragile
+        let b2cLabelQty = 0, b2cInsertQty = 0, b2cFragileQty = 0;
+        for (const order of listB2C) {
+          const tasks = parseTaskComment(String(order.comment ?? ""));
+          b2cLabelQty  += (tasks["Labels"] ?? 0) + (tasks["Amazon Labels"] ?? 0) + (tasks["FBA Labeling"] ?? 0);
+          b2cInsertQty += (tasks["Inserts"] ?? 0);
+          b2cFragileQty += (tasks["Fragile Pack"] ?? 0) + (tasks["Fragile"] ?? 0);
+        }
+        // Accumulate into shared label/insert items (B2B + B2C combined)
+        updates["fulfillment_label"]  = (updates["fulfillment_label"]  as number ?? 0) + b2cLabelQty;
+        updates["fulfillment_insert"] = (updates["fulfillment_insert"] as number ?? 0) + b2cInsertQty;
+        if (b2cFragileQty > 0) updates["b2c_fragile"] = b2cFragileQty;
       }
     } catch {}
 
