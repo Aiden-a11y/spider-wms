@@ -141,6 +141,11 @@ export default function ShippingTypePage() {
   const [savingPicking, setSavingPicking] = useState(false);
   const [pickingSaved,  setPickingSaved]  = useState(false);
 
+  /* ── Auto Assign state ── */
+  const [autoAssigning,    setAutoAssigning]    = useState(false);
+  const [autoAssignResult, setAutoAssignResult] = useState<"" | "ok" | "error">("");
+  const [autoAssignMsg,    setAutoAssignMsg]    = useState("");
+
   /* ── Task comment builder ── */
   const [taskItems,  setTaskItems]  = useState<TaskItem[]>([]);
   const [taskType,   setTaskType]   = useState<string>(TASK_TYPES[0]);
@@ -309,6 +314,66 @@ export default function ShippingTypePage() {
     setEditMode(false); setEditData({}); setSaveError("");
     setTaskItems([]); setTaskType(TASK_TYPES[0]); setTaskQty(1);
     setOccupancyMap(new Map()); setPickingSaved(false);
+    setAutoAssigning(false); setAutoAssignResult(""); setAutoAssignMsg("");
+  }
+
+  /* ── Auto Assign: call WMS endpoint, then reload picking items ── */
+  async function runAutoAssign() {
+    if (!selected) return;
+    const code = String(
+      selected.shippingOrderCode ?? selected.orderCode ?? selected.outboundCode ?? ""
+    );
+    if (!code) return;
+
+    setAutoAssigning(true);
+    setAutoAssignResult("");
+    setAutoAssignMsg("");
+
+    // Try known WMS auto-assign endpoint patterns
+    const endpoints = [
+      { url: `/api/wms/shipping/${type}/auto-assign`, body: { shippingOrderCode: code } },
+      { url: `/api/wms/shipping/auto-assign`,          body: { shippingOrderCode: code } },
+      { url: `/api/wms/outbound/${type}/auto-assign`,  body: { shippingOrderCode: code } },
+      { url: `/api/wms/outbound/auto-assign`,          body: { shippingOrderCode: code } },
+      // Some WMS use the order code as path param
+      { url: `/api/wms/shipping/${type}/${code}/auto-assign`, body: {} },
+      { url: `/api/wms/shipping/${code}/auto-assign`,         body: {} },
+    ];
+
+    let succeeded = false;
+    for (const { url, body } of endpoints) {
+      try {
+        const res  = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+        const json = await res.json().catch(() => ({}));
+        if (res.ok) {
+          setAutoAssignResult("ok");
+          setAutoAssignMsg(String(json?.message ?? json?.msg ?? "Auto assign completed"));
+          succeeded = true;
+          break;
+        }
+        // 4xx from the right endpoint = WMS rejected (not a wrong URL)
+        if (res.status >= 400 && res.status < 500) {
+          setAutoAssignResult("error");
+          setAutoAssignMsg(String((json as Record<string, unknown>)?.message ?? (json as Record<string, unknown>)?.msg ?? `HTTP ${res.status}`));
+          succeeded = true; // stop trying other endpoints
+          break;
+        }
+      } catch { /* try next */ }
+    }
+
+    if (!succeeded) {
+      setAutoAssignResult("error");
+      setAutoAssignMsg("Auto-assign endpoint not found. Check WMS API documentation.");
+    }
+
+    setAutoAssigning(false);
+
+    // Reload picking items after successful assign
+    if (succeeded) {
+      setItemsRaw([]);
+      setPickingSaved(false);
+      await openDetail(selected);
+    }
   }
 
   /* ── Save picking record to Supabase ── */
@@ -698,6 +763,20 @@ export default function ShippingTypePage() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
+                {/* Auto Assign button — show when no assignments yet */}
+                {!editMode && (
+                  <button
+                    onClick={runAutoAssign}
+                    disabled={autoAssigning}
+                    className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-300 text-white transition-colors"
+                    title="Auto-assign inventory to this order"
+                  >
+                    {autoAssigning
+                      ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      : <MapPin className="w-3.5 h-3.5" />}
+                    {autoAssigning ? "Assigning…" : "Auto Assign"}
+                  </button>
+                )}
                 {!editMode ? (
                   <button onClick={startEdit}
                     className="text-xs font-medium px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">
@@ -720,6 +799,20 @@ export default function ShippingTypePage() {
                 </button>
               </div>
             </div>
+
+            {/* Auto Assign result banner */}
+            {autoAssignResult === "ok" && (
+              <div className="px-6 py-2 bg-emerald-50 border-b border-emerald-100 text-xs text-emerald-700 flex items-center gap-2 flex-shrink-0">
+                <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
+                {autoAssignMsg}
+              </div>
+            )}
+            {autoAssignResult === "error" && (
+              <div className="px-6 py-2 bg-red-50 border-b border-red-100 text-xs text-red-600 flex items-center gap-2 flex-shrink-0">
+                <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                {autoAssignMsg}
+              </div>
+            )}
             {saveError && (
               <div className="px-6 py-2 bg-red-50 border-b border-red-100 text-xs text-red-600 flex-shrink-0">{saveError}</div>
             )}
