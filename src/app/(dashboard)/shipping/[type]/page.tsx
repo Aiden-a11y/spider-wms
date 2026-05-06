@@ -325,45 +325,39 @@ export default function ShippingTypePage() {
     );
     if (!code) return;
 
+    const whCode   = String(selected.warehouseCode ?? selected.warehouse ?? warehouseCode ?? "");
+    const custCode = String(selected.customerCode ?? "");
+
     setAutoAssigning(true);
     setAutoAssignResult("");
     setAutoAssignMsg("");
 
-    // Try known WMS auto-assign endpoint patterns
-    const endpoints = [
-      { url: `/api/wms/shipping/${type}/auto-assign`, body: { shippingOrderCode: code } },
-      { url: `/api/wms/shipping/auto-assign`,          body: { shippingOrderCode: code } },
-      { url: `/api/wms/outbound/${type}/auto-assign`,  body: { shippingOrderCode: code } },
-      { url: `/api/wms/outbound/auto-assign`,          body: { shippingOrderCode: code } },
-      // Some WMS use the order code as path param
-      { url: `/api/wms/shipping/${type}/${code}/auto-assign`, body: {} },
-      { url: `/api/wms/shipping/${code}/auto-assign`,         body: {} },
-    ];
-
+    // Confirmed WMS endpoint: POST /shipping/auto-assign
+    // Payload: { warehouseCode, customerCode, orderCodes: [code] }
     let succeeded = false;
-    for (const { url, body } of endpoints) {
-      try {
-        const res  = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
-        const json = await res.json().catch(() => ({}));
-        if (res.ok) {
-          setAutoAssignResult("ok");
-          setAutoAssignMsg(String(json?.message ?? json?.msg ?? "Auto assign completed"));
-          succeeded = true;
-          break;
-        }
-        // 4xx from the right endpoint = WMS rejected (not a wrong URL)
-        if (res.status >= 400 && res.status < 500) {
-          setAutoAssignResult("error");
-          setAutoAssignMsg(String((json as Record<string, unknown>)?.message ?? (json as Record<string, unknown>)?.msg ?? `HTTP ${res.status}`));
-          succeeded = true; // stop trying other endpoints
-          break;
-        }
-      } catch { /* try next */ }
+    try {
+      const body = { warehouseCode: whCode, customerCode: custCode, orderCodes: [code] };
+      const res  = await fetch("/api/wms/shipping/auto-assign", {
+        method: "POST", headers, body: JSON.stringify(body),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setAutoAssignResult("ok");
+        setAutoAssignMsg(String((json as Record<string, unknown>)?.message ?? (json as Record<string, unknown>)?.msg ?? "Auto assign completed"));
+        succeeded = true;
+      } else {
+        setAutoAssignResult("error");
+        setAutoAssignMsg(String((json as Record<string, unknown>)?.message ?? (json as Record<string, unknown>)?.msg ?? `HTTP ${res.status}`));
+        succeeded = true; // endpoint found, WMS rejected the request
+      }
+    } catch (e) {
+      setAutoAssignResult("error");
+      setAutoAssignMsg(String(e instanceof Error ? e.message : "Network error"));
     }
 
     if (!succeeded) {
       setAutoAssignResult("error");
-      setAutoAssignMsg("Auto-assign endpoint not found. Check WMS API documentation.");
+      setAutoAssignMsg("Auto-assign request failed. Check network connection.");
     }
 
     setAutoAssigning(false);
