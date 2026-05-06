@@ -237,16 +237,39 @@ export default function ShippingTypePage() {
     // fallback: show list row data as-is
     if (!detailFound) { setDetail(order); setDetailLoading(false); }
 
-    // fetch items (best-effort, non-blocking)
-    for (const ep of itemEndpoints) {
+    // fetch items with location/lot/expire (try multiple endpoints)
+    const itemPostEndpoints = [
+      // POST with body — often returns richer data including location/lot
+      { url: `/api/wms/shipping/${type}/item/list`,   body: { shippingOrderCode: code, pageNum: 1, pageSize: 500 } },
+      { url: `/api/wms/shipping/item/list`,            body: { shippingOrderCode: code, pageNum: 1, pageSize: 500 } },
+      { url: `/api/wms/outbound/${type}/item/list`,    body: { shippingOrderCode: code, pageNum: 1, pageSize: 500 } },
+      { url: `/api/wms/outbound/item/list`,            body: { shippingOrderCode: code, pageNum: 1, pageSize: 500 } },
+      { url: `/api/wms/shipping/${type}/pick/list`,    body: { shippingOrderCode: code, pageNum: 1, pageSize: 500 } },
+      { url: `/api/wms/shipping/pick/list`,            body: { shippingOrderCode: code, pageNum: 1, pageSize: 500 } },
+    ];
+    let itemsFetched = false;
+    for (const { url, body } of itemPostEndpoints) {
       try {
-        const res  = await fetch(ep, { headers });
+        const res  = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
         const json = await res.json().catch(() => null);
-        const list = json?.data?.items ?? json?.data?.list ?? json?.data ?? (Array.isArray(json) ? json : null);
+        const list = json?.data?.list ?? json?.data?.items ?? json?.data ?? (Array.isArray(json) ? json : null);
         if (res.ok && Array.isArray(list) && list.length > 0) {
-          setItemsRaw(list); break;
+          setItemsRaw(list); itemsFetched = true; break;
         }
-      } catch { /* ignore */ }
+      } catch { /* try next */ }
+    }
+    // fallback: GET endpoints
+    if (!itemsFetched) {
+      for (const ep of itemEndpoints) {
+        try {
+          const res  = await fetch(ep, { headers });
+          const json = await res.json().catch(() => null);
+          const list = json?.data?.items ?? json?.data?.list ?? json?.data ?? (Array.isArray(json) ? json : null);
+          if (res.ok && Array.isArray(list) && list.length > 0) {
+            setItemsRaw(list); break;
+          }
+        } catch { /* ignore */ }
+      }
     }
 
     // Load occupancy map for the warehouse (best-effort)
@@ -1034,6 +1057,24 @@ export default function ShippingTypePage() {
                             </tfoot>
                           </table>
                         </div>
+
+                        {/* Raw field debug (shown when location is missing on first item) */}
+                        {itemList.length > 0 && !itemList[0].location && !itemList[0].locationCode &&
+                          !(itemList[0].zoneName ?? itemList[0].zone) && (
+                          <details className="rounded-xl border border-amber-200 bg-amber-50 overflow-hidden">
+                            <summary className="px-4 py-2.5 text-xs font-semibold text-amber-700 cursor-pointer select-none">
+                              ⚠ Location data missing — click to inspect raw item fields
+                            </summary>
+                            <div className="px-4 pb-4 pt-2">
+                              <p className="text-xs text-amber-600 mb-2">
+                                Available fields in item[0]: {Object.keys(itemList[0]).join(", ")}
+                              </p>
+                              <pre className="bg-slate-900 text-green-400 rounded-lg p-3 text-xs overflow-auto max-h-48">
+                                {JSON.stringify(itemList[0], null, 2)}
+                              </pre>
+                            </div>
+                          </details>
+                        )}
                       </>
                     )}
                   </div>
