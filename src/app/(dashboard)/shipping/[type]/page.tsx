@@ -238,11 +238,11 @@ export default function ShippingTypePage() {
 
     const code = String(order.shippingOrderCode ?? order.orderCode ?? order.outboundCode ?? "");
 
-    // detail + items in parallel
+    // detail endpoints — confirmed working: GET /shipping/{code} (no type prefix)
     const detailEndpoints = [
+      `/api/wms/shipping/${code}`,           // ← confirmed 200 OK
       `/api/wms/shipping/${type}/${code}`,
       `/api/wms/shipping/detail/${code}`,
-      `/api/wms/shipping/${code}`,
       `/api/wms/outbound/${type}/${code}`,
       `/api/wms/outbound/detail/${code}`,
     ];
@@ -266,10 +266,16 @@ export default function ShippingTypePage() {
         // Only accept if it looks like a real order (has at least one order-code field)
         const hasCode = fetched.shippingOrderCode ?? fetched.orderCode ?? fetched.outboundCode;
         if (!hasCode) continue;
-        // Merge: order (list row) wins for status; detail wins for extra fields
-        const mergedStatus = order.status ?? order.orderStatus ?? fetched.status ?? fetched.orderStatus;
-        const mergedOrderStatus = order.orderStatus ?? order.status ?? fetched.orderStatus ?? fetched.status;
-        setDetail({ ...order, ...fetched, status: mergedStatus, orderStatus: mergedOrderStatus });
+        // Merge: detail wins for everything (it's the freshest single-order GET),
+        // but fall back to list-row values for any missing fields.
+        // statusName comes from the WMS detail response directly.
+        setDetail({
+          ...order,
+          ...fetched,
+          status:     fetched.status     ?? fetched.orderStatus ?? order.status     ?? order.orderStatus,
+          orderStatus:fetched.orderStatus?? fetched.status      ?? order.orderStatus?? order.status,
+          statusName: fetched.statusName ?? order.statusName,
+        });
         break;
       } catch { /* try next */ }
     }
@@ -858,7 +864,7 @@ export default function ShippingTypePage() {
                   <h2 className="font-semibold text-slate-900 text-sm">{meta.label} — {orderCode}</h2>
                   {!!d.status && (
                     <span className={`text-xs font-medium px-2 py-0.5 rounded-full border mt-0.5 inline-block ${statusBadge(String(d.status ?? d.orderStatus))}`}>
-                      {statusLabel(String(d.status ?? d.orderStatus))}
+                      {String(d.status ?? d.orderStatus)} — {d.statusName ? String(d.statusName) : statusLabel(String(d.status ?? d.orderStatus))}
                     </span>
                   )}
                 </div>
@@ -1044,7 +1050,7 @@ export default function ShippingTypePage() {
                       <div>
                         <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">Status</p>
                         <span className={`text-sm font-semibold px-2.5 py-1 rounded-full border ${statusBadge(String(d.status ?? d.orderStatus ?? ""))}`}>
-                          {statusLabel(String(d.status ?? d.orderStatus ?? "-"))}
+                          {String(d.status ?? d.orderStatus ?? "-")} — {d.statusName ? String(d.statusName) : statusLabel(String(d.status ?? d.orderStatus ?? "-"))}
                         </span>
                       </div>
                     </div>
