@@ -798,6 +798,10 @@ export default function ShippingTypePage() {
                       {COL_LABELS[c] ?? c}
                     </th>
                   ))}
+                  {/* Fixed: Packing/Billing Info column */}
+                  <th className="px-4 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">
+                    Packing Info
+                  </th>
                 </tr>
                 <tr className="bg-slate-50 border-b border-slate-200">
                   {cols.map((c) => {
@@ -818,30 +822,44 @@ export default function ShippingTypePage() {
                       </th>
                     );
                   })}
+                  {/* filter placeholder for Packing Info */}
+                  <th className="px-2 py-1.5"><div className="h-6" /></th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((order, idx) => (
-                  <tr key={idx} onClick={() => openDetail(order)}
-                    className="border-b border-slate-100 last:border-0 hover:bg-blue-50 cursor-pointer transition-colors group">
-                    {cols.map((c) => {
-                      const val      = String(order[c] ?? "-");
-                      const isStatus = c.toLowerCase().includes("status");
-                      const isMono   = c.toLowerCase().includes("code") || c.toLowerCase().includes("no") || c.toLowerCase().includes("tracking");
-                      return (
-                        <td key={c} className="px-4 py-2.5 whitespace-nowrap">
-                          {isStatus ? (
-                            <span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${statusBadge(val)}`}>{statusLabel(val)}</span>
-                          ) : isMono ? (
-                            <span className="font-mono font-medium text-slate-700 group-hover:text-blue-700">{val}</span>
-                          ) : (
-                            <span className="text-slate-600">{val}</span>
-                          )}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
+                {filtered.map((order, idx) => {
+                  // Packing info: stored in comment field as "Labels×3, Picking per Piece×1"
+                  const comment = String(order.comment ?? order.orderComment ?? order.memo ?? "").trim();
+                  return (
+                    <tr key={idx} onClick={() => openDetail(order)}
+                      className="border-b border-slate-100 last:border-0 hover:bg-blue-50 cursor-pointer transition-colors group">
+                      {cols.map((c) => {
+                        const val      = String(order[c] ?? "-");
+                        const isStatus = c.toLowerCase().includes("status");
+                        const isMono   = c.toLowerCase().includes("code") || c.toLowerCase().includes("no") || c.toLowerCase().includes("tracking");
+                        return (
+                          <td key={c} className="px-4 py-2.5 whitespace-nowrap">
+                            {isStatus ? (
+                              <span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${statusBadge(val)}`}>{statusLabel(val)}</span>
+                            ) : isMono ? (
+                              <span className="font-mono font-medium text-slate-700 group-hover:text-blue-700">{val}</span>
+                            ) : (
+                              <span className="text-slate-600">{val}</span>
+                            )}
+                          </td>
+                        );
+                      })}
+                      {/* Packing Info cell */}
+                      <td className="px-4 py-2.5 max-w-[180px]">
+                        {comment ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 font-medium truncate max-w-full" title={comment}>
+                            ✓ {comment}
+                          </span>
+                        ) : null}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
