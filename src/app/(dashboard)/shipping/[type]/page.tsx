@@ -5,8 +5,10 @@ import { useAuth } from "@/contexts/auth-context";
 import { useParams } from "next/navigation";
 import {
   RefreshCw, AlertCircle, Truck, Search, Download, X,
-  Building2, User, Store, Globe,
+  Building2, User, Store, Globe, MapPin, Save, CheckCircle2,
 } from "lucide-react";
+import { buildLocationOccupancyLookup, getLocationOccupancyInfo } from "@/lib/wms";
+import { supabase } from "@/lib/supabase";
 
 /* ── Shipping type config ── */
 const TYPE_META: Record<string, {
@@ -128,11 +130,16 @@ export default function ShippingTypePage() {
   const [detail,        setDetail]        = useState<Order | null>(null);
   const [itemsRaw,      setItemsRaw]      = useState<Order[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [activeTab,     setActiveTab]     = useState<"info" | "address" | "package" | "additional" | "items" | "raw">("info");
+  const [activeTab,     setActiveTab]     = useState<"info" | "address" | "package" | "additional" | "picking" | "raw">("info");
   const [editMode,      setEditMode]      = useState(false);
   const [editData,      setEditData]      = useState<Order>({});
   const [saving,        setSaving]        = useState(false);
   const [saveError,     setSaveError]     = useState("");
+
+  /* ── Picking / Occupancy state ── */
+  const [occupancyMap,  setOccupancyMap]  = useState<Map<string, string>>(new Map());
+  const [savingPicking, setSavingPicking] = useState(false);
+  const [pickingSaved,  setPickingSaved]  = useState(false);
 
   /* ── Task comment builder ── */
   const [taskItems,  setTaskItems]  = useState<TaskItem[]>([]);
@@ -195,6 +202,8 @@ export default function ShippingTypePage() {
     setItemsRaw([]);
     setActiveTab("info");
     setDetailLoading(true);
+    setOccupancyMap(new Map());
+    setPickingSaved(false);
 
     const code = String(order.shippingOrderCode ?? order.orderCode ?? order.outboundCode ?? "");
 
@@ -239,12 +248,81 @@ export default function ShippingTypePage() {
         }
       } catch { /* ignore */ }
     }
+
+    // Load occupancy map for the warehouse (best-effort)
+    const whCode = String(order.warehouseCode ?? order.warehouse ?? warehouseCode ?? "");
+    if (whCode) {
+      try {
+        const res = await fetch("/api/wms/warehouse/location/list", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ page: 1, pageSize: 9999, warehouseCode: whCode }),
+        });
+        const json = await res.json().catch(() => ({}));
+        const arr: Record<string, unknown>[] =
+          Array.isArray(json?.data?.list) ? json.data.list :
+          Array.isArray(json?.data) ? json.data :
+          Array.isArray(json) ? json : [];
+        if (arr.length > 0) setOccupancyMap(buildLocationOccupancyLookup(arr));
+      } catch { /* ignore */ }
+    }
   }
 
   function closeDetail() {
     setSelected(null); setDetail(null); setItemsRaw([]);
     setEditMode(false); setEditData({}); setSaveError("");
     setTaskItems([]); setTaskType(TASK_TYPES[0]); setTaskQty(1);
+    setOccupancyMap(new Map()); setPickingSaved(false);
+  }
+
+  /* ── Save picking record to Supabase ── */
+  async function savePickingRecord() {
+    if (!supabase || itemList.length === 0) return;
+    setSavingPicking(true);
+    try {
+      const orderCode  = String(d.shippingOrderCode ?? d.orderCode ?? d.outboundCode ?? "");
+      const whCode     = String(d.warehouseCode ?? d.warehouse ?? warehouseCode ?? "");
+      const custCode   = String(d.customerCode ?? "");
+
+      const rows = itemList.map((item) => {
+        // Build location string from parts or direct field
+        const location = String(
+          item.location ?? item.locationCode ??
+          [item.zoneName ?? item.zone ?? "", item.aisleName ?? item.aisle ?? "",
+           item.bayName ?? item.bay ?? "", item.levelName ?? item.level ?? "",
+           item.positionName ?? item.position ?? ""].filter(Boolean).join("-")
+        );
+        const occupancyInfo = getLocationOccupancyInfo(occupancyMap, item as Record<string, unknown>)
+          || (location ? occupancyMap.get(location.replace(/[-_\s]/g, "").toUpperCase()) ?? "" : "");
+
+        return {
+          order_code:      orderCode,
+          order_type:      type.toUpperCase(),
+          warehouse_code:  whCode,
+          customer_code:   custCode,
+          sku:             String(item.productSku ?? item.sku ?? ""),
+          product_name:    String(item.productName ?? item.itemName ?? "") || null,
+          location,
+          occupancy_info:  occupancyInfo || null,
+          lot:             String(item.lotNo ?? item.lot ?? "") || null,
+          expire_date:     String(item.expireDate ?? item.expiryDate ?? "") || null,
+          qty:             Number(item.qty ?? item.totalQty ?? 0),
+          assigned_qty:    Number(item.assignedQty ?? item.assigned ?? item.qty ?? 0),
+          remain_qty:      Number(item.remainQty ?? item.remain ?? 0),
+          item_status:     String(item.status ?? item.itemStatus ?? "") || null,
+        };
+      });
+
+      // Delete existing records for this order then re-insert
+      await supabase.from("picking_records").delete().eq("order_code", orderCode);
+      const { error } = await supabase.from("picking_records").insert(rows);
+      if (error) throw error;
+      setPickingSaved(true);
+    } catch (e) {
+      console.error("Save picking record:", e);
+    } finally {
+      setSavingPicking(false);
+    }
   }
 
   function addTaskItem() {
@@ -603,17 +681,18 @@ export default function ShippingTypePage() {
 
             {/* Tabs */}
             <div className="flex border-b border-slate-200 px-6 flex-shrink-0 overflow-x-auto">
-              {(["info", "address", "package", "additional", "items", "raw"] as const).map((tab) => {
+              {(["info", "address", "package", "additional", "picking", "raw"] as const).map((tab) => {
                 const label =
                   tab === "info"       ? "Info"
                   : tab === "address"  ? "Address"
                   : tab === "package"  ? "Package"
                   : tab === "additional" ? "Additional"
-                  : tab === "items"    ? `Items${itemList.length ? ` (${itemList.length})` : ""}`
+                  : tab === "picking"  ? `Picking${itemList.length ? ` (${itemList.length})` : ""}`
                   : "Raw";
                 return (
                   <button key={tab} onClick={() => setActiveTab(tab)}
-                    className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px whitespace-nowrap ${activeTab === tab ? "border-blue-600 text-blue-600" : "border-transparent text-slate-500 hover:text-slate-700"}`}>
+                    className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px whitespace-nowrap flex items-center gap-1.5 ${activeTab === tab ? "border-blue-600 text-blue-600" : "border-transparent text-slate-500 hover:text-slate-700"}`}>
+                    {tab === "picking" && <MapPin className="w-3.5 h-3.5" />}
                     {label}
                   </button>
                 );
@@ -816,34 +895,146 @@ export default function ShippingTypePage() {
                   </div>
                 )}
 
-                {/* ── Items tab ── */}
-                {activeTab === "items" && (
-                  <div className="p-6">
+                {/* ── Picking tab ── */}
+                {activeTab === "picking" && (
+                  <div className="p-6 space-y-4">
                     {itemList.length === 0 ? (
                       <div className="text-center py-16 text-slate-400">
-                        <p className="text-sm">No item data available</p>
+                        <MapPin className="w-8 h-8 mx-auto mb-3 opacity-40" />
+                        <p className="text-sm font-medium">No picking data available</p>
+                        <p className="text-xs mt-1">Items will appear after Auto Assign is run in WMS</p>
                       </div>
                     ) : (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-xs">
-                          <thead>
-                            <tr className="bg-slate-50 border-b border-slate-200">
-                              {Object.keys(itemList[0]).slice(0, 10).map((k) => (
-                                <th key={k} className="px-4 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">{k}</th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {itemList.map((item, i) => (
-                              <tr key={i} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
-                                {Object.keys(itemList[0]).slice(0, 10).map((k) => (
-                                  <td key={k} className="px-4 py-2.5 text-slate-600 whitespace-nowrap">{String(item[k] ?? "-")}</td>
-                                ))}
+                      <>
+                        {/* Summary bar */}
+                        <div className="flex items-center gap-6 bg-slate-50 rounded-xl px-4 py-3 text-sm">
+                          <div>
+                            <span className="text-slate-500 text-xs">Total Lines</span>
+                            <p className="font-semibold text-slate-800">{itemList.length}</p>
+                          </div>
+                          <div>
+                            <span className="text-slate-500 text-xs">Total Qty</span>
+                            <p className="font-semibold text-slate-800 tabular-nums">
+                              {itemList.reduce((s, item) => s + Number(item.qty ?? item.totalQty ?? 0), 0).toLocaleString()}
+                            </p>
+                          </div>
+                          <div>
+                            <span className="text-slate-500 text-xs">Assigned</span>
+                            <p className="font-semibold text-green-700 tabular-nums">
+                              {itemList.reduce((s, item) => s + Number(item.assignedQty ?? item.assigned ?? item.qty ?? 0), 0).toLocaleString()}
+                            </p>
+                          </div>
+                          <div>
+                            <span className="text-slate-500 text-xs">Remain</span>
+                            <p className="font-semibold text-amber-600 tabular-nums">
+                              {itemList.reduce((s, item) => s + Number(item.remainQty ?? item.remain ?? 0), 0).toLocaleString()}
+                            </p>
+                          </div>
+                          <div className="ml-auto flex items-center gap-2">
+                            {pickingSaved ? (
+                              <span className="flex items-center gap-1.5 text-xs text-green-700 font-medium bg-green-50 border border-green-200 rounded-lg px-3 py-1.5">
+                                <CheckCircle2 className="w-3.5 h-3.5" /> Saved
+                              </span>
+                            ) : (
+                              <button
+                                onClick={savePickingRecord}
+                                disabled={savingPicking || !supabase}
+                                className="flex items-center gap-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white rounded-lg px-3 py-1.5 transition-colors"
+                              >
+                                {savingPicking
+                                  ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                  : <Save className="w-3.5 h-3.5" />}
+                                {savingPicking ? "Saving…" : "Save Record"}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Picking table */}
+                        <div className="overflow-x-auto rounded-xl border border-slate-200">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="bg-slate-50 border-b border-slate-200">
+                                <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">#</th>
+                                <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">Location</th>
+                                <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">Occupancy</th>
+                                <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">SKU</th>
+                                <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">Product</th>
+                                <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">Lot</th>
+                                <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">Expire</th>
+                                <th className="px-3 py-2.5 text-right text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">Qty</th>
+                                <th className="px-3 py-2.5 text-right text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">Assigned</th>
+                                <th className="px-3 py-2.5 text-right text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">Remain</th>
+                                <th className="px-3 py-2.5 text-center text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">Status</th>
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
+                            </thead>
+                            <tbody>
+                              {itemList.map((item, i) => {
+                                const location = String(
+                                  item.location ?? item.locationCode ??
+                                  [item.zoneName ?? item.zone ?? "", item.aisleName ?? item.aisle ?? "",
+                                   item.bayName ?? item.bay ?? "", item.levelName ?? item.level ?? "",
+                                   item.positionName ?? item.position ?? ""].filter(Boolean).join("-")
+                                );
+                                const occupancyInfo = getLocationOccupancyInfo(occupancyMap, item as Record<string, unknown>)
+                                  || (occupancyMap.get(location.replace(/[-_\s]/g, "").toUpperCase()) ?? "");
+                                const qty      = Number(item.qty ?? item.totalQty ?? 0);
+                                const assigned = Number(item.assignedQty ?? item.assigned ?? qty);
+                                const remain   = Number(item.remainQty ?? item.remain ?? 0);
+                                const status   = String(item.status ?? item.itemStatus ?? "");
+                                const isOk     = status.toUpperCase() === "OK" || remain === 0;
+                                return (
+                                  <tr key={i} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+                                    <td className="px-3 py-2.5 text-slate-400">{i + 1}</td>
+                                    <td className="px-3 py-2.5 font-mono text-slate-800 whitespace-nowrap">
+                                      <span className="flex items-center gap-1">
+                                        <MapPin className="w-3 h-3 text-slate-400 flex-shrink-0" />
+                                        {location || "-"}
+                                      </span>
+                                    </td>
+                                    <td className="px-3 py-2.5 whitespace-nowrap">
+                                      {occupancyInfo ? (
+                                        <span className="text-xs bg-purple-50 text-purple-700 border border-purple-100 px-2 py-0.5 rounded-full font-medium">
+                                          {occupancyInfo}
+                                        </span>
+                                      ) : (
+                                        <span className="text-slate-300">—</span>
+                                      )}
+                                    </td>
+                                    <td className="px-3 py-2.5 font-mono text-slate-700 whitespace-nowrap">{String(item.productSku ?? item.sku ?? "-")}</td>
+                                    <td className="px-3 py-2.5 text-slate-600 max-w-[180px] truncate">{String(item.productName ?? item.itemName ?? "-")}</td>
+                                    <td className="px-3 py-2.5 font-mono text-slate-600 whitespace-nowrap">{String(item.lotNo ?? item.lot ?? "-")}</td>
+                                    <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{String(item.expireDate ?? item.expiryDate ?? "-")}</td>
+                                    <td className="px-3 py-2.5 text-right tabular-nums text-slate-800">{qty.toLocaleString()}</td>
+                                    <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-green-700">{assigned.toLocaleString()}</td>
+                                    <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${remain > 0 ? "text-amber-600" : "text-slate-300"}`}>{remain.toLocaleString()}</td>
+                                    <td className="px-3 py-2.5 text-center">
+                                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${isOk ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>
+                                        {status || (isOk ? "OK" : "—")}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                            <tfoot>
+                              <tr className="bg-slate-50 border-t border-slate-200">
+                                <td colSpan={7} className="px-3 py-2.5 text-xs font-semibold text-slate-500 uppercase">Total</td>
+                                <td className="px-3 py-2.5 text-right tabular-nums font-bold text-slate-800">
+                                  {itemList.reduce((s, item) => s + Number(item.qty ?? item.totalQty ?? 0), 0).toLocaleString()}
+                                </td>
+                                <td className="px-3 py-2.5 text-right tabular-nums font-bold text-green-700">
+                                  {itemList.reduce((s, item) => s + Number(item.assignedQty ?? item.assigned ?? item.qty ?? 0), 0).toLocaleString()}
+                                </td>
+                                <td className="px-3 py-2.5 text-right tabular-nums font-bold text-amber-600">
+                                  {itemList.reduce((s, item) => s + Number(item.remainQty ?? item.remain ?? 0), 0).toLocaleString()}
+                                </td>
+                                <td />
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                      </>
                     )}
                   </div>
                 )}
