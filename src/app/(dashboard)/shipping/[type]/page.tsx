@@ -330,10 +330,10 @@ export default function ShippingTypePage() {
           item.positionNm ?? item.positionName ?? item.position ?? "",
         ].map(String).filter(Boolean);
         const location = locationParts.length > 0
-          ? locationParts.join("/")
+          ? locationParts.join("-")
           : String(item.location ?? item.locationCode ?? "");
         const occupancyInfo = getLocationOccupancyInfo(occupancyMap, item as Record<string, unknown>)
-          || (occupancyMap.get(location.replace(/[-_\s/]/g, "").toUpperCase()) ?? "");
+          || (occupancyMap.get(location.replace(/[-_\s]/g, "").toUpperCase()) ?? "");
         // For assignments, qty IS the assigned qty; remain = 0 unless explicitly given
         const qty         = Number(item.qty ?? item.totalQty ?? 0);
         const assignedQty = Number(item.assignedQty ?? item.assigned ?? qty);
@@ -1024,10 +1024,10 @@ export default function ShippingTypePage() {
                                   item.positionNm ?? item.positionName ?? item.position ?? "",
                                 ].map(String).filter(Boolean);
                                 const location = locParts.length > 0
-                                  ? locParts.join("/")
+                                  ? locParts.join("-")
                                   : String(item.location ?? item.locationCode ?? "");
                                 const occupancyInfo = getLocationOccupancyInfo(occupancyMap, item as Record<string, unknown>)
-                                  || (occupancyMap.get(location.replace(/[-_\s/]/g, "").toUpperCase()) ?? "");
+                                  || (occupancyMap.get(location.replace(/[-_\s]/g, "").toUpperCase()) ?? "");
                                 const qty      = Number(item.qty ?? item.totalQty ?? 0);
                                 const assigned = Number(item.assignedQty ?? item.assigned ?? qty);
                                 const remain   = Number(item.remainQty ?? item.remain ?? 0);
