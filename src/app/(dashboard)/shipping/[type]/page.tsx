@@ -169,6 +169,8 @@ export default function ShippingTypePage() {
   const [statusModal,    setStatusModal]    = useState(false);
   const [newStatus,      setNewStatus]      = useState("");
   const [cancelComment,  setCancelComment]  = useState("");
+  const [outDate,        setOutDate]        = useState("");   // for FA / DA
+  const [needOutDate,    setNeedOutDate]    = useState(false); // shown after 4xx error too
   const [statusChanging, setStatusChanging] = useState(false);
   const [statusError,    setStatusError]    = useState("");
 
@@ -392,7 +394,7 @@ export default function ShippingTypePage() {
     setTaskItems([]); setTaskType(TASK_TYPES[0]); setTaskQty(1);
     setOccupancyMap(new Map()); setPickingSaved(false);
     setAutoAssigning(false); setAutoAssignResult(""); setAutoAssignMsg("");
-    setStatusModal(false); setNewStatus(""); setCancelComment(""); setStatusError("");
+    setStatusModal(false); setNewStatus(""); setCancelComment(""); setOutDate(""); setNeedOutDate(false); setStatusError("");
   }
 
   /* ── Auto Assign: call WMS endpoint, then reload picking items ── */
@@ -449,8 +451,17 @@ export default function ShippingTypePage() {
   }
 
   /* ── Change Status ── */
+  // Statuses that require an Out Date (completion date)
+  const STATUS_NEEDS_DATE = new Set(["FA", "DA"]);
+
   async function changeStatus() {
     if (!newStatus || !selected) return;
+    // If this status needs a date and none is provided, show the field and stop
+    if (STATUS_NEEDS_DATE.has(newStatus) && !outDate) {
+      setNeedOutDate(true);
+      setStatusError("Out Date is required to complete this status change.");
+      return;
+    }
     setStatusChanging(true);
     setStatusError("");
     const code   = String(selected.shippingOrderCode ?? selected.orderCode ?? selected.outboundCode ?? "");
@@ -461,18 +472,25 @@ export default function ShippingTypePage() {
         method: "POST", headers,
         body: JSON.stringify({
           warehouseCode: whCode,
-          customerCode: cust,
-          orderCodes: [code],
+          customerCode:  cust,
+          orderCodes:    [code],
           newStatus,
-          completeDate: "",
+          outDate:       outDate || undefined,   // out date for FA / DA
+          completeDate:  outDate || undefined,   // some WMS versions use completeDate
           cancelComment,
         }),
       });
       const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(String((json as Record<string, unknown>)?.message ?? `HTTP ${res.status}`));
+      if (!res.ok) {
+        const msg = String((json as Record<string, unknown>)?.message ?? `HTTP ${res.status}`);
+        // If server complains about date, reveal the outDate field
+        if (/date|out/i.test(msg) || res.status === 405 || res.status === 400) {
+          setNeedOutDate(true);
+        }
+        throw new Error(msg);
+      }
       setStatusModal(false);
-      setNewStatus("");
-      setCancelComment("");
+      setNewStatus(""); setCancelComment(""); setOutDate(""); setNeedOutDate(false);
       await loadOrders();
       const updatedRow = { ...selected, status: newStatus, orderStatus: newStatus };
       await openDetail(updatedRow);
@@ -902,7 +920,7 @@ export default function ShippingTypePage() {
                 {/* Change Status button */}
                 {!editMode && (
                   <button
-                    onClick={() => { setStatusModal(true); setNewStatus(""); setCancelComment(""); setStatusError(""); }}
+                    onClick={() => { setStatusModal(true); setNewStatus(""); setCancelComment(""); setOutDate(""); setNeedOutDate(false); setStatusError(""); }}
                     className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors"
                   >
                     <ArrowLeftRight className="w-3.5 h-3.5" />
@@ -1005,6 +1023,27 @@ export default function ShippingTypePage() {
                     </select>
                   </div>
 
+                  {/* Out Date — required for FA/DA, also shown after date-related errors */}
+                  {(STATUS_NEEDS_DATE.has(newStatus) || needOutDate) && (
+                    <div className="mb-4">
+                      <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block flex items-center gap-1">
+                        Out Date
+                        {STATUS_NEEDS_DATE.has(newStatus) && (
+                          <span className="text-red-500 font-bold">*</span>
+                        )}
+                      </label>
+                      <input
+                        type="date"
+                        value={outDate}
+                        onChange={(e) => { setOutDate(e.target.value); setStatusError(""); }}
+                        className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      <p className="text-xs text-slate-400 mt-1">
+                        Completion date sent to WMS (outDate / completeDate)
+                      </p>
+                    </div>
+                  )}
+
                   {/* Comment for Hold / Cancel */}
                   {(newStatus === "HA" || newStatus === "CC") && (
                     <div className="mb-4">
@@ -1027,12 +1066,12 @@ export default function ShippingTypePage() {
 
                   <div className="flex gap-2">
                     <button
-                      onClick={() => { setStatusModal(false); setNewStatus(""); setCancelComment(""); setStatusError(""); }}
+                      onClick={() => { setStatusModal(false); setNewStatus(""); setCancelComment(""); setOutDate(""); setNeedOutDate(false); setStatusError(""); }}
                       className="flex-1 text-sm border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-lg py-2 font-medium transition-colors"
                     >Cancel</button>
                     <button
                       onClick={changeStatus}
-                      disabled={!newStatus || statusChanging}
+                      disabled={!newStatus || statusChanging || (STATUS_NEEDS_DATE.has(newStatus) && !outDate)}
                       className="flex-1 text-sm bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white rounded-lg py-2 font-medium transition-colors flex items-center justify-center gap-1.5"
                     >
                       {statusChanging && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
