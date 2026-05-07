@@ -468,49 +468,34 @@ export default function ShippingTypePage() {
     const whCode = String(selected.warehouseCode ?? selected.warehouse ?? warehouseCode ?? "");
     const cust   = String(selected.customerCode ?? "");
 
+    // completeDate: YYYYMMDD format (no dashes) — confirmed from WMS network inspection
+    const completeDateFormatted = outDate ? outDate.replace(/-/g, "") : "";
+
     const payload = {
       warehouseCode: whCode,
       customerCode:  cust,
       orderCodes:    [code],
       newStatus,
-      outDate:       outDate || undefined,
-      completeDate:  outDate || undefined,
-      cancelComment: cancelComment || undefined,
+      completeDate:  completeDateFormatted || "",
+      cancelComment: cancelComment || "",
     };
 
-    // Try multiple endpoint + method combinations until one succeeds
-    const attempts = [
-      { url: `/api/wms/shipping/change-status`,          method: "POST" },
-      { url: `/api/wms/shipping/change-status`,          method: "PUT"  },
-      { url: `/api/wms/shipping/${type}/change-status`,  method: "POST" },
-      { url: `/api/wms/shipping/${type}/change-status`,  method: "PUT"  },
-      { url: `/api/wms/shipping/update-status`,          method: "POST" },
-      { url: `/api/wms/shipping/status/change`,          method: "POST" },
-      { url: `/api/wms/outbound/change-status`,          method: "POST" },
-      { url: `/api/wms/outbound/change-status`,          method: "PUT"  },
-    ];
-
     try {
-      let lastMsg = "";
-      for (const { url, method } of attempts) {
-        try {
-          const res  = await fetch(url, { method, headers, body: JSON.stringify(payload) });
-          const json = await res.json().catch(() => ({}));
-          if (res.ok) {
-            setStatusModal(false);
-            setNewStatus(""); setCancelComment(""); setOutDate(""); setNeedOutDate(false);
-            await loadOrders();
-            const updatedRow = { ...selected, status: newStatus, orderStatus: newStatus };
-            await openDetail(updatedRow);
-            return;
-          }
-          lastMsg = String((json as Record<string, unknown>)?.message ?? `HTTP ${res.status}`);
-          // 4xx (not 405) = right endpoint, wrong data → stop trying
-          if (res.status !== 404 && res.status !== 405 && res.status !== 400) break;
-        } catch { /* try next */ }
+      // Confirmed endpoint: POST /shipping/status-change
+      const res  = await fetch("/api/wms/shipping/status-change", {
+        method: "POST", headers, body: JSON.stringify(payload),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = String((json as Record<string, unknown>)?.message ?? `HTTP ${res.status}`);
+        if (/date|out/i.test(msg) || res.status === 400) setNeedOutDate(true);
+        throw new Error(msg);
       }
-      if (/date|out/i.test(lastMsg)) setNeedOutDate(true);
-      throw new Error(lastMsg || "All change-status endpoints failed (405). Check WMS network tab.");
+      setStatusModal(false);
+      setNewStatus(""); setCancelComment(""); setOutDate(""); setNeedOutDate(false);
+      await loadOrders();
+      const updatedRow = { ...selected, status: newStatus, orderStatus: newStatus };
+      await openDetail(updatedRow);
     } catch (e) {
       setStatusError(String(e instanceof Error ? e.message : e));
     } finally {
