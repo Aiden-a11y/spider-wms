@@ -148,17 +148,78 @@ export default function ProductsPage() {
     setCustomers([]);
     setCustomerCode("ALL");
     setProducts([]);
-    try {
-      const r    = await fetch(`/api/wms/combo/customer-by-warehouse/${whCode}`, { headers });
-      const json = await r.json();
-      const list: Customer[] = parseArr(json)
-        .map((c) => ({ code: String(c.code ?? c.customerCode ?? ""), name: String(c.name ?? c.customerName ?? c.code ?? "") }))
-        .filter((c) => c.code);
-      setCustomers(list);
-      await fetchProducts(whCode, "ALL", list);
-    } catch {
-      await fetchProducts(whCode, "ALL", []);
+
+    // Try multiple endpoints to get the widest customer list
+    const endpoints = [
+      `/api/wms/combo/customer-by-warehouse/${whCode}`,
+      `/api/wms/combo/customer-by-ordertype/B2B?warehouseCode=${whCode}`,
+      `/api/wms/combo/customer-by-ordertype/B2C?warehouseCode=${whCode}`,
+      `/api/wms/combo/customer?warehouseCode=${whCode}`,
+      `/api/wms/combo/customer`,
+    ];
+
+    const custMap: Record<string, Customer> = {};
+    for (const ep of endpoints) {
+      try {
+        const r    = await fetch(ep, { headers });
+        const json = await r.json();
+        parseArr(json).forEach((c) => {
+          const code = String(c.code ?? c.customerCode ?? "");
+          const name = String(c.name ?? c.customerName ?? code ?? "");
+          if (code && !custMap[code]) custMap[code] = { code, name };
+        });
+      } catch { /* try next */ }
     }
+
+    const list = Object.values(custMap);
+    console.log("[Products] customers loaded:", list.map((c) => c.code).join(", "));
+    setCustomers(list);
+    await fetchProducts(whCode, "ALL", list);
+  }
+
+  /* ── Fetch all pages for one customer ── */
+  async function fetchAllPages(whCode: string, custCode: string): Promise<{ items: Record<string, unknown>[]; total: number }> {
+    const PAGE_SIZE = 100;
+    const items: Record<string, unknown>[] = [];
+    let page  = 1;
+    let total = 0;
+
+    while (true) {
+      const body = {
+        warehouseCode: whCode,
+        customerCode:  custCode,
+        page,
+        pageNum:  page,
+        size:     PAGE_SIZE,
+        pageSize: PAGE_SIZE,
+        limit:    PAGE_SIZE,
+      };
+      const res  = await fetch("/api/wms/product/list", { method: "POST", headers, body: JSON.stringify(body) });
+      const json = await res.json() as Record<string, unknown>;
+
+      // Parse total (various field names WMS might use)
+      const data = (json?.data as Record<string, unknown>) ?? {};
+      if (total === 0) {
+        total = Number(data?.total ?? data?.totalCount ?? data?.totalElements ?? json?.total ?? 0);
+      }
+
+      // Parse item list
+      const batch: Record<string, unknown>[] =
+        Array.isArray(data?.list)  ? (data.list as Record<string, unknown>[]) :
+        Array.isArray(data?.items) ? (data.items as Record<string, unknown>[]) :
+        Array.isArray(json?.data)  ? (json.data as Record<string, unknown>[]) :
+        Array.isArray(json?.list)  ? (json.list as Record<string, unknown>[]) :
+        [];
+
+      items.push(...batch);
+
+      // Stop when: got all items, or response returned fewer than PAGE_SIZE (last page), or empty
+      if (batch.length === 0 || batch.length < PAGE_SIZE || (total > 0 && items.length >= total)) break;
+      page++;
+      if (page > 50) break; // safety cap
+    }
+
+    return { items, total };
   }
 
   const fetchProducts = useCallback(async (whCode: string, custCode: string, custList: Customer[]) => {
@@ -170,21 +231,20 @@ export default function ProductsPage() {
       const targets = custCode === "ALL" ? custList : custList.filter((c) => c.code === custCode);
       setProgress({ loaded: 0, total: targets.length });
       const allProducts: Product[] = [];
+      const debugLines: string[] = [];
 
       for (let i = 0; i < targets.length; i++) {
         const cust = targets[i];
-        const res  = await fetch("/api/wms/product/list", {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ warehouseCode: whCode, customerCode: cust.code, page: 1, size: 9999 }),
-        });
-        const json = await res.json();
-        const list: Record<string, unknown>[] =
-          Array.isArray(json?.data?.list) ? json.data.list :
-          Array.isArray(json?.data)       ? json.data : [];
-        list.forEach((p) => allProducts.push({ ...p, _customerCode: cust.code, _customerName: cust.name }));
+        const { items, total } = await fetchAllPages(whCode, cust.code);
+        items.forEach((p) => allProducts.push({ ...p, _customerCode: cust.code, _customerName: cust.name }));
+        debugLines.push(`${cust.code}: fetched ${items.length}${total > 0 ? ` / ${total}` : ""}`);
         setProgress({ loaded: i + 1, total: targets.length });
       }
+
+      // Log fetch summary to console for debugging
+      console.log("[Products] fetch summary:\n" + debugLines.join("\n"));
+      console.log(`[Products] total loaded: ${allProducts.length}`);
+
       setProducts(allProducts);
       await loadUomData(allProducts);
     } catch (e) {
