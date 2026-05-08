@@ -2294,6 +2294,8 @@ export default function BillingPage() {
                               <th className="px-3 py-2 text-right text-slate-500 font-semibold">Supplies</th>
                               <th className="px-3 py-2 text-right text-slate-500 font-semibold">Packing✓</th>
                               <th className="px-3 py-2 text-right text-slate-500 font-semibold">Palletize✓</th>
+                              <th className="px-3 py-2 text-right text-violet-500 font-semibold">Labels</th>
+                              <th className="px-3 py-2 text-right text-violet-500 font-semibold">Inserts</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -2305,10 +2307,11 @@ export default function BillingPage() {
                               const oc       = tasks["Out per Carton"]     ?? 0;
                               const op       = tasks["Out per Pallet"]     ?? 0;
                               const supplies = tasks["Supplies"]           ?? 0;
+                              const labels   = (tasks["Labels"] ?? 0) + (tasks["Amazon Labels"] ?? 0) + (tasks["FBA Labeling"] ?? 0);
+                              const inserts  = tasks["Inserts"] ?? 0;
                               const packingCharged   = (oc > 0 && oc !== pc) || supplies > 0;
                               const palletizeCharged = op > 0 && op !== ppl;
                               const warn = pp > 0 && oc === 0 && op === 0 && supplies === 0;
-                              // Total carton packing billed this order
                               const packingTotal = (oc > 0 && oc !== pc ? oc : 0) + supplies;
                               return (
                                 <tr key={i} className={`border-b border-slate-50 ${warn ? "bg-amber-50" : ""}`}>
@@ -2324,12 +2327,16 @@ export default function BillingPage() {
                                   <td className="px-3 py-1.5 text-right">{op || "—"}</td>
                                   <td className="px-3 py-1.5 text-right text-blue-600 font-medium">{supplies || "—"}</td>
                                   <td className="px-3 py-1.5 text-right font-semibold">
-                                    {packingCharged
-                                      ? <span className="text-emerald-600">{packingTotal}</span>
-                                      : "—"}
+                                    {packingCharged ? <span className="text-emerald-600">{packingTotal}</span> : "—"}
                                   </td>
                                   <td className="px-3 py-1.5 text-right font-semibold">
                                     {op > 0 ? (palletizeCharged ? <span className="text-emerald-600">{op}</span> : <span className="text-slate-400 line-through">{op}</span>) : "—"}
+                                  </td>
+                                  <td className="px-3 py-1.5 text-right font-semibold">
+                                    {labels > 0 ? <span className="text-violet-600">{labels}</span> : "—"}
+                                  </td>
+                                  <td className="px-3 py-1.5 text-right font-semibold">
+                                    {inserts > 0 ? <span className="text-violet-600">{inserts}</span> : "—"}
                                   </td>
                                 </tr>
                               );
@@ -2351,6 +2358,12 @@ export default function BillingPage() {
                               </td>
                               <td className="px-3 py-1.5 text-right">
                                 {wmsSource.b2b.reduce((s, o) => { const t = parseTaskComment(String(o.comment ?? "")); const op = t["Out per Pallet"] ?? 0; const ppl = t["Picking per Pallet"] ?? 0; return s + (op > 0 && op !== ppl ? op : 0); }, 0) || "—"}
+                              </td>
+                              <td className="px-3 py-1.5 text-right text-violet-700">
+                                {wmsSource.b2b.reduce((s, o) => { const t = parseTaskComment(String(o.comment ?? "")); return s + (t["Labels"] ?? 0) + (t["Amazon Labels"] ?? 0) + (t["FBA Labeling"] ?? 0); }, 0) || "—"}
+                              </td>
+                              <td className="px-3 py-1.5 text-right text-violet-700">
+                                {wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Inserts"] ?? 0), 0) || "—"}
                               </td>
                             </tr>
                           </tbody>
