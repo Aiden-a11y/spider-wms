@@ -2,24 +2,40 @@
 
 import { useEffect, useState, useMemo, useCallback } from "react";
 import { useAuth } from "@/contexts/auth-context";
-import { Search, RefreshCw, Package, Download } from "lucide-react";
+import { Search, RefreshCw, Package, Download, X, BoxIcon, Check, AlertCircle } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 
-
-interface Customer { code: string; name: string; }
+interface Customer  { code: string; name: string; }
 interface Warehouse { id: string; name: string; }
-interface Product { [key: string]: unknown; }
+interface Product   { [key: string]: unknown; }
+
+export interface UomRow {
+  sku:              string;
+  customer_code:    string;
+  units_per_carton: number | null;
+  inner_pack_qty:   number | null;
+  pallet_qty:       number | null;
+  notes:            string | null;
+}
 
 export default function ProductsPage() {
   const { user } = useAuth();
-  const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
+  const [warehouses,    setWarehouses]    = useState<Warehouse[]>([]);
   const [warehouseCode, setWarehouseCode] = useState("");
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [customerCode, setCustomerCode] = useState("ALL");
-  const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [progress, setProgress] = useState<{ loaded: number; total: number } | null>(null);
-  const [error, setError] = useState("");
-  const [search, setSearch] = useState("");
+  const [customers,     setCustomers]     = useState<Customer[]>([]);
+  const [customerCode,  setCustomerCode]  = useState("ALL");
+  const [products,      setProducts]      = useState<Product[]>([]);
+  const [loading,       setLoading]       = useState(false);
+  const [progress,      setProgress]      = useState<{ loaded: number; total: number } | null>(null);
+  const [error,         setError]         = useState("");
+  const [search,        setSearch]        = useState("");
+
+  /* ── UOM state ── */
+  const [uomData,    setUomData]    = useState<Record<string, UomRow>>({}); // key: `${sku}__${custCode}`
+  const [uomModal,   setUomModal]   = useState<Product | null>(null);
+  const [uomEdit,    setUomEdit]    = useState<Partial<UomRow>>({});
+  const [uomSaving,  setUomSaving]  = useState(false);
+  const [uomMsg,     setUomMsg]     = useState<{ text: string; ok: boolean } | null>(null);
 
   const headers = useMemo(
     () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
@@ -31,6 +47,86 @@ export default function ProductsPage() {
     return Array.isArray(j?.data) ? j.data : Array.isArray(json) ? (json as Record<string, unknown>[]) : [];
   }
 
+  /* ── Load UOM from Supabase ── */
+  async function loadUomData(prods: Product[]) {
+    if (!supabase || prods.length === 0) return;
+    const skuRecord: Record<string, boolean> = {};
+    prods.forEach((p) => {
+      const s = String(p.productSku ?? p.sku ?? "");
+      if (s) skuRecord[s] = true;
+    });
+    const uniqueSkus = Object.keys(skuRecord);
+    if (uniqueSkus.length === 0) return;
+    try {
+      const { data } = await supabase.from("product_uom").select("*").in("sku", uniqueSkus);
+      if (data) {
+        const map: Record<string, UomRow> = {};
+        data.forEach((r: UomRow) => { map[`${r.sku}__${r.customer_code}`] = r; });
+        setUomData(map);
+      }
+    } catch { /* ignore */ }
+  }
+
+  /* ── Open UOM edit modal ── */
+  function openUomModal(product: Product, e: React.MouseEvent) {
+    e.stopPropagation();
+    const sku      = String(product.productSku ?? product.sku ?? "");
+    const custCode = String(product._customerCode ?? product.customerCode ?? "");
+    const existing = uomData[`${sku}__${custCode}`];
+    setUomModal(product);
+    setUomEdit({
+      units_per_carton: existing?.units_per_carton ?? undefined,
+      inner_pack_qty:   existing?.inner_pack_qty   ?? undefined,
+      pallet_qty:       existing?.pallet_qty        ?? undefined,
+      notes:            existing?.notes             ?? "",
+    });
+    setUomMsg(null);
+  }
+
+  /* ── Save UOM ── */
+  async function saveUom() {
+    if (!supabase || !uomModal) return;
+    setUomSaving(true);
+    setUomMsg(null);
+
+    const sku      = String(uomModal.productSku ?? uomModal.sku ?? "");
+    const custCode = String(uomModal._customerCode ?? uomModal.customerCode ?? "");
+
+    try {
+      const { error: dbErr } = await supabase
+        .from("product_uom")
+        .upsert(
+          {
+            sku,
+            customer_code:    custCode,
+            units_per_carton: uomEdit.units_per_carton || null,
+            inner_pack_qty:   uomEdit.inner_pack_qty   || null,
+            pallet_qty:       uomEdit.pallet_qty        || null,
+            notes:            uomEdit.notes             || null,
+          },
+          { onConflict: "sku,customer_code" }
+        );
+      if (dbErr) throw dbErr;
+
+      // Update local cache
+      setUomData((prev) => ({
+        ...prev,
+        [`${sku}__${custCode}`]: {
+          sku, customer_code: custCode,
+          units_per_carton: uomEdit.units_per_carton ?? null,
+          inner_pack_qty:   uomEdit.inner_pack_qty   ?? null,
+          pallet_qty:       uomEdit.pallet_qty        ?? null,
+          notes:            uomEdit.notes             ?? null,
+        },
+      }));
+      setUomMsg({ text: "Saved successfully!", ok: true });
+    } catch (e) {
+      setUomMsg({ text: `Save failed: ${String(e)}`, ok: false });
+    }
+    setUomSaving(false);
+  }
+
+  /* ── Warehouse load ── */
   useEffect(() => {
     fetch("/api/wms/combo/warehouse", { headers })
       .then((r) => r.json())
@@ -53,7 +149,7 @@ export default function ProductsPage() {
     setCustomerCode("ALL");
     setProducts([]);
     try {
-      const r = await fetch(`/api/wms/combo/customer-by-warehouse/${whCode}`, { headers });
+      const r    = await fetch(`/api/wms/combo/customer-by-warehouse/${whCode}`, { headers });
       const json = await r.json();
       const list: Customer[] = parseArr(json)
         .map((c) => ({ code: String(c.code ?? c.customerCode ?? ""), name: String(c.name ?? c.customerName ?? c.code ?? "") }))
@@ -77,27 +173,26 @@ export default function ProductsPage() {
 
       for (let i = 0; i < targets.length; i++) {
         const cust = targets[i];
-        const res = await fetch("/api/wms/product/list", {
+        const res  = await fetch("/api/wms/product/list", {
           method: "POST",
           headers,
           body: JSON.stringify({ warehouseCode: whCode, customerCode: cust.code, page: 1, size: 9999 }),
         });
         const json = await res.json();
-        const list: Record<string, unknown>[] = Array.isArray(json?.data?.list)
-          ? json.data.list
-          : Array.isArray(json?.data)
-          ? json.data
-          : [];
+        const list: Record<string, unknown>[] =
+          Array.isArray(json?.data?.list) ? json.data.list :
+          Array.isArray(json?.data)       ? json.data : [];
         list.forEach((p) => allProducts.push({ ...p, _customerCode: cust.code, _customerName: cust.name }));
         setProgress({ loaded: i + 1, total: targets.length });
       }
       setProducts(allProducts);
+      await loadUomData(allProducts);
     } catch (e) {
       setError(`Request failed: ${String(e)}`);
     }
     setProgress(null);
     setLoading(false);
-  }, [headers]);
+  }, [headers]); // eslint-disable-line
 
   const cols = useMemo(() => {
     if (products.length === 0) return [];
@@ -116,15 +211,26 @@ export default function ProductsPage() {
   async function downloadExcel() {
     const { utils, writeFile } = await import("xlsx");
     const ws = utils.json_to_sheet(filtered.map((p) => {
+      const sku      = String(p.productSku ?? p.sku ?? "");
+      const custCode = String(p._customerCode ?? "");
+      const uom      = uomData[`${sku}__${custCode}`];
       const row: Record<string, unknown> = {};
       if (customers.length > 1) row["Customer"] = String(p._customerName ?? p._customerCode ?? "");
       cols.forEach((c) => { row[c] = p[c] ?? ""; });
+      row["UPC (ea/ctn)"] = uom?.units_per_carton ?? "";
+      row["Inner Pack"]   = uom?.inner_pack_qty   ?? "";
+      row["Pallet (ctn)"] = uom?.pallet_qty        ?? "";
       return row;
     }));
     const wb = utils.book_new();
     utils.book_append_sheet(wb, ws, "Products");
     writeFile(wb, `products_${warehouseCode}_${new Date().toISOString().slice(0, 10)}.xlsx`);
   }
+
+  /* ── UOM preview calc ── */
+  const upc = Number(uomEdit.units_per_carton) || 0;
+  const ipq = Number(uomEdit.inner_pack_qty)   || 0;
+  const plq = Number(uomEdit.pallet_qty)        || 0;
 
   return (
     <div className="p-8">
@@ -149,9 +255,7 @@ export default function ProductsPage() {
           className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50"
         >
           {warehouses.length === 0 && <option value="">Loading...</option>}
-          {warehouses.map((w) => (
-            <option key={w.id} value={w.id}>{w.name || w.id}</option>
-          ))}
+          {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name || w.id}</option>)}
         </select>
 
         {customers.length > 0 && (
@@ -161,9 +265,7 @@ export default function ProductsPage() {
             className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
             <option value="ALL">All Customers</option>
-            {customers.map((c) => (
-              <option key={c.code} value={c.code}>{c.name || c.code}</option>
-            ))}
+            {customers.map((c) => <option key={c.code} value={c.code}>{c.name || c.code}</option>)}
           </select>
         )}
 
@@ -200,6 +302,12 @@ export default function ProductsPage() {
           <span className="text-slate-600">
             <b className="text-slate-900">{filtered.length.toLocaleString()}</b> products
           </span>
+          {supabase && (
+            <span className="ml-auto text-xs text-slate-400 flex items-center gap-1.5">
+              <BoxIcon className="w-3.5 h-3.5" />
+              Click any row to set UOM (carton qty)
+            </span>
+          )}
         </div>
       )}
 
@@ -208,14 +316,9 @@ export default function ProductsPage() {
           <div className="relative w-14 h-14">
             <svg className="w-14 h-14 -rotate-90" viewBox="0 0 56 56" fill="none">
               <circle cx="28" cy="28" r="24" stroke="#e2e8f0" strokeWidth="4" />
-              <circle
-                cx="28" cy="28" r="24"
-                stroke="#3b82f6" strokeWidth="4"
-                strokeLinecap="round"
+              <circle cx="28" cy="28" r="24" stroke="#3b82f6" strokeWidth="4" strokeLinecap="round"
                 strokeDasharray={`${progress && progress.total > 0 ? (progress.loaded / progress.total) * 150.8 : 40} 150.8`}
-                strokeDashoffset="0"
-                className="transition-all duration-300"
-              />
+                strokeDashoffset="0" className="transition-all duration-300" />
             </svg>
             {progress && progress.total > 0 && (
               <span className="absolute inset-0 flex items-center justify-center text-xs font-semibold text-slate-700">
@@ -236,41 +339,213 @@ export default function ProductsPage() {
         </div>
       )}
 
+      {/* ── Table ── */}
       {!loading && filtered.length > 0 && cols.length > 0 && (
-        <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+        <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200">
                   {customers.length > 1 && (
-                    <th className="px-4 py-2.5 text-left text-slate-500 font-medium whitespace-nowrap">Customer</th>
+                    <th className="px-4 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">Customer</th>
                   )}
                   {cols.map((c) => (
-                    <th key={c} className="px-4 py-2.5 text-left text-slate-500 font-medium whitespace-nowrap">{c}</th>
+                    <th key={c} className="px-4 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">{c}</th>
                   ))}
+                  <th className="px-4 py-2.5 text-center text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">
+                    <span className="flex items-center justify-center gap-1">
+                      <BoxIcon className="w-3.5 h-3.5" /> UOM
+                    </span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((p, idx) => (
-                  <tr key={idx} className="hover:bg-slate-50 border-b border-slate-100 last:border-0">
-                    {customers.length > 1 && (
-                      <td className="px-4 py-2.5 text-slate-500 text-xs whitespace-nowrap">
-                        {String(p._customerName ?? p._customerCode ?? "")}
-                      </td>
-                    )}
-                    {cols.map((c) => (
-                      <td key={c} className="px-4 py-2.5 text-slate-700 whitespace-nowrap max-w-xs truncate">
-                        {c.toLowerCase().includes("sku") || c.toLowerCase().includes("code") || c.toLowerCase().includes("upc") ? (
-                          <span className="font-mono font-medium text-slate-900 bg-slate-100 px-2 py-0.5 rounded">
-                            {String(p[c] ?? "-")}
+                {filtered.map((p, idx) => {
+                  const sku      = String(p.productSku ?? p.sku ?? "");
+                  const custCode = String(p._customerCode ?? p.customerCode ?? "");
+                  const uom      = uomData[`${sku}__${custCode}`];
+                  const hasUom   = !!uom?.units_per_carton;
+                  return (
+                    <tr key={idx}
+                      onClick={(e) => openUomModal(p, e)}
+                      className="hover:bg-blue-50 border-b border-slate-100 last:border-0 cursor-pointer group transition-colors"
+                    >
+                      {customers.length > 1 && (
+                        <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap">
+                          {String(p._customerName ?? p._customerCode ?? "")}
+                        </td>
+                      )}
+                      {cols.map((c) => (
+                        <td key={c} className="px-4 py-2.5 text-slate-700 whitespace-nowrap max-w-xs truncate">
+                          {c.toLowerCase().includes("sku") || c.toLowerCase().includes("code") || c.toLowerCase().includes("upc") ? (
+                            <span className="font-mono font-medium text-slate-900 bg-slate-100 group-hover:bg-blue-100 px-2 py-0.5 rounded transition-colors">
+                              {String(p[c] ?? "-")}
+                            </span>
+                          ) : String(p[c] ?? "-")}
+                        </td>
+                      ))}
+                      {/* UOM cell */}
+                      <td className="px-4 py-2.5 text-center">
+                        {hasUom ? (
+                          <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full px-2.5 py-1 font-semibold whitespace-nowrap">
+                            <BoxIcon className="w-3 h-3" />
+                            {uom!.units_per_carton} ea/ctn
                           </span>
-                        ) : String(p[c] ?? "-")}
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full px-2.5 py-1 border border-dashed border-slate-300 hover:border-blue-300 transition-colors">
+                            + Set UOM
+                          </span>
+                        )}
                       </td>
-                    ))}
-                  </tr>
-                ))}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── UOM Edit Modal ── */}
+      {uomModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setUomModal(null)} />
+          <div className="relative w-full max-w-sm bg-white rounded-2xl shadow-2xl overflow-hidden">
+
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 bg-slate-50">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 bg-emerald-600 rounded-lg flex items-center justify-center">
+                  <BoxIcon className="w-3.5 h-3.5 text-white" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-800">Set UOM</p>
+                  <p className="text-xs text-slate-500 font-mono mt-0.5">
+                    {String(uomModal.productSku ?? uomModal.sku ?? "")}
+                  </p>
+                </div>
+              </div>
+              <button onClick={() => setUomModal(null)} className="text-slate-400 hover:text-slate-700">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Product name */}
+            <div className="px-5 pt-4 pb-2">
+              <p className="text-xs text-slate-500 mb-0.5">Product</p>
+              <p className="text-sm font-semibold text-slate-800 truncate">
+                {String(uomModal.productName ?? uomModal.productShortName ?? "—")}
+              </p>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Customer: {String(uomModal._customerName ?? uomModal._customerCode ?? "—")}
+              </p>
+            </div>
+
+            {/* Form */}
+            <div className="px-5 pb-3 space-y-3">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="col-span-1">
+                  <label className="text-xs font-semibold text-slate-600 mb-1 block">
+                    ea / CTN <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={uomEdit.units_per_carton ?? ""}
+                    onChange={(e) => setUomEdit((p) => ({ ...p, units_per_carton: e.target.value ? Number(e.target.value) : undefined }))}
+                    placeholder="e.g. 24"
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 text-right tabular-nums font-semibold"
+                  />
+                  <p className="text-xs text-slate-400 mt-1 text-center">Units/Carton</p>
+                </div>
+                <div className="col-span-1">
+                  <label className="text-xs font-semibold text-slate-500 mb-1 block">Inner Pack</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={uomEdit.inner_pack_qty ?? ""}
+                    onChange={(e) => setUomEdit((p) => ({ ...p, inner_pack_qty: e.target.value ? Number(e.target.value) : undefined }))}
+                    placeholder="—"
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 text-right tabular-nums"
+                  />
+                  <p className="text-xs text-slate-400 mt-1 text-center">ea / Inner</p>
+                </div>
+                <div className="col-span-1">
+                  <label className="text-xs font-semibold text-slate-500 mb-1 block">CTN / Pallet</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={uomEdit.pallet_qty ?? ""}
+                    onChange={(e) => setUomEdit((p) => ({ ...p, pallet_qty: e.target.value ? Number(e.target.value) : undefined }))}
+                    placeholder="—"
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 text-right tabular-nums"
+                  />
+                  <p className="text-xs text-slate-400 mt-1 text-center">Cartons/Pallet</p>
+                </div>
+              </div>
+
+              {/* Preview */}
+              {upc > 0 && (
+                <div className="bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3 text-xs space-y-1">
+                  <p className="font-bold text-emerald-700 text-xs uppercase tracking-wide mb-1.5">Preview</p>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">1 Carton</span>
+                    <span className="font-bold text-slate-800">{upc.toLocaleString()} EA</span>
+                  </div>
+                  {ipq > 0 && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-500">1 Inner Pack</span>
+                      <span className="font-bold text-slate-800">{ipq.toLocaleString()} EA</span>
+                    </div>
+                  )}
+                  {plq > 0 && (
+                    <div className="flex items-center justify-between border-t border-emerald-200 pt-1 mt-1">
+                      <span className="text-slate-500">1 Pallet</span>
+                      <span className="font-bold text-emerald-700">
+                        {plq} CTN = {(plq * upc).toLocaleString()} EA
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div>
+                <label className="text-xs font-semibold text-slate-500 mb-1 block">Notes</label>
+                <input
+                  type="text"
+                  value={uomEdit.notes ?? ""}
+                  onChange={(e) => setUomEdit((p) => ({ ...p, notes: e.target.value }))}
+                  placeholder="Optional memo..."
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                />
+              </div>
+            </div>
+
+            {/* Save message */}
+            {uomMsg && (
+              <div className={`mx-5 mb-3 flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium ${uomMsg.ok ? "bg-emerald-50 text-emerald-700 border border-emerald-100" : "bg-red-50 text-red-700 border border-red-100"}`}>
+                {uomMsg.ok ? <Check className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
+                {uomMsg.text}
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex gap-2 px-5 pb-5">
+              <button
+                onClick={() => setUomModal(null)}
+                className="flex-1 text-sm border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-xl py-2.5 font-medium transition-colors"
+              >
+                Close
+              </button>
+              <button
+                onClick={saveUom}
+                disabled={uomSaving || !uomEdit.units_per_carton}
+                className="flex-1 text-sm bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-300 text-white rounded-xl py-2.5 font-semibold transition-colors flex items-center justify-center gap-1.5"
+              >
+                {uomSaving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                {uomSaving ? "Saving…" : "Save UOM"}
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -196,6 +196,7 @@ export default function ShippingTypePage() {
   const [allocLoading,   setAllocLoading]   = useState(false);
   const [allocRows,      setAllocRows]      = useState<AllocRow[]>([]);
   const [allocWarnings,  setAllocWarnings]  = useState<string[]>([]);
+  const [uomMap,         setUomMap]         = useState<Record<string, number>>({}); // sku → units_per_carton
 
   const headers = useMemo(
     () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
@@ -661,6 +662,26 @@ export default function ShippingTypePage() {
     const rows = Object.values(rowMap).sort((a, b) => a.location.localeCompare(b.location));
     setAllocWarnings(warnings);
     setAllocRows(rows);
+
+    // ── Fetch UOM (units_per_carton) from Supabase for all SKUs ──
+    const newUomMap: Record<string, number> = {};
+    if (supabase && rows.length > 0) {
+      const skuRecord: Record<string, boolean> = {};
+      rows.forEach((r) => { if (r.sku) skuRecord[r.sku] = true; });
+      const uniqueSkus = Object.keys(skuRecord);
+      try {
+        const { data } = await supabase
+          .from("product_uom")
+          .select("sku, units_per_carton")
+          .in("sku", uniqueSkus);
+        if (data) {
+          data.forEach((r: { sku: string; units_per_carton: number | null }) => {
+            if (r.units_per_carton) newUomMap[r.sku] = r.units_per_carton;
+          });
+        }
+      } catch { /* ignore — UOM is optional */ }
+    }
+    setUomMap(newUomMap);
     setAllocLoading(false);
   }
 
@@ -692,15 +713,23 @@ export default function ShippingTypePage() {
     const dateStr = new Date().toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
     const mergedCount = allocRows.filter((r) => Object.keys(r.perOrder).length > 1).length;
 
+    const hasUom = Object.keys(uomMap).length > 0;
+
     const perOrderCols = codes.map((c, i) =>
       `<th class="right" style="min-width:42px">#${i + 1}</th>`
     ).join("");
 
     const rows = allocRows.map((row, i) => {
       const isShared = Object.keys(row.perOrder).length > 1;
-      const perCells = codes.map((c) =>
-        `<td class="td-per">${row.perOrder[c] != null ? Number(row.perOrder[c]).toLocaleString() : "<span style='color:#ccc'>—</span>"}</td>`
-      ).join("");
+      const upc      = uomMap[row.sku] ?? 0;         // units per carton
+      const cartons  = upc > 0 ? Math.ceil(row.totalQty / upc) : null;
+      const perCells = codes.map((c) => {
+        const qty    = row.perOrder[c];
+        const ctnPer = upc > 0 && qty != null ? Math.ceil(qty / upc) : null;
+        return `<td class="td-per">
+          ${qty != null ? `<span style="font-weight:700">${Number(qty).toLocaleString()}</span>${ctnPer != null ? `<br><span style="font-size:9px;color:#6b7280">${ctnPer} ctn</span>` : ""}` : "<span style='color:#ccc'>—</span>"}
+        </td>`;
+      }).join("");
       return `
         <tr class="${i % 2 === 0 ? "row-even" : "row-odd"}">
           <td class="td-seq">${i + 1}</td>
@@ -712,7 +741,10 @@ export default function ShippingTypePage() {
           <td class="td-prod">${row.productName || "—"}</td>
           <td class="td-lot">${row.lot || "—"}</td>
           ${perCells}
-          <td class="td-total">${row.totalQty.toLocaleString()}</td>
+          <td class="td-total">
+            ${row.totalQty.toLocaleString()} EA
+            ${cartons != null ? `<div style="font-size:12px;font-weight:900;color:#065f46;margin-top:1px">${cartons} CTN</div>${upc > 0 ? `<div style="font-size:9px;color:#6b7280;margin-top:1px">${upc} ea/ctn</div>` : ""}` : ""}
+          </td>
           <td class="td-chk"><div class="chk-box"></div></td>
         </tr>`;
     }).join("");
@@ -839,7 +871,7 @@ export default function ShippingTypePage() {
         <th>Product</th>
         <th>Lot</th>
         ${perOrderCols}
-        <th class="right" style="background:#1e3a8a;min-width:60px">Total Qty</th>
+        <th class="right" style="background:#1e3a8a;min-width:72px">Total${hasUom ? " / CTN" : " Qty"}</th>
         <th style="text-align:center;width:34px">✓</th>
       </tr>
     </thead>
@@ -850,7 +882,10 @@ export default function ShippingTypePage() {
       <tr>
         <td colspan="5" style="font-size:12px;letter-spacing:1px">GRAND TOTAL</td>
         ${footCells}
-        <td class="foot-total">${total.toLocaleString()}</td>
+        <td class="foot-total">
+          ${total.toLocaleString()} EA
+          ${hasUom ? `<div style="font-size:13px;color:#86efac;margin-top:2px">${allocRows.reduce((s, r) => { const upc2 = uomMap[r.sku] ?? 0; return s + (upc2 > 0 ? Math.ceil(r.totalQty / upc2) : 0); }, 0)} CTN</div>` : ""}
+        </td>
         <td></td>
       </tr>
     </tfoot>
@@ -1981,12 +2016,16 @@ export default function ShippingTypePage() {
                                   #{i + 1}
                                 </th>
                               ))}
-                              <th className="px-3 py-2.5 text-right text-slate-700 font-bold uppercase tracking-wide whitespace-nowrap bg-slate-100">Total</th>
+                              <th className="px-3 py-2.5 text-right text-slate-700 font-bold uppercase tracking-wide whitespace-nowrap bg-slate-100">
+                                Total {Object.keys(uomMap).length > 0 && <span className="text-emerald-600">/ CTN</span>}
+                              </th>
                             </tr>
                           </thead>
                           <tbody>
                             {allocRows.map((row, i) => {
                               const isShared = Object.keys(row.perOrder).length > 1;
+                              const upc_     = uomMap[row.sku] ?? 0;
+                              const cartons  = upc_ > 0 ? Math.ceil(row.totalQty / upc_) : null;
                               return (
                                 <tr key={row.locationKey} className={`border-b border-slate-100 last:border-0 ${isShared ? "bg-emerald-50/50" : "hover:bg-slate-50"}`}>
                                   <td className="px-3 py-2 text-slate-400 tabular-nums">{i + 1}</td>
@@ -2004,15 +2043,28 @@ export default function ShippingTypePage() {
                                   <td className="px-3 py-2 font-mono text-slate-700 whitespace-nowrap">{row.sku || "—"}</td>
                                   <td className="px-3 py-2 text-slate-600 max-w-[200px] truncate">{row.productName || "—"}</td>
                                   <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{row.lot || "—"}</td>
-                                  {codes.map((c) => (
-                                    <td key={c} className="px-3 py-2 text-right tabular-nums bg-blue-50/30">
-                                      {row.perOrder[c] != null
-                                        ? <span className="font-semibold text-slate-700">{row.perOrder[c].toLocaleString()}</span>
-                                        : <span className="text-slate-300">—</span>}
-                                    </td>
-                                  ))}
-                                  <td className="px-3 py-2 text-right tabular-nums font-bold text-slate-800 bg-slate-100">
-                                    {row.totalQty.toLocaleString()}
+                                  {codes.map((c) => {
+                                    const qty = row.perOrder[c];
+                                    const ctn = upc_ > 0 && qty != null ? Math.ceil(qty / upc_) : null;
+                                    return (
+                                      <td key={c} className="px-3 py-2 text-right tabular-nums bg-blue-50/30">
+                                        {qty != null ? (
+                                          <div>
+                                            <span className="font-semibold text-slate-700">{qty.toLocaleString()}</span>
+                                            {ctn != null && <div className="text-xs text-emerald-600 font-medium">{ctn} ctn</div>}
+                                          </div>
+                                        ) : <span className="text-slate-300">—</span>}
+                                      </td>
+                                    );
+                                  })}
+                                  <td className="px-3 py-2 text-right tabular-nums bg-slate-100">
+                                    <span className="font-bold text-slate-800">{row.totalQty.toLocaleString()}</span>
+                                    {cartons != null && (
+                                      <div className="text-sm font-bold text-emerald-700">{cartons} CTN</div>
+                                    )}
+                                    {upc_ > 0 && (
+                                      <div className="text-xs text-slate-400">{upc_} ea/ctn</div>
+                                    )}
                                   </td>
                                 </tr>
                               );
@@ -2026,8 +2078,18 @@ export default function ShippingTypePage() {
                                   {allocRows.reduce((s, r) => s + (r.perOrder[c] ?? 0), 0).toLocaleString()}
                                 </td>
                               ))}
-                              <td className="px-3 py-2.5 text-right tabular-nums font-bold text-slate-900 bg-slate-200">
-                                {allocRows.reduce((s, r) => s + r.totalQty, 0).toLocaleString()}
+                              <td className="px-3 py-2.5 text-right tabular-nums bg-slate-200">
+                                <span className="font-bold text-slate-900">
+                                  {allocRows.reduce((s, r) => s + r.totalQty, 0).toLocaleString()} EA
+                                </span>
+                                {Object.keys(uomMap).length > 0 && (
+                                  <div className="text-sm font-bold text-emerald-700">
+                                    {allocRows.reduce((s, r) => {
+                                      const u = uomMap[r.sku] ?? 0;
+                                      return s + (u > 0 ? Math.ceil(r.totalQty / u) : 0);
+                                    }, 0)} CTN
+                                  </div>
+                                )}
                               </td>
                             </tr>
                           </tfoot>
