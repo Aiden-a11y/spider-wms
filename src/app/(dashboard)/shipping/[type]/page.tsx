@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import {
   RefreshCw, AlertCircle, Truck, Search, Download, X,
   Building2, User, Store, Globe, MapPin, Save, CheckCircle2, ArrowLeftRight,
+  ClipboardList, AlertTriangle,
 } from "lucide-react";
 import { buildLocationOccupancyLookup, getLocationOccupancyInfo } from "@/lib/wms";
 import { supabase } from "@/lib/supabase";
@@ -97,6 +98,16 @@ const TASK_TYPES = [
 
 type TaskItem = { type: string; qty: number };
 
+type AllocRow = {
+  locationKey: string;
+  location: string;
+  sku: string;
+  productName: string;
+  lot: string;
+  totalQty: number;
+  perOrder: Record<string, number>;
+};
+
 /* ── Field display / edit helper ── */
 function Field({ label, value, onChange }: { label: string; value: unknown; onChange?: (v: string) => void }) {
   const v = value == null || value === "" ? "-" : String(value);
@@ -179,6 +190,13 @@ export default function ShippingTypePage() {
   const [taskType,   setTaskType]   = useState<string>(TASK_TYPES[0]);
   const [taskQty,    setTaskQty]    = useState<number | "">(1);
 
+  /* ── Picking Allocation state (B2B only) ── */
+  const [selectedCodes,  setSelectedCodes]  = useState<Record<string, boolean>>({});
+  const [allocModal,     setAllocModal]     = useState(false);
+  const [allocLoading,   setAllocLoading]   = useState(false);
+  const [allocRows,      setAllocRows]      = useState<AllocRow[]>([]);
+  const [allocWarnings,  setAllocWarnings]  = useState<string[]>([]);
+
   const headers = useMemo(
     () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
     [user]
@@ -212,7 +230,7 @@ export default function ShippingTypePage() {
   /* ── 3. Orders ── */
   async function loadOrders(whCode = warehouseCode, custCode = customerCode) {
     if (!whCode) return;
-    setLoading(true); setError(""); setOrders([]); setColFilters({});
+    setLoading(true); setError(""); setOrders([]); setColFilters({}); setSelectedCodes({});
     const body: Record<string, unknown> = { page: 1, limit: 500, pageSize: 500, orderType: meta.orderType, warehouseCode: whCode };
     if (custCode && custCode !== "ALL") body.customerCode = custCode;
     for (const ep of [`/api/wms/shipping/${type}/list`, `/api/wms/shipping/list`, `/api/wms/outbound/${type}/list`, `/api/wms/outbound/list`]) {
@@ -562,6 +580,111 @@ export default function ShippingTypePage() {
     }
   }
 
+  /* ── Picking Allocation (B2B) ── */
+  function toggleOrderSelect(code: string) {
+    if (!code) return;
+    setSelectedCodes((prev) => {
+      const next = { ...prev };
+      if (next[code]) delete next[code]; else next[code] = true;
+      return next;
+    });
+  }
+
+  function toggleAllOrders() {
+    const allSelected = filtered.length > 0 && filtered.every((o) => {
+      const c = String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? "");
+      return !!selectedCodes[c];
+    });
+    if (allSelected) {
+      setSelectedCodes({});
+    } else {
+      const next: Record<string, boolean> = {};
+      filtered.forEach((o) => {
+        const c = String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? "");
+        if (c) next[c] = true;
+      });
+      setSelectedCodes(next);
+    }
+  }
+
+  async function runPickingAllocation() {
+    const codes = Object.keys(selectedCodes).filter((k) => selectedCodes[k]);
+    if (codes.length === 0) return;
+    setAllocModal(true);
+    setAllocLoading(true);
+    setAllocRows([]);
+    setAllocWarnings([]);
+
+    const warnings: string[] = [];
+    const rowMap: Record<string, AllocRow> = {};
+
+    for (const code of codes) {
+      try {
+        const res  = await fetch(`/api/wms/shipping/items/${code}`, { headers });
+        const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+        const data = (json?.data as Record<string, unknown>) ?? {};
+        const items: Record<string, unknown>[] =
+          Array.isArray(json?.assignments) ? (json.assignments as Record<string, unknown>[]) :
+          Array.isArray(data?.assignments) ? (data.assignments as Record<string, unknown>[]) :
+          Array.isArray(json?.list)        ? (json.list as Record<string, unknown>[]) :
+          [];
+
+        if (items.length === 0) { warnings.push(code); continue; }
+
+        for (const item of items) {
+          const locParts = [
+            String(item.zoneNm  ?? ""), String(item.aisleNm ?? ""),
+            String(item.bayNm   ?? ""), String(item.levelNm ?? ""), String(item.positionNm ?? ""),
+          ].filter(Boolean);
+          const location = locParts.join("-") || String(item.location ?? item.locationCode ?? "");
+          const sku      = String(item.productSku ?? item.sku ?? "");
+          const lot      = String(item.lotNo ?? item.lot ?? "");
+          const qty      = Number(item.qty ?? 0);
+          const key      = `${location}||${sku}||${lot}`;
+
+          if (rowMap[key]) {
+            rowMap[key].totalQty += qty;
+            rowMap[key].perOrder[code] = (rowMap[key].perOrder[code] ?? 0) + qty;
+          } else {
+            rowMap[key] = {
+              locationKey: key, location, sku,
+              productName: String(item.productName ?? item.itemName ?? ""),
+              lot, totalQty: qty, perOrder: { [code]: qty },
+            };
+          }
+        }
+      } catch {
+        warnings.push(code);
+      }
+    }
+
+    const rows = Object.values(rowMap).sort((a, b) => a.location.localeCompare(b.location));
+    setAllocWarnings(warnings);
+    setAllocRows(rows);
+    setAllocLoading(false);
+  }
+
+  async function exportAllocExcel() {
+    const { utils, writeFile } = await import("xlsx");
+    const codes = Object.keys(selectedCodes).filter((k) => selectedCodes[k]);
+    const shortCode = (c: string) => c.slice(-5);
+    const header = ["#", "Location", "SKU", "Product", "Lot", ...codes.map(shortCode), "Total Qty"];
+    const dataRows = allocRows.map((row, i) => [
+      i + 1, row.location, row.sku, row.productName, row.lot,
+      ...codes.map((c) => row.perOrder[c] ?? 0),
+      row.totalQty,
+    ]);
+    const ws = utils.aoa_to_sheet([header, ...dataRows]);
+    ws["!cols"] = [
+      { wch: 4 }, { wch: 24 }, { wch: 20 }, { wch: 32 }, { wch: 12 },
+      ...codes.map(() => ({ wch: 10 })),
+      { wch: 10 },
+    ];
+    const wb = utils.book_new();
+    utils.book_append_sheet(wb, ws, "Picking Allocation");
+    writeFile(wb, `picking_alloc_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }
+
   function addTaskItem() {
     if (!taskType || !taskQty || Number(taskQty) <= 0) return;
     setTaskItems((prev) => {
@@ -730,6 +853,28 @@ export default function ShippingTypePage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {type === "b2b" && (() => {
+            const selCount = Object.keys(selectedCodes).filter((k) => selectedCodes[k]).length;
+            return (
+              <button
+                onClick={runPickingAllocation}
+                disabled={selCount === 0}
+                className={`flex items-center gap-2 text-sm font-medium rounded-lg px-3 py-2 transition-colors ${
+                  selCount > 0
+                    ? "bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
+                    : "border border-slate-200 text-slate-400 bg-white cursor-not-allowed"
+                }`}
+              >
+                <ClipboardList className="w-4 h-4" />
+                Picking Allocation
+                {selCount > 0 && (
+                  <span className="bg-white/25 text-white text-xs font-bold rounded-full px-1.5 min-w-[20px] text-center">
+                    {selCount}
+                  </span>
+                )}
+              </button>
+            );
+          })()}
           <button onClick={downloadExcel} disabled={filtered.length === 0}
             className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors disabled:opacity-40">
             <Download className="w-4 h-4" /> Export
@@ -821,6 +966,16 @@ export default function ShippingTypePage() {
             <table className="w-full text-xs">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-100">
+                  {type === "b2b" && (
+                    <th className="px-3 py-2.5 w-10">
+                      <input
+                        type="checkbox"
+                        checked={filtered.length > 0 && filtered.every((o) => !!selectedCodes[String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? "")])}
+                        onChange={toggleAllOrders}
+                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                      />
+                    </th>
+                  )}
                   {cols.map((c) => (
                     <th key={c} className="px-4 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">
                       {COL_LABELS[c] ?? c}
@@ -832,6 +987,7 @@ export default function ShippingTypePage() {
                   </th>
                 </tr>
                 <tr className="bg-slate-50 border-b border-slate-200">
+                  {type === "b2b" && <th className="px-3 py-1.5 w-10" />}
                   {cols.map((c) => {
                     const opts   = colOptions[c];
                     const active = !!colFilters[c];
@@ -860,9 +1016,21 @@ export default function ShippingTypePage() {
                   // Only show checkmark if comment has actual task entries (not arbitrary comment text)
                   const comment = String(order.comment ?? order.orderComment ?? order.memo ?? "").trim();
                   const hasTask = comment.includes("×");
+                  const orderCode_ = String(order.shippingOrderCode ?? order.orderCode ?? order.outboundCode ?? "");
+                  const isSelected = type === "b2b" && !!selectedCodes[orderCode_];
                   return (
                     <tr key={idx} onClick={() => openDetail(order)}
-                      className="border-b border-slate-100 last:border-0 hover:bg-blue-50 cursor-pointer transition-colors group">
+                      className={`border-b border-slate-100 last:border-0 hover:bg-blue-50 cursor-pointer transition-colors group ${isSelected ? "bg-blue-50" : ""}`}>
+                      {type === "b2b" && (
+                        <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleOrderSelect(orderCode_)}
+                            className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                          />
+                        </td>
+                      )}
                       {cols.map((c) => {
                         const val      = String(order[c] ?? "-");
                         const isStatus = c.toLowerCase().includes("status");
@@ -1478,6 +1646,201 @@ export default function ShippingTypePage() {
                 )}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Picking Allocation Modal ── */}
+      {allocModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+          <div className="absolute inset-0 bg-black/50" onClick={() => { if (!allocLoading) setAllocModal(false); }} />
+          <div className="relative w-full max-w-7xl bg-white shadow-2xl flex flex-col rounded-2xl overflow-hidden" style={{ height: "90vh" }}>
+
+            {/* Modal header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center shadow-sm">
+                  <ClipboardList className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h2 className="font-bold text-slate-900 text-base">Picking Allocation</h2>
+                  {!allocLoading && (
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {Object.keys(selectedCodes).filter((k) => selectedCodes[k]).length} orders ·{" "}
+                      {allocRows.length} pick lines ·{" "}
+                      {allocRows.reduce((s, r) => s + r.totalQty, 0).toLocaleString()} total units
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {!allocLoading && allocRows.length > 0 && (
+                  <button onClick={exportAllocExcel}
+                    className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors">
+                    <Download className="w-4 h-4" /> Export Excel
+                  </button>
+                )}
+                <button onClick={() => setAllocModal(false)} className="text-slate-400 hover:text-slate-700 transition-colors ml-1">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Warning: orders with no picking assignment */}
+            {allocWarnings.length > 0 && (
+              <div className="px-6 py-3 bg-amber-50 border-b border-amber-200 flex-shrink-0">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-semibold text-amber-800">
+                      {allocWarnings.length} order{allocWarnings.length > 1 ? "s have" : " has"} no picking assignments — Auto Assign may not have been run yet.
+                    </p>
+                    <p className="text-xs text-amber-700 mt-1 font-mono">
+                      {allocWarnings.join("  ·  ")}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto">
+              {allocLoading ? (
+                <div className="flex flex-col items-center justify-center h-full gap-3 text-slate-400">
+                  <RefreshCw className="w-8 h-8 animate-spin text-blue-500" />
+                  <p className="text-sm font-medium">
+                    Fetching picking locations for {Object.keys(selectedCodes).filter((k) => selectedCodes[k]).length} orders…
+                  </p>
+                  <p className="text-xs">This may take a few seconds</p>
+                </div>
+              ) : allocRows.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full gap-3 text-slate-400">
+                  <MapPin className="w-10 h-10 opacity-30" />
+                  <p className="font-semibold">No picking data found</p>
+                  <p className="text-xs">Make sure Auto Assign has been run for all selected orders.</p>
+                </div>
+              ) : (
+                <div className="p-6 space-y-5">
+                  {/* Summary cards */}
+                  {(() => {
+                    const codes = Object.keys(selectedCodes).filter((k) => selectedCodes[k]);
+                    const locMap: Record<string, boolean> = {};
+                    allocRows.forEach((r) => { locMap[r.location] = true; });
+                    const uniqueLocs   = Object.keys(locMap).length;
+                    const sharedLines  = allocRows.filter((r) => Object.keys(r.perOrder).length > 1).length;
+                    const totalUnits   = allocRows.reduce((s, r) => s + r.totalQty, 0);
+                    return (
+                      <div className="grid grid-cols-4 gap-4">
+                        <div className="bg-slate-50 rounded-xl px-4 py-3 border border-slate-100">
+                          <p className="text-xs text-slate-500 mb-1">Orders</p>
+                          <p className="text-2xl font-bold text-slate-800">{codes.length}</p>
+                        </div>
+                        <div className="bg-slate-50 rounded-xl px-4 py-3 border border-slate-100">
+                          <p className="text-xs text-slate-500 mb-1">Unique Locations</p>
+                          <p className="text-2xl font-bold text-slate-800">{uniqueLocs}</p>
+                        </div>
+                        <div className={`rounded-xl px-4 py-3 border ${sharedLines > 0 ? "bg-emerald-50 border-emerald-100" : "bg-slate-50 border-slate-100"}`}>
+                          <p className={`text-xs mb-1 ${sharedLines > 0 ? "text-emerald-600" : "text-slate-500"}`}>Merged Locations</p>
+                          <p className={`text-2xl font-bold ${sharedLines > 0 ? "text-emerald-700" : "text-slate-400"}`}>{sharedLines}</p>
+                          {sharedLines > 0 && <p className="text-xs text-emerald-600 mt-0.5">pick lines consolidated</p>}
+                        </div>
+                        <div className="bg-blue-50 rounded-xl px-4 py-3 border border-blue-100">
+                          <p className="text-xs text-blue-600 mb-1">Total Units</p>
+                          <p className="text-2xl font-bold text-blue-700">{totalUnits.toLocaleString()}</p>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Order legend */}
+                  {(() => {
+                    const codes = Object.keys(selectedCodes).filter((k) => selectedCodes[k]);
+                    return (
+                      <div className="flex flex-wrap gap-2">
+                        {codes.map((c, i) => (
+                          <span key={c} className="text-xs font-mono bg-slate-100 text-slate-600 border border-slate-200 rounded-lg px-2.5 py-1">
+                            <span className="font-bold text-blue-600">#{i + 1}</span> → {c}
+                          </span>
+                        ))}
+                      </div>
+                    );
+                  })()}
+
+                  {/* Picking allocation table */}
+                  {(() => {
+                    const codes = Object.keys(selectedCodes).filter((k) => selectedCodes[k]);
+                    return (
+                      <div className="overflow-x-auto rounded-xl border border-slate-200">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="bg-slate-50 border-b border-slate-200">
+                              <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide w-8">#</th>
+                              <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">Location</th>
+                              <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">SKU</th>
+                              <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide">Product</th>
+                              <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">Lot</th>
+                              {codes.map((c, i) => (
+                                <th key={c} className="px-3 py-2.5 text-right text-blue-600 font-semibold uppercase tracking-wide whitespace-nowrap bg-blue-50/60">
+                                  #{i + 1}
+                                </th>
+                              ))}
+                              <th className="px-3 py-2.5 text-right text-slate-700 font-bold uppercase tracking-wide whitespace-nowrap bg-slate-100">Total</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {allocRows.map((row, i) => {
+                              const isShared = Object.keys(row.perOrder).length > 1;
+                              return (
+                                <tr key={row.locationKey} className={`border-b border-slate-100 last:border-0 ${isShared ? "bg-emerald-50/50" : "hover:bg-slate-50"}`}>
+                                  <td className="px-3 py-2 text-slate-400 tabular-nums">{i + 1}</td>
+                                  <td className="px-3 py-2 font-mono text-slate-800 whitespace-nowrap">
+                                    <span className="flex items-center gap-1.5">
+                                      <MapPin className="w-3 h-3 text-slate-400 flex-shrink-0" />
+                                      {row.location || "—"}
+                                      {isShared && (
+                                        <span className="text-xs font-semibold text-emerald-600 bg-emerald-100 border border-emerald-200 px-1.5 py-0.5 rounded-full whitespace-nowrap">
+                                          merged
+                                        </span>
+                                      )}
+                                    </span>
+                                  </td>
+                                  <td className="px-3 py-2 font-mono text-slate-700 whitespace-nowrap">{row.sku || "—"}</td>
+                                  <td className="px-3 py-2 text-slate-600 max-w-[200px] truncate">{row.productName || "—"}</td>
+                                  <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{row.lot || "—"}</td>
+                                  {codes.map((c) => (
+                                    <td key={c} className="px-3 py-2 text-right tabular-nums bg-blue-50/30">
+                                      {row.perOrder[c] != null
+                                        ? <span className="font-semibold text-slate-700">{row.perOrder[c].toLocaleString()}</span>
+                                        : <span className="text-slate-300">—</span>}
+                                    </td>
+                                  ))}
+                                  <td className="px-3 py-2 text-right tabular-nums font-bold text-slate-800 bg-slate-100">
+                                    {row.totalQty.toLocaleString()}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                          <tfoot>
+                            <tr className="border-t-2 border-slate-300 bg-slate-50">
+                              <td colSpan={5} className="px-3 py-2.5 text-xs font-bold text-slate-500 uppercase tracking-wide">Total</td>
+                              {codes.map((c) => (
+                                <td key={c} className="px-3 py-2.5 text-right tabular-nums font-bold text-blue-700 bg-blue-50">
+                                  {allocRows.reduce((s, r) => s + (r.perOrder[c] ?? 0), 0).toLocaleString()}
+                                </td>
+                              ))}
+                              <td className="px-3 py-2.5 text-right tabular-nums font-bold text-slate-900 bg-slate-200">
+                                {allocRows.reduce((s, r) => s + r.totalQty, 0).toLocaleString()}
+                              </td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
