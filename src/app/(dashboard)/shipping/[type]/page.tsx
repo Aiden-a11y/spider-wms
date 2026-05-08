@@ -685,6 +685,196 @@ export default function ShippingTypePage() {
     writeFile(wb, `picking_alloc_${new Date().toISOString().slice(0, 10)}.xlsx`);
   }
 
+  function printPickingTicket() {
+    const codes   = Object.keys(selectedCodes).filter((k) => selectedCodes[k]);
+    const total   = allocRows.reduce((s, r) => s + r.totalQty, 0);
+    const now     = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+    const dateStr = new Date().toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+    const mergedCount = allocRows.filter((r) => Object.keys(r.perOrder).length > 1).length;
+
+    const perOrderCols = codes.map((c, i) =>
+      `<th class="right" style="min-width:42px">#${i + 1}</th>`
+    ).join("");
+
+    const rows = allocRows.map((row, i) => {
+      const isShared = Object.keys(row.perOrder).length > 1;
+      const perCells = codes.map((c) =>
+        `<td class="td-per">${row.perOrder[c] != null ? Number(row.perOrder[c]).toLocaleString() : "<span style='color:#ccc'>—</span>"}</td>`
+      ).join("");
+      return `
+        <tr class="${i % 2 === 0 ? "row-even" : "row-odd"}">
+          <td class="td-seq">${i + 1}</td>
+          <td class="td-loc">
+            ${row.location || "—"}
+            ${isShared ? '<span class="merged-badge">MERGED</span>' : ""}
+          </td>
+          <td class="td-sku">${row.sku || "—"}</td>
+          <td class="td-prod">${row.productName || "—"}</td>
+          <td class="td-lot">${row.lot || "—"}</td>
+          ${perCells}
+          <td class="td-total">${row.totalQty.toLocaleString()}</td>
+          <td class="td-chk"><div class="chk-box"></div></td>
+        </tr>`;
+    }).join("");
+
+    const footCells = codes.map((c) =>
+      `<td style="text-align:right;padding:6px 8px;font-weight:700;font-size:11px;">
+        ${allocRows.reduce((s, r) => s + (r.perOrder[c] ?? 0), 0).toLocaleString()}
+      </td>`
+    ).join("");
+
+    const legend = codes.map((c, i) =>
+      `<span class="legend-item"><b style="color:#2563eb">#${i + 1}</b> → ${c}</span>`
+    ).join("");
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Picking Ticket · ${dateStr}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#111;background:#fff}
+  .print-bar{background:#1e293b;padding:10px 20px;display:flex;align-items:center;gap:12px}
+  .print-btn{background:#2563eb;color:#fff;border:none;padding:8px 22px;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;letter-spacing:.3px}
+  .print-btn:hover{background:#1d4ed8}
+  .hint{color:#94a3b8;font-size:11px}
+  .page{padding:13mm 14mm;max-width:297mm;margin:0 auto}
+
+  /* ─ Header ─ */
+  .hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #111;padding-bottom:10px;margin-bottom:12px}
+  .hdr-left .company{font-size:20px;font-weight:900;letter-spacing:-0.5px}
+  .hdr-left .sub{font-size:10px;color:#555;margin-top:2px}
+  .hdr-right{text-align:right}
+  .hdr-right .doc-title{font-size:24px;font-weight:900;letter-spacing:3px;color:#111}
+  .hdr-right .doc-date{font-size:9px;color:#777;margin-top:3px}
+
+  /* ─ Info grid ─ */
+  .info-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-bottom:12px;padding:8px 10px;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:5px}
+  .info-cell .lbl{font-size:8px;text-transform:uppercase;letter-spacing:.6px;color:#64748b}
+  .info-cell .val{font-size:13px;font-weight:800;margin-top:1px}
+
+  /* ─ Legend ─ */
+  .legend{margin-bottom:10px}
+  .legend-title{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#475569;margin-bottom:4px}
+  .legend-grid{display:flex;flex-wrap:wrap;gap:4px}
+  .legend-item{font-size:10px;font-family:monospace;background:#e2e8f0;padding:2px 9px;border-radius:3px;border:1px solid #cbd5e1}
+
+  /* ─ Table ─ */
+  table{width:100%;border-collapse:collapse;border:1px solid #94a3b8}
+  thead tr{background:#1e293b;color:#fff}
+  thead th{padding:6px 7px;text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;border-right:1px solid #334155}
+  thead th.right{text-align:right}
+  .row-even{background:#fff}
+  .row-odd{background:#f8fafc}
+  tbody tr{border-bottom:1px solid #e2e8f0}
+  td{padding:5px 7px;vertical-align:middle;border-right:1px solid #e2e8f0}
+
+  .td-seq{color:#94a3b8;font-size:10px;width:24px;text-align:right}
+  .td-loc{font-size:15px;font-weight:900;font-family:monospace;white-space:nowrap;color:#0f172a}
+  .merged-badge{font-size:8px;font-weight:800;color:#065f46;background:#d1fae5;border:1px solid #6ee7b7;padding:1px 6px;border-radius:9px;margin-left:5px;letter-spacing:.3px;vertical-align:middle}
+  .td-sku{font-family:monospace;font-size:10px;white-space:nowrap;color:#1e40af}
+  .td-prod{font-size:10px;color:#374151;max-width:180px}
+  .td-lot{font-family:monospace;font-size:9px;color:#6b7280;white-space:nowrap}
+  .td-per{text-align:right;font-size:10px;color:#374151;min-width:38px}
+  .td-total{text-align:right;font-size:17px;font-weight:900;color:#1d4ed8;white-space:nowrap;background:#eff6ff;border-left:2px solid #bfdbfe}
+  .td-chk{text-align:center;width:30px;background:#fafafa}
+  .chk-box{width:16px;height:16px;border:2px solid #374151;display:inline-block;border-radius:2px}
+
+  /* ─ Footer ─ */
+  tfoot tr{background:#1e293b;color:#fff}
+  tfoot td{padding:6px 7px;font-weight:700;font-size:11px;border-right:1px solid #334155}
+  .foot-total{text-align:right;font-size:18px;font-weight:900;background:#1d4ed8;color:#fff}
+
+  /* ─ Sign / Footer bar ─ */
+  .sign-area{display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;margin-top:18px}
+  .sign-box{border-top:1.5px solid #000;padding-top:4px;font-size:8px;text-transform:uppercase;letter-spacing:.6px;color:#6b7280}
+  .page-footer{margin-top:14px;border-top:1px solid #cbd5e1;padding-top:6px;display:flex;justify-content:space-between;font-size:8px;color:#94a3b8}
+
+  @media print{
+    .print-bar{display:none!important}
+    .page{padding:8mm 10mm}
+    body{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  }
+</style>
+</head>
+<body>
+<div class="print-bar">
+  <button class="print-btn" onclick="window.print()">🖨&nbsp; Print / Save as PDF</button>
+  <span class="hint">In the print dialog → choose "Save as PDF" as the destination</span>
+</div>
+<div class="page">
+
+  <div class="hdr">
+    <div class="hdr-left">
+      <div class="company">STL WAREHOUSE</div>
+      <div class="sub">Warehouse Management System — WMS Dashboard</div>
+    </div>
+    <div class="hdr-right">
+      <div class="doc-title">PICKING TICKET</div>
+      <div class="doc-date">Generated: ${now}</div>
+    </div>
+  </div>
+
+  <div class="info-grid">
+    <div class="info-cell"><div class="lbl">Warehouse</div><div class="val">${warehouseCode}</div></div>
+    <div class="info-cell"><div class="lbl">Orders</div><div class="val">${codes.length}</div></div>
+    <div class="info-cell"><div class="lbl">Pick Lines</div><div class="val">${allocRows.length}</div></div>
+    <div class="info-cell"><div class="lbl">Merged Lines</div><div class="val" style="color:${mergedCount > 0 ? "#065f46" : "#94a3b8"}">${mergedCount}</div></div>
+    <div class="info-cell"><div class="lbl">Total Units</div><div class="val" style="color:#1d4ed8">${total.toLocaleString()}</div></div>
+    <div class="info-cell"><div class="lbl">Date</div><div class="val" style="font-size:11px">${dateStr}</div></div>
+  </div>
+
+  <div class="legend">
+    <div class="legend-title">Order Reference</div>
+    <div class="legend-grid">${legend}</div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th class="right">#</th>
+        <th>Location</th>
+        <th>SKU</th>
+        <th>Product</th>
+        <th>Lot</th>
+        ${perOrderCols}
+        <th class="right" style="background:#1e3a8a;min-width:60px">Total Qty</th>
+        <th style="text-align:center;width:34px">✓</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows}
+    </tbody>
+    <tfoot>
+      <tr>
+        <td colspan="5" style="font-size:12px;letter-spacing:1px">GRAND TOTAL</td>
+        ${footCells}
+        <td class="foot-total">${total.toLocaleString()}</td>
+        <td></td>
+      </tr>
+    </tfoot>
+  </table>
+
+  <div class="sign-area">
+    <div class="sign-box">Picker Name</div>
+    <div class="sign-box">Picker Signature</div>
+    <div class="sign-box">Completed Time</div>
+  </div>
+
+  <div class="page-footer">
+    <span>STL WMS Dashboard — Picking Ticket · Confidential</span>
+    <span>${now}</span>
+  </div>
+
+</div>
+</body>
+</html>`;
+
+    const win = window.open("", "_blank", "width=1200,height=900");
+    if (win) { win.document.write(html); win.document.close(); }
+  }
+
   function addTaskItem() {
     if (!taskType || !taskQty || Number(taskQty) <= 0) return;
     setTaskItems((prev) => {
@@ -1675,10 +1865,17 @@ export default function ShippingTypePage() {
               </div>
               <div className="flex items-center gap-2">
                 {!allocLoading && allocRows.length > 0 && (
-                  <button onClick={exportAllocExcel}
-                    className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors">
-                    <Download className="w-4 h-4" /> Export Excel
-                  </button>
+                  <>
+                    <button onClick={printPickingTicket}
+                      className="flex items-center gap-2 text-sm font-medium text-white bg-slate-700 hover:bg-slate-900 rounded-lg px-3 py-2 transition-colors shadow-sm">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                      Print Ticket (PDF)
+                    </button>
+                    <button onClick={exportAllocExcel}
+                      className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors">
+                      <Download className="w-4 h-4" /> Export Excel
+                    </button>
+                  </>
                 )}
                 <button onClick={() => setAllocModal(false)} className="text-slate-400 hover:text-slate-700 transition-colors ml-1">
                   <X className="w-5 h-5" />
