@@ -127,6 +127,7 @@ export function buildDefaultLineItems(): BillingLineItem[] {
   const b2bKeys = [
     "b2b_order", "b2b_pick_piece", "b2b_pick_carton",
     "b2b_pick_pallet", "b2b_carton_packing", "b2b_palletizing",
+    "b2b_label", "b2b_insert",
   ] as const;
   for (const id of b2bKeys) {
     const r = FULFILLMENT_RATES[id];

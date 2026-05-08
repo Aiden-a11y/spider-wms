@@ -66,6 +66,8 @@ export type FulfillmentRateKey =
   | "b2b_pick_pallet"
   | "b2b_carton_packing"
   | "b2b_palletizing"
+  | "b2b_label"
+  | "b2b_insert"
   | "b2c_order"
   | "b2c_pick_piece"
   | "b2c_fragile"
@@ -82,11 +84,13 @@ export const FULFILLMENT_RATES: Record<
   b2b_pick_pallet:   { description: "B2B — Picking (Full Pallet)",            rate: 6.50, unit: "per pallet",  note: "Entire pallet picked unchanged" },
   b2b_carton_packing:{ description: "B2B — Carton Packing",                   rate: 1.25, unit: "per carton/bag" },
   b2b_palletizing:   { description: "B2B — Palletizing w/ Stretch Wrap",      rate: 12,   unit: "per pallet",  note: "Pallet cost charged separately" },
+  b2b_label:         { description: "B2B — Label",                            rate: 0.20, unit: "per label" },
+  b2b_insert:        { description: "B2B — Order Inserts",                    rate: 0.10, unit: "per insert" },
   b2c_order:         { description: "B2C — Order Processing",                 rate: 2,    unit: "per order",   note: "Flat rate up to 5 picks/order" },
   b2c_pick_piece:    { description: "B2C — Picking (Piece, after 5th pick)",  rate: 0.20, unit: "per pick",    note: "After 5 items per order" },
   b2c_fragile:       { description: "B2C — Fragile Pack",                     rate: 0.25, unit: "per item",    note: "Additional dunnage if applicable" },
-  fulfillment_insert:{ description: "Order Inserts (BOL, packing list, etc.)",rate: 0.10, unit: "per insert" },
-  fulfillment_label: { description: "Label",                                  rate: 0.20, unit: "per label/shipping unit" },
+  fulfillment_insert:{ description: "B2C — Order Inserts",                    rate: 0.10, unit: "per insert" },
+  fulfillment_label: { description: "B2C — Label",                            rate: 0.20, unit: "per label/shipping unit" },
 };
 
 // ─── 4. Return Management ─────────────────────────────────────────────────────

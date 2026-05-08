@@ -400,6 +400,8 @@ function addRateTableSheet(wb: ExcelJS.Workbook) {
     ["Picking — Full Pallet", "$6.50", "per pallet"],
     ["Carton Packing", "$1.25", "per carton/bag"],
     ["Palletizing w/ Stretch Wrap", "$12.00", "per pallet"],
+    ["Label", "$0.20", "per label"],
+    ["Order Inserts", "$0.10", "per insert"],
   ];
   b2b.forEach((row, i) => addRow(row[0], row[1], row[2], i % 2 === 1));
   blank();
@@ -1497,12 +1499,12 @@ export default function BillingPage() {
           pickCarton += pc;
           pickPallet += ppl;
 
-          // Labels: "Labels" / "Amazon Labels" / "FBA Labeling" → fulfillment_label
+          // Labels: "Labels" / "Amazon Labels" / "FBA Labeling" → b2b_label
           labelQty += (tasks["Labels"]        ?? 0)
                     + (tasks["Amazon Labels"] ?? 0)
                     + (tasks["FBA Labeling"]  ?? 0);
 
-          // Inserts → fulfillment_insert
+          // Inserts → b2b_insert
           insertQty += tasks["Inserts"] ?? 0;
 
           // Carton Packing:
@@ -1526,10 +1528,10 @@ export default function BillingPage() {
         if (pickPallet    > 0) updates["b2b_pick_pallet"]     = pickPallet;
         if (cartonPacking > 0) updates["b2b_carton_packing"]  = cartonPacking;
         if (palletizing   > 0) updates["b2b_palletizing"]     = palletizing;
-        if (b2bWarnings.length > 0) source.b2bWarnings        = b2bWarnings;
-        // Labels & Inserts (B2B portion — B2C will accumulate below)
-        updates["fulfillment_label"]  = (updates["fulfillment_label"]  as number ?? 0) + labelQty;
-        updates["fulfillment_insert"] = (updates["fulfillment_insert"] as number ?? 0) + insertQty;
+        if (b2bWarnings.length > 0) source.b2bWarnings = b2bWarnings;
+        // B2B Labels & Inserts → separate B2B line items
+        if (labelQty  > 0) updates["b2b_label"]  = labelQty;
+        if (insertQty > 0) updates["b2b_insert"]  = insertQty;
       }
     } catch {}
 
@@ -1561,9 +1563,9 @@ export default function BillingPage() {
           b2cInsertQty += (tasks["Inserts"] ?? 0);
           b2cFragileQty += (tasks["Fragile Pack"] ?? 0) + (tasks["Fragile"] ?? 0);
         }
-        // Accumulate into shared label/insert items (B2B + B2C combined)
-        updates["fulfillment_label"]  = (updates["fulfillment_label"]  as number ?? 0) + b2cLabelQty;
-        updates["fulfillment_insert"] = (updates["fulfillment_insert"] as number ?? 0) + b2cInsertQty;
+        // B2C Labels & Inserts → B2C line items
+        if (b2cLabelQty  > 0) updates["fulfillment_label"]  = (updates["fulfillment_label"]  as number ?? 0) + b2cLabelQty;
+        if (b2cInsertQty > 0) updates["fulfillment_insert"] = (updates["fulfillment_insert"] as number ?? 0) + b2cInsertQty;
         if (b2cFragileQty > 0) updates["b2c_fragile"] = b2cFragileQty;
       }
     } catch {}
