@@ -28,6 +28,7 @@ import {
   Globe,
   Receipt,
   FileText,
+  AlertTriangle,
   SlidersHorizontal,
 } from "lucide-react";
 
@@ -49,6 +50,7 @@ const nav: NavItem[] = [
     children: [
       { href: "/inventory", label: "Inventory Inquiry", icon: Search },
       { href: "/history", label: "History", icon: History },
+      { href: "/inventory/conflicts", label: "Location Conflicts", icon: AlertTriangle },
     ],
   },
   { href: "/products", label: "Products", icon: Package, children: undefined },
@@ -101,6 +103,7 @@ export default function Sidebar() {
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
     const s = new Set<string>();
     if (["/inventory", "/history"].some((p) => pathname === p || pathname.startsWith(p + "/"))) s.add("Inventory");
+    if (pathname.startsWith("/inventory/conflicts")) s.add("Inventory");
     if (["/receiving", "/stow"].some((p) => pathname === p || pathname.startsWith(p + "/"))) s.add("Receiving");
     if (pathname === "/locations" || pathname.startsWith("/locations/")) s.add("Locations");
     if (pathname.startsWith("/shipping")) s.add("Shipping");
