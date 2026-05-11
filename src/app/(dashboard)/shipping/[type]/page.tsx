@@ -707,244 +707,153 @@ export default function ShippingTypePage() {
   }
 
   function printPickingTicket() {
-    const codes   = Object.keys(selectedCodes).filter((k) => selectedCodes[k]);
-    const total   = allocRows.reduce((s, r) => s + r.totalQty, 0);
-    const now     = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
-    const dateStr = new Date().toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+    const codes    = Object.keys(selectedCodes).filter((k) => selectedCodes[k]);
+    const total    = allocRows.reduce((s, r) => s + r.totalQty, 0);
     const totalCtn = allocRows.reduce((s, r) => { const u = uomMap[r.sku] ?? 0; return s + (u > 0 ? Math.ceil(r.totalQty / u) : 0); }, 0);
+    const now      = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+    const dateStr  = new Date().toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
 
-    // ── One 4×6 label per pick line ──────────────────────────────────────────
-    const labelPages = allocRows.map((row, i) => {
+    // Customer name from state
+    const custName = customers.find((c) => c.code === customerCode)?.name ?? customerCode ?? warehouseCode;
+
+    // QR code: encode order codes (first 2) + date
+    const qrData   = encodeURIComponent([...codes.slice(0, 3), dateStr].join(" | "));
+    const qrUrl    = `https://api.qrserver.com/v1/create-qr-code/?size=72x72&margin=2&data=${qrData}`;
+
+    // Unique SKU count
+    const skuSet: Record<string, boolean> = {};
+    allocRows.forEach((r) => { if (r.sku) skuSet[r.sku] = true; });
+    const totalSku = Object.keys(skuSet).length;
+
+    // ── Table rows ────────────────────────────────────────────────────────────
+    const rows = allocRows.map((row, i) => {
       const isShared = Object.keys(row.perOrder).length > 1;
       const upc      = uomMap[row.sku] ?? 0;
       const cartons  = upc > 0 ? Math.ceil(row.totalQty / upc) : null;
 
-      // Per-order qty breakdown (only orders that have qty for this row)
-      const orderBadges = codes
-        .filter((c) => row.perOrder[c] != null)
-        .map((c, idx) => {
-          const oIdx = codes.indexOf(c);
-          const qty  = row.perOrder[c]!;
-          const ctn  = upc > 0 ? Math.ceil(qty / upc) : null;
-          return `<div class="order-badge">
-            <span class="order-num">#${oIdx + 1}</span>
-            <span class="order-code">${c}</span>
-            <span class="order-qty">${qty.toLocaleString()} EA${ctn != null ? ` / ${ctn} CTN` : ""}</span>
-          </div>`;
-        }).join("");
+      // Per-order qty lines (for merged rows)
+      const orderLines = isShared
+        ? codes
+            .filter((c) => row.perOrder[c] != null)
+            .map((c) => {
+              const oIdx = codes.indexOf(c);
+              const qty  = row.perOrder[c]!;
+              const ctn  = upc > 0 ? Math.ceil(qty / upc) : null;
+              return `<div style="font-size:7.5pt;color:#4b5563;margin-top:1pt">&nbsp;&nbsp;#${oIdx + 1} ${qty.toLocaleString()} EA${ctn != null ? ` / ${ctn} CTN` : ""}</div>`;
+            }).join("")
+        : "";
 
-      // Location parts (split by dash for big display)
-      const locParts = (row.location || "—").split("-");
+      const rowBg = i % 2 === 0 ? "#fff" : "#f9fafb";
 
-      return `
-      <div class="label${i < allocRows.length - 1 ? " page-break" : ""}">
-        <!-- TOP BAR -->
-        <div class="top-bar">
-          <div class="top-left">
-            <span class="company-name">STL WMS</span>
-            <span class="wh-code">${warehouseCode}</span>
-          </div>
-          <div class="top-center">
-            <span class="pick-seq">PICK ${i + 1} / ${allocRows.length}</span>
-            ${isShared ? '<span class="merged-tag">MERGED</span>' : ""}
-          </div>
-          <div class="top-right">
-            <span class="gen-date">${dateStr}</span>
-          </div>
-        </div>
-
-        <!-- LOCATION (dominant) -->
-        <div class="loc-block">
-          <div class="loc-label">LOCATION</div>
-          <div class="loc-value">${locParts.join('<span class="loc-sep">-</span>')}</div>
-        </div>
-
-        <!-- SKU + PRODUCT -->
-        <div class="item-block">
-          <div class="item-row">
-            <span class="item-lbl">SKU</span>
-            <span class="item-val sku-val">${row.sku || "—"}</span>
-          </div>
-          ${row.productName ? `<div class="item-row">
-            <span class="item-lbl">PRODUCT</span>
-            <span class="item-val prod-val">${row.productName}</span>
-          </div>` : ""}
-          ${row.lot ? `<div class="item-row">
-            <span class="item-lbl">LOT</span>
-            <span class="item-val lot-val">${row.lot}</span>
-          </div>` : ""}
-        </div>
-
-        <!-- QTY (dominant) -->
-        <div class="qty-block">
-          <div class="qty-left">
-            <div class="qty-number">${row.totalQty.toLocaleString()}</div>
-            <div class="qty-unit">EA</div>
-          </div>
-          ${cartons != null ? `
-          <div class="qty-divider"></div>
-          <div class="qty-right">
-            <div class="ctn-number">${cartons}</div>
-            <div class="ctn-unit">CTN</div>
-            ${upc > 0 ? `<div class="ctn-rate">${upc} ea/ctn</div>` : ""}
-          </div>` : ""}
-        </div>
-
-        <!-- ORDER BREAKDOWN (if multi-order or just show single order) -->
-        <div class="orders-block">
-          <div class="orders-label">ORDER${codes.filter(c => row.perOrder[c] != null).length > 1 ? "S" : ""}</div>
-          <div class="orders-list">${orderBadges}</div>
-        </div>
-
-        <!-- FOOTER / SIGN -->
-        <div class="sign-bar">
-          <div class="sign-field">
-            <div class="sign-line"></div>
-            <div class="sign-name">Picker</div>
-          </div>
-          <div class="sign-field">
-            <div class="sign-line"></div>
-            <div class="sign-name">Checked</div>
-          </div>
-          <div class="chk-circle"></div>
-        </div>
-      </div>`;
+      return `<tr style="background:${rowBg};page-break-inside:avoid">
+        <td style="text-align:center;vertical-align:middle;border:1pt solid #aaa;padding:3pt 2pt;font-size:9pt;font-weight:700;color:#6b7280">${i + 1}</td>
+        <td style="border:1pt solid #aaa;padding:3pt 5pt;vertical-align:top">
+          <div style="font-size:10pt;font-weight:900;font-family:'Courier New',monospace;color:#0f172a;letter-spacing:.3px">Location: ${row.location || "—"}${isShared ? ' <span style="font-size:7pt;font-weight:800;color:#059669;background:#d1fae5;padding:1px 4px;border-radius:3px">MERGED</span>' : ""}</div>
+          <div style="font-size:8pt;color:#374151;margin-top:2pt">SKU: <span style="font-family:'Courier New',monospace;font-weight:700;color:#1d4ed8">${row.sku || "—"}</span></div>
+          ${row.lot ? `<div style="font-size:8pt;color:#374151">Lot: <span style="font-family:'Courier New',monospace;font-weight:700;color:#6d28d9">${row.lot}</span></div>` : ""}
+          ${row.productName ? `<div style="font-size:7.5pt;color:#6b7280;margin-top:1pt">Product: ${row.productName}</div>` : ""}
+          ${orderLines}
+        </td>
+        <td style="text-align:right;vertical-align:middle;border:1pt solid #aaa;padding:3pt 4pt;white-space:nowrap">
+          <div style="font-size:11pt;font-weight:900;color:#1d4ed8">${row.totalQty.toLocaleString()} EA</div>
+          ${cartons != null ? `<div style="font-size:10pt;font-weight:900;color:#059669">${cartons} CTN</div>${upc > 0 ? `<div style="font-size:7pt;color:#9ca3af">${upc} ea/ctn</div>` : ""}` : ""}
+        </td>
+      </tr>`;
     }).join("");
 
-    // ── Summary label (last page) ─────────────────────────────────────────────
-    const orderList = codes.map((c, i) =>
-      `<div class="sum-order"><span class="sum-num">#${i + 1}</span><span class="sum-code">${c}</span></div>`
-    ).join("");
-
-    const summaryPage = `
-      <div class="label page-break">
-        <div class="top-bar" style="background:#1e3a8a">
-          <div class="top-left"><span class="company-name">STL WMS</span><span class="wh-code">${warehouseCode}</span></div>
-          <div class="top-center"><span class="pick-seq" style="color:#fff;font-size:11px">SUMMARY</span></div>
-          <div class="top-right"><span class="gen-date">${dateStr}</span></div>
-        </div>
-        <div style="padding:6px 10px 4px;border-bottom:1px solid #e2e8f0">
-          <div style="font-size:8px;text-transform:uppercase;letter-spacing:.7px;color:#64748b;margin-bottom:2px">Picking Summary</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px">
-            <div class="sum-stat"><div class="sum-stat-n">${codes.length}</div><div class="sum-stat-l">Orders</div></div>
-            <div class="sum-stat"><div class="sum-stat-n">${allocRows.length}</div><div class="sum-stat-l">Pick Lines</div></div>
-            <div class="sum-stat"><div class="sum-stat-n" style="color:#1d4ed8">${total.toLocaleString()}</div><div class="sum-stat-l">Total EA</div></div>
-          </div>
-          ${totalCtn > 0 ? `<div style="margin-top:4px;text-align:center;font-size:18px;font-weight:900;color:#065f46">${totalCtn} CTN TOTAL</div>` : ""}
-        </div>
-        <div style="padding:6px 10px">
-          <div style="font-size:8px;text-transform:uppercase;letter-spacing:.7px;color:#64748b;margin-bottom:4px">Order References</div>
-          <div style="display:flex;flex-direction:column;gap:3px">${orderList}</div>
-        </div>
-        <div class="sign-bar" style="margin-top:auto">
-          <div class="sign-field"><div class="sign-line"></div><div class="sign-name">Picker Name</div></div>
-          <div class="sign-field"><div class="sign-line"></div><div class="sign-name">Completed</div></div>
-          <div class="sign-field"><div class="sign-line"></div><div class="sign-name">Supervisor</div></div>
-        </div>
-      </div>`;
+    // Order list for header
+    const orderNoText = codes.length <= 3
+      ? codes.join(", ")
+      : `${codes.slice(0, 2).join(", ")} +${codes.length - 2} more`;
 
     const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Pick Labels · ${dateStr}</title>
+<title>Picking Ticket · ${dateStr}</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:Arial,Helvetica,sans-serif;background:#e5e7eb;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body{font-family:Arial,Helvetica,sans-serif;font-size:9pt;color:#000;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 
-  @page{size:4in 6in;margin:0}
+  @page{size:4in 6in;margin:4mm 5mm}
 
-  /* Screen: show labels as cards */
   @media screen{
-    .print-bar{background:#1e293b;padding:10px 18px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:99}
-    .print-btn{background:#2563eb;color:#fff;border:none;padding:7px 20px;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer}
+    .print-bar{background:#1e293b;padding:8px 16px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:99}
+    .print-btn{background:#2563eb;color:#fff;border:none;padding:6px 18px;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer}
     .print-btn:hover{background:#1d4ed8}
-    .hint{color:#94a3b8;font-size:11px}
-    .labels-wrap{display:flex;flex-direction:column;align-items:center;gap:16px;padding:20px 0 40px}
-    .label{width:4in;min-height:6in;background:#fff;border-radius:6px;box-shadow:0 2px 12px rgba(0,0,0,.18);overflow:hidden;display:flex;flex-direction:column}
+    .hint{color:#94a3b8;font-size:10px}
+    .page-wrap{width:4in;margin:20px auto 40px;background:#fff;padding:4mm 5mm;box-shadow:0 2px 16px rgba(0,0,0,.18);border-radius:4px}
   }
-
-  /* Print: each label = one page */
   @media print{
     .print-bar{display:none!important}
-    .labels-wrap{display:block;background:#fff}
-    .label{width:4in;height:6in;overflow:hidden;display:flex;flex-direction:column;background:#fff}
-    .page-break{page-break-before:always}
+    .page-wrap{width:100%;margin:0;padding:0}
   }
-
-  /* ─ Top bar ─ */
-  .top-bar{background:#0f172a;color:#fff;display:flex;align-items:center;justify-content:space-between;padding:5px 8px;flex-shrink:0}
-  .company-name{font-size:11px;font-weight:900;letter-spacing:.5px}
-  .wh-code{font-size:9px;color:#94a3b8;margin-left:5px}
-  .top-center{display:flex;align-items:center;gap:5px}
-  .pick-seq{font-size:10px;font-weight:700;color:#93c5fd;letter-spacing:.3px}
-  .merged-tag{background:#059669;color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:3px;letter-spacing:.3px}
-  .gen-date{font-size:8px;color:#94a3b8}
-
-  /* ─ Location ─ */
-  .loc-block{padding:6px 10px 5px;border-bottom:2px solid #e2e8f0;flex-shrink:0}
-  .loc-label{font-size:7.5px;text-transform:uppercase;letter-spacing:.8px;color:#64748b;margin-bottom:2px}
-  .loc-value{font-size:36px;font-weight:900;font-family:'Courier New',monospace;color:#0f172a;letter-spacing:1px;line-height:1}
-  .loc-sep{color:#94a3b8;margin:0 1px}
-
-  /* ─ Item info ─ */
-  .item-block{padding:5px 10px;border-bottom:1px solid #e2e8f0;flex-shrink:0}
-  .item-row{display:flex;align-items:baseline;gap:5px;margin-bottom:2px}
-  .item-lbl{font-size:7px;text-transform:uppercase;letter-spacing:.7px;color:#94a3b8;width:40px;flex-shrink:0}
-  .item-val{font-size:11px;font-weight:600;color:#1e293b}
-  .sku-val{font-family:'Courier New',monospace;font-size:13px;font-weight:800;color:#1e40af;letter-spacing:.5px}
-  .prod-val{font-size:10px;font-weight:500;color:#374151}
-  .lot-val{font-family:'Courier New',monospace;font-size:11px;font-weight:700;color:#7c3aed}
-
-  /* ─ Qty ─ */
-  .qty-block{display:flex;align-items:center;padding:6px 10px;border-bottom:1px solid #e2e8f0;background:#f8fafc;flex-shrink:0}
-  .qty-left{display:flex;align-items:baseline;gap:4px}
-  .qty-number{font-size:48px;font-weight:900;color:#1d4ed8;line-height:1;letter-spacing:-1px}
-  .qty-unit{font-size:13px;font-weight:700;color:#3b82f6;align-self:flex-end;margin-bottom:6px}
-  .qty-divider{width:2px;background:#e2e8f0;margin:0 10px;align-self:stretch}
-  .qty-right{display:flex;flex-direction:column;align-items:flex-start}
-  .ctn-number{font-size:34px;font-weight:900;color:#059669;line-height:1}
-  .ctn-unit{font-size:11px;font-weight:700;color:#10b981}
-  .ctn-rate{font-size:8px;color:#6b7280;margin-top:1px}
-
-  /* ─ Orders ─ */
-  .orders-block{padding:5px 10px;border-bottom:1px solid #e2e8f0;flex-shrink:0}
-  .orders-label{font-size:7.5px;text-transform:uppercase;letter-spacing:.7px;color:#64748b;margin-bottom:3px}
-  .orders-list{display:flex;flex-direction:column;gap:2px}
-  .order-badge{display:flex;align-items:center;gap:5px;font-size:9px}
-  .order-num{font-weight:900;color:#2563eb;font-size:10px;width:20px}
-  .order-code{font-family:'Courier New',monospace;color:#374151;font-size:9px;flex:1}
-  .order-qty{font-weight:700;color:#059669;white-space:nowrap}
-
-  /* ─ Sign bar ─ */
-  .sign-bar{display:flex;align-items:flex-end;gap:6px;padding:6px 10px 7px;margin-top:auto;border-top:1px solid #e2e8f0}
-  .sign-field{flex:1}
-  .sign-line{height:1px;background:#000;margin-bottom:2px}
-  .sign-name{font-size:7px;text-transform:uppercase;letter-spacing:.5px;color:#94a3b8}
-  .chk-circle{width:28px;height:28px;border:2.5px solid #1d4ed8;border-radius:50%;flex-shrink:0}
-
-  /* ─ Summary page ─ */
-  .sum-order{display:flex;align-items:center;gap:6px;padding:3px 5px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:3px}
-  .sum-num{font-weight:900;color:#2563eb;font-size:11px;width:22px}
-  .sum-code{font-family:'Courier New',monospace;font-size:9px;color:#374151;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .sum-stat{text-align:center;padding:4px 3px;background:#f1f5f9;border-radius:4px}
-  .sum-stat-n{font-size:20px;font-weight:900;color:#0f172a}
-  .sum-stat-l{font-size:7px;text-transform:uppercase;letter-spacing:.5px;color:#64748b}
 </style>
 </head>
 <body>
+
 <div class="print-bar">
-  <button class="print-btn" onclick="window.print()">🖨&nbsp; Print Labels (4×6)</button>
-  <span class="hint">Print dialog → Paper size: 4×6 in · Margins: None · Scale: 100%</span>
+  <button class="print-btn" onclick="window.print()">🖨&nbsp; Print (4×6)</button>
+  <span class="hint">Paper: 4×6 in · Margins: None · Scale: 100%</span>
 </div>
-<div class="labels-wrap">
-  ${labelPages}
-  ${summaryPage}
+
+<div class="page-wrap">
+
+  <!-- ── Header ── -->
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:5pt;padding-bottom:4pt;border-bottom:1.5pt solid #000">
+    <div style="flex:1;padding-right:6pt">
+      <div style="font-size:13pt;font-weight:900;margin-bottom:4pt">Client: ${custName}</div>
+      <table style="border:none;width:auto" cellspacing="0" cellpadding="0">
+        <tr><td style="border:none;padding:1pt 0;font-size:8.5pt;padding-right:10pt">Total SKU:</td><td style="border:none;padding:1pt 0;font-size:8.5pt;font-weight:700">${totalSku}</td></tr>
+        <tr><td style="border:none;padding:1pt 0;font-size:8.5pt">Total Qty:</td><td style="border:none;padding:1pt 0;font-size:8.5pt;font-weight:700">${total.toLocaleString()}${totalCtn > 0 ? ` (${totalCtn} CTN)` : ""}</td></tr>
+        <tr><td style="border:none;padding:1pt 0;font-size:8.5pt">Warehouse:</td><td style="border:none;padding:1pt 0;font-size:8.5pt;font-weight:700">${warehouseCode}</td></tr>
+        <tr><td style="border:none;padding:1pt 0;font-size:8.5pt;vertical-align:top">Order No.:</td><td style="border:none;padding:1pt 0;font-size:8pt;font-family:'Courier New',monospace;color:#1d4ed8;max-width:140pt;word-break:break-all">${orderNoText}</td></tr>
+      </table>
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3pt;flex-shrink:0">
+      <img src="${qrUrl}" width="72" height="72" style="border:1pt solid #e2e8f0" onerror="this.style.display='none'"/>
+      <span style="font-size:11pt;font-weight:900;color:#374151">${allocRows.length} line${allocRows.length > 1 ? "s" : ""}</span>
+    </div>
+  </div>
+
+  <!-- ── Pick Table ── -->
+  <table style="width:100%;border-collapse:collapse;margin-top:4pt">
+    <thead>
+      <tr style="background:#f1f5f9">
+        <th style="border:1pt solid #aaa;padding:3pt 2pt;font-size:8pt;text-align:center;width:20pt">No.</th>
+        <th style="border:1pt solid #aaa;padding:3pt 5pt;font-size:8pt;text-align:left">Item</th>
+        <th style="border:1pt solid #aaa;padding:3pt 4pt;font-size:8pt;text-align:right;width:52pt">Qty</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows}
+    </tbody>
+    <tfoot>
+      <tr style="background:#f1f5f9">
+        <td colspan="2" style="border:1pt solid #aaa;padding:3pt 5pt;font-size:9pt;font-weight:800;text-align:right">TOTAL</td>
+        <td style="border:1pt solid #aaa;padding:3pt 4pt;text-align:right">
+          <div style="font-size:11pt;font-weight:900;color:#1d4ed8">${total.toLocaleString()} EA</div>
+          ${totalCtn > 0 ? `<div style="font-size:10pt;font-weight:900;color:#059669">${totalCtn} CTN</div>` : ""}
+        </td>
+      </tr>
+    </tfoot>
+  </table>
+
+  <!-- ── Sign area (after last row) ── -->
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10pt;margin-top:8pt">
+    <div><div style="border-top:1pt solid #000;margin-bottom:2pt"></div><div style="font-size:7pt;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af">Picker</div></div>
+    <div><div style="border-top:1pt solid #000;margin-bottom:2pt"></div><div style="font-size:7pt;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af">Checked</div></div>
+    <div><div style="border-top:1pt solid #000;margin-bottom:2pt"></div><div style="font-size:7pt;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af">Date/Time</div></div>
+  </div>
+
+  <!-- ── Generated ── -->
+  <div style="margin-top:5pt;font-size:6.5pt;color:#9ca3af;text-align:right">Generated: ${now} · STL WMS Dashboard</div>
+
 </div>
 </body>
 </html>`;
 
-    const win = window.open("", "_blank", "width=560,height=900");
+    const win = window.open("", "_blank", "width=500,height=860");
     if (win) { win.document.write(html); win.document.close(); }
   }
 
