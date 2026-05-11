@@ -250,8 +250,20 @@ export default function PackingPage() {
           }
         } catch { /* optional */ }
 
-        /* 4. Fetch order detail for address fields (consignee / consignor) */
+        /* 4. Address: prefer localStorage hint (set by shipping detail Pack button), else fetch */
+        let addrLoaded = false;
         try {
+          const hint = localStorage.getItem(`wms_packing_addr_${code}`);
+          if (hint) {
+            const h = JSON.parse(hint) as { shipTo?: Partial<AddressInfo>; shipFrom?: Partial<AddressInfo> };
+            if (h.shipTo)   { setShipTo(h.shipTo);   addrLoaded = true; }
+            if (h.shipFrom) { setShipFrom(h.shipFrom); }
+            localStorage.removeItem(`wms_packing_addr_${code}`);
+          }
+        } catch { /* ignore */ }
+
+        /* 4b. Fallback fetch from WMS order detail */
+        if (!addrLoaded) try {
           const detailEndpoints = [
             `/api/wms/shipping/${encodeURIComponent(code)}`,
             `/api/wms/shipping/b2b/${encodeURIComponent(code)}`,

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo } from "react";
 import { useAuth } from "@/contexts/auth-context";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   RefreshCw, AlertCircle, Truck, Search, Download, X,
@@ -140,6 +140,7 @@ interface Warehouse { id: string; name: string }
 
 export default function ShippingTypePage() {
   const { user }  = useAuth();
+  const router    = useRouter();
   const params    = useParams();
   const type      = String(params.type ?? "b2b").toLowerCase();
   const meta      = TYPE_META[type] ?? TYPE_META.b2b;
@@ -415,6 +416,58 @@ export default function ShippingTypePage() {
     setOccupancyMap(new Map()); setPickingSaved(false);
     setAutoAssigning(false); setAutoAssignResult(""); setAutoAssignMsg("");
     setStatusModal(false); setNewStatus(""); setCancelComment(""); setOutDate(""); setNeedOutDate(false); setStatusError("");
+  }
+
+  /* ── Start Packing: save address data from detail and navigate ── */
+  function startPacking() {
+    if (!detail) return;
+    const d = detail as Record<string, unknown>;
+    const orderCode = String(d.shippingOrderCode ?? d.orderCode ?? d.outboundCode ?? "");
+    if (!orderCode) return;
+
+    const s = (v: unknown) => (v && String(v) !== "-" ? String(v) : "");
+
+    // Normalise keys case-insensitively
+    const lower: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(d)) lower[k.toLowerCase()] = v;
+    const f = (...keys: string[]) => {
+      for (const k of keys) {
+        const v = lower[k.toLowerCase()];
+        if (v !== undefined && v !== null && String(v) !== "" && String(v) !== "-") return String(v);
+      }
+      return "";
+    };
+
+    const addrData = {
+      shipTo: {
+        name:     f("consigneeName", "receiverName"),
+        company:  "",
+        address1: f("consigneeAddress1", "deliveryAddress"),
+        address2: f("consigneeAddress2"),
+        city:     f("consigneeCity"),
+        state:    f("consigneeState"),
+        zip:      f("consigneeZipCode"),
+        country:  f("consigneeNationalCode"),
+        tel:      f("consigneeTelLNo", "consigneeTelLno", "consigneeCellNo"),
+      },
+      shipFrom: {
+        name:     f("consignorName"),
+        company:  "",
+        address1: f("consignorAddress1"),
+        address2: "",
+        city:     f("consignorCity"),
+        state:    f("consignorState"),
+        zip:      f("consignorZip", "consignorZipCode"),
+        country:  f("consignorNationalCode"),
+        tel:      f("consignorTelLNo", "consignorTelLno"),
+      },
+      customerCode: s(d.customerCode),
+      customerName: s(d.customerName),
+    };
+
+    // Save address hint so packing page can use it without re-fetching
+    localStorage.setItem(`wms_packing_addr_${orderCode}`, JSON.stringify(addrData));
+    router.push(`/packing?order=${encodeURIComponent(orderCode)}`);
   }
 
   /* ── Auto Assign: call WMS endpoint, then reload picking items ── */
@@ -1261,6 +1314,17 @@ export default function ShippingTypePage() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
+                {/* Pack button */}
+                {!editMode && (
+                  <button
+                    onClick={startPacking}
+                    className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition-colors"
+                    title="Go to Packing"
+                  >
+                    <PackageCheck className="w-3.5 h-3.5" />
+                    Pack
+                  </button>
+                )}
                 {/* Change Status button */}
                 {!editMode && (
                   <button
