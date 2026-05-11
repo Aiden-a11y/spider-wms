@@ -25,12 +25,26 @@ export type ScanItem = {
   scanned: boolean;
 };
 
+export type AddressInfo = {
+  name: string;
+  company: string;
+  address1: string;
+  address2: string;
+  city: string;
+  state: string;
+  zip: string;
+  country: string;
+  tel: string;
+};
+
 export type PackingStorageData = {
   orderCode: string;
   customerCode: string;
   customerName: string;
   items: ScanItem[];
   savedAt: string;
+  shipFrom?: Partial<AddressInfo>;
+  shipTo?: Partial<AddressInfo>;
 };
 
 interface Assignment {
@@ -57,7 +71,29 @@ interface WmsResponse {
 
 interface ShippingListResponse {
   data?: {
-    list?: Array<{ customerCode?: string; customerName?: string; [key: string]: unknown }>;
+    list?: Array<{
+      customerCode?: string;
+      customerName?: string;
+      consigneeName?: string;
+      consigneeAddress1?: string;
+      consigneeAddress2?: string;
+      consigneeCity?: string;
+      consigneeState?: string;
+      consigneeZipCode?: string;
+      consigneeNationalCode?: string;
+      consigneeTelLno?: string;
+      receiverName?: string;
+      deliveryAddress?: string;
+      consignorName?: string;
+      consignorAddress1?: string;
+      consignorCity?: string;
+      consignorState?: string;
+      consignorZip?: string;
+      consignorZipCode?: string;
+      consignorNationalCode?: string;
+      consignorTelLno?: string;
+      [key: string]: unknown;
+    }>;
     [key: string]: unknown;
   };
   [key: string]: unknown;
@@ -82,6 +118,8 @@ export default function PackingPage() {
   const [items, setItems] = useState<ScanItem[]>([]);
   const [customerCode, setCustomerCode] = useState("");
   const [customerName, setCustomerName] = useState("");
+  const [shipFrom, setShipFrom] = useState<Partial<AddressInfo>>({});
+  const [shipTo, setShipTo] = useState<Partial<AddressInfo>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [barcodeInput, setBarcodeInput] = useState("");
@@ -128,6 +166,8 @@ export default function PackingPage() {
       setBarcodeMap({});
       setCustomerCode("");
       setCustomerName("");
+      setShipFrom({});
+      setShipTo({});
 
       const headers: Record<string, string> = {
         Authorization: `Bearer ${user.token}`,
@@ -193,7 +233,7 @@ export default function PackingPage() {
         }));
         setItems(scanItems);
 
-        /* 3. Try to get customer info */
+        /* 3. Try to get customer info + addresses */
         try {
           const shRes = await fetch("/api/wms/shipping/list", {
             method: "POST",
@@ -206,6 +246,32 @@ export default function PackingPage() {
             if (first) {
               setCustomerCode(String(first.customerCode ?? ""));
               setCustomerName(String(first.customerName ?? ""));
+
+              // Ship-To (consignee)
+              setShipTo({
+                name: String(first.consigneeName ?? first.receiverName ?? ""),
+                address1: String(first.consigneeAddress1 ?? first.deliveryAddress ?? ""),
+                address2: String(first.consigneeAddress2 ?? ""),
+                city: String(first.consigneeCity ?? ""),
+                state: String(first.consigneeState ?? ""),
+                zip: String(first.consigneeZipCode ?? ""),
+                country: String(first.consigneeNationalCode ?? ""),
+                tel: String(first.consigneeTelLno ?? ""),
+                company: "",
+              });
+
+              // Ship-From (consignor, may be empty)
+              setShipFrom({
+                name: String(first.consignorName ?? ""),
+                address1: String(first.consignorAddress1 ?? ""),
+                city: String(first.consignorCity ?? ""),
+                state: String(first.consignorState ?? ""),
+                zip: String(first.consignorZip ?? first.consignorZipCode ?? ""),
+                country: String(first.consignorNationalCode ?? ""),
+                tel: String(first.consignorTelLno ?? ""),
+                company: "",
+                address2: "",
+              });
             }
           }
         } catch { /* customer info optional */ }
@@ -259,6 +325,8 @@ export default function PackingPage() {
       customerName,
       items,
       savedAt: new Date().toISOString(),
+      shipFrom,
+      shipTo,
     };
     localStorage.setItem("wms_packing_scan", JSON.stringify(data));
     router.push(`/packing/${encodeURIComponent(orderCode)}`);

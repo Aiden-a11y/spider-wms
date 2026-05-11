@@ -4,8 +4,8 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/contexts/auth-context";
-import { Printer, ArrowLeft, Package, Plus, X, AlertTriangle, CheckCircle2 } from "lucide-react";
-import type { ScanItem, PackingStorageData } from "../page";
+import { Printer, ArrowLeft, Package, Plus, X, AlertTriangle, CheckCircle2, MapPin } from "lucide-react";
+import type { ScanItem, PackingStorageData, AddressInfo } from "../page";
 
 /* ─── Types ─────────────────────────────────────────────────────────────────── */
 
@@ -50,14 +50,36 @@ function buildBoxSummaries(lines: PackLine[]): BoxSummary[] {
 
 /* ─── Print ──────────────────────────────────────────────────────────────────── */
 
+/* ─── Address formatter ──────────────────────────────────────────────────────── */
+
+function fmtAddr(a?: Partial<AddressInfo>): string {
+  if (!a) return "";
+  const lines: string[] = [];
+  if (a.name)     lines.push(`<span style="font-weight:bold;">${a.name}</span>`);
+  if (a.company)  lines.push(a.company);
+  if (a.address1) lines.push(a.address1);
+  if (a.address2) lines.push(a.address2);
+  const cityLine = [a.city, a.state, a.zip].filter(Boolean).join(", ");
+  if (cityLine)   lines.push(cityLine);
+  if (a.country)  lines.push(a.country);
+  if (a.tel)      lines.push(`Tel: ${a.tel}`);
+  return lines.join("<br>");
+}
+
+/* ─── Print ──────────────────────────────────────────────────────────────────── */
+
 function printPackingList(
   orderCode: string,
   customerCode: string,
   customerName: string,
-  lines: PackLine[]
+  lines: PackLine[],
+  shipFrom?: Partial<AddressInfo>,
+  shipTo?: Partial<AddressInfo>
 ) {
   const boxes = buildBoxSummaries(lines);
   const totalBoxes = boxes.length;
+  const fromHtml = fmtAddr(shipFrom);
+  const toHtml   = fmtAddr(shipTo);
 
   const labels = boxes
     .map((box, gi) => {
@@ -86,21 +108,42 @@ function printPackingList(
 
       return `
       <div ${pageBreak} class="label">
-        <div style="text-align:center;margin-bottom:4px;">
+        <div style="text-align:center;margin-bottom:3px;">
           <span style="font-size:11pt;font-weight:bold;letter-spacing:1px;">PACKING LIST</span>
         </div>
+
+        <!-- Order info + QR -->
         <table style="width:100%;border-collapse:collapse;margin-bottom:4px;">
           <tr>
-            <td style="width:70%;">
-              <div style="font-size:9pt;">Order No: <span style="font-weight:bold;font-family:monospace;">${orderCode}</span></div>
-              <div style="font-size:9pt;">Customer: ${customerName || customerCode || "—"}</div>
-              <div style="font-size:9pt;">Box: <span style="font-weight:bold;">${box.boxNo} of ${totalBoxes}</span> &nbsp;|&nbsp; Pallet: <span style="font-weight:bold;">${box.palletNo}</span></div>
+            <td style="width:68%;vertical-align:top;font-size:8.5pt;line-height:1.5;">
+              <div>Order: <span style="font-weight:bold;font-family:monospace;">${orderCode}</span></div>
+              <div>Customer: ${customerName || customerCode || "—"}</div>
+              <div>Box: <span style="font-weight:bold;">${box.boxNo} of ${totalBoxes}</span> &nbsp;|&nbsp; Pallet: <span style="font-weight:bold;">${box.palletNo}</span></div>
             </td>
-            <td style="width:30%;text-align:right;vertical-align:top;">
-              <img src="${qrUrl}" width="80" height="80" alt="QR" />
+            <td style="width:32%;text-align:right;vertical-align:top;">
+              <img src="${qrUrl}" width="75" height="75" alt="QR" />
             </td>
           </tr>
         </table>
+
+        <!-- Ship From / Ship To -->
+        ${(fromHtml || toHtml) ? `
+        <table style="width:100%;border-collapse:collapse;margin-bottom:4px;font-size:8pt;">
+          <tr>
+            ${fromHtml ? `
+            <td style="width:${toHtml ? "50%" : "100%"};border:1px solid #000;padding:3px 5px;vertical-align:top;">
+              <div style="font-size:6.5pt;font-weight:bold;text-transform:uppercase;color:#555;margin-bottom:2px;">Ship From</div>
+              ${fromHtml}
+            </td>` : ""}
+            ${toHtml ? `
+            <td style="width:${fromHtml ? "50%" : "100%"};border:1px solid #000;padding:3px 5px;vertical-align:top;background:#f8f8f8;">
+              <div style="font-size:6.5pt;font-weight:bold;text-transform:uppercase;color:#555;margin-bottom:2px;">Ship To</div>
+              ${toHtml}
+            </td>` : ""}
+          </tr>
+        </table>` : ""}
+
+        <!-- Items table -->
         <table style="width:100%;border-collapse:collapse;font-size:8pt;">
           <thead>
             <tr>
@@ -117,12 +160,14 @@ function printPackingList(
             </tr>
           </tbody>
         </table>
-        <div style="margin-top:8px;border-top:1px solid #000;padding-top:4px;font-size:8pt;">
+
+        <!-- Sign area -->
+        <div style="margin-top:6px;font-size:8pt;">
           <table style="width:100%;border-collapse:collapse;">
             <tr>
-              <td style="width:33%;text-align:center;border:1px solid #ccc;padding:12px 4px 4px;">Packer: ___________</td>
-              <td style="width:33%;text-align:center;border:1px solid #ccc;padding:12px 4px 4px;">Checker: ___________</td>
-              <td style="width:33%;text-align:center;border:1px solid #ccc;padding:12px 4px 4px;">Date: ___________</td>
+              <td style="width:33%;text-align:center;border:1px solid #ccc;padding:10px 4px 4px;">Packer: ___________</td>
+              <td style="width:33%;text-align:center;border:1px solid #ccc;padding:10px 4px 4px;">Checker: ___________</td>
+              <td style="width:33%;text-align:center;border:1px solid #ccc;padding:10px 4px 4px;">Date: ___________</td>
             </tr>
           </table>
         </div>
@@ -177,6 +222,8 @@ export default function PackingDetailPage() {
 
   const [data, setData] = useState<PackingStorageData | null>(null);
   const [packLines, setPackLines] = useState<PackLine[]>([]);
+  const [shipFrom, setShipFrom] = useState<Partial<AddressInfo>>({});
+  const [shipTo, setShipTo]   = useState<Partial<AddressInfo>>({});
 
   /* ── Load from localStorage ── */
   useEffect(() => {
@@ -186,6 +233,8 @@ export default function PackingDetailPage() {
       const parsed: PackingStorageData = JSON.parse(raw);
       if (!parsed.items?.length) { router.replace("/packing"); return; }
       setData(parsed);
+      setShipFrom(parsed.shipFrom ?? {});
+      setShipTo(parsed.shipTo ?? {});
 
       /* One PackLine per scanned item, full qty → Box 1, Pallet 1 */
       setPackLines(
@@ -311,7 +360,9 @@ export default function PackingDetailPage() {
                 data.orderCode,
                 data.customerCode,
                 data.customerName,
-                packLines
+                packLines,
+                shipFrom,
+                shipTo
               )
             }
             disabled={hasError}
@@ -329,6 +380,77 @@ export default function PackingDetailPage() {
           <span>Some items have unallocated quantities. Adjust split rows so all quantities add up to 0 remaining.</span>
         </div>
       )}
+
+      {/* ── Shipping Addresses ── */}
+      <div className="rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+        <div className="bg-slate-50 border-b border-slate-200 px-4 py-2.5 flex items-center gap-2">
+          <MapPin className="w-3.5 h-3.5 text-slate-400" />
+          <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Shipping Addresses</h2>
+        </div>
+        <div className="grid grid-cols-2 divide-x divide-slate-100">
+          {/* Ship From */}
+          <div className="p-4">
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Ship From</p>
+            <div className="grid grid-cols-1 gap-2">
+              {(
+                [
+                  ["name",     "Contact Name"],
+                  ["company",  "Company"],
+                  ["address1", "Address 1"],
+                  ["address2", "Address 2"],
+                  ["city",     "City"],
+                  ["state",    "State"],
+                  ["zip",      "ZIP"],
+                  ["country",  "Country"],
+                  ["tel",      "Tel"],
+                ] as [keyof AddressInfo, string][]
+              ).map(([field, label]) => (
+                <div key={field} className="flex items-center gap-2">
+                  <span className="text-xs text-slate-400 w-20 flex-shrink-0">{label}</span>
+                  <input
+                    type="text"
+                    value={shipFrom[field] ?? ""}
+                    onChange={(e) => setShipFrom((prev) => ({ ...prev, [field]: e.target.value }))}
+                    className="flex-1 border border-slate-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+                    placeholder="—"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Ship To */}
+          <div className="p-4">
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Ship To</p>
+            <div className="grid grid-cols-1 gap-2">
+              {(
+                [
+                  ["name",     "Contact Name"],
+                  ["company",  "Company"],
+                  ["address1", "Address 1"],
+                  ["address2", "Address 2"],
+                  ["city",     "City"],
+                  ["state",    "State"],
+                  ["zip",      "ZIP"],
+                  ["country",  "Country"],
+                  ["tel",      "Tel"],
+                ] as [keyof AddressInfo, string][]
+              ).map(([field, label]) => (
+                <div key={field} className="flex items-center gap-2">
+                  <span className="text-xs text-slate-400 w-20 flex-shrink-0">{label}</span>
+                  <input
+                    type="text"
+                    value={shipTo[field] ?? ""}
+                    onChange={(e) => setShipTo((prev) => ({ ...prev, [field]: e.target.value }))}
+                    className="flex-1 border border-slate-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+                    placeholder="—"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* ── Item Groups ── */}
       <div className="rounded-xl border border-slate-200 overflow-hidden shadow-sm">
