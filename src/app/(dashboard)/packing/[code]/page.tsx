@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/contexts/auth-context";
-import { supabase } from "@/lib/supabase";
 import { Printer, ArrowLeft, Package, Plus, X, AlertTriangle, CheckCircle2 } from "lucide-react";
 import type { ScanItem, PackingStorageData } from "../page";
 
@@ -55,8 +54,7 @@ function printPackingList(
   orderCode: string,
   customerCode: string,
   customerName: string,
-  lines: PackLine[],
-  uomMap: Record<string, number>
+  lines: PackLine[]
 ) {
   const boxes = buildBoxSummaries(lines);
   const totalBoxes = boxes.length;
@@ -68,8 +66,6 @@ function printPackingList(
 
       const rows = box.lines
         .map((line, ri) => {
-          const upc = uomMap[line.sku] ?? 0;
-          const ctnQty = upc > 0 ? Math.floor(line.qty / upc) : 0;
           return `
           <tr>
             <td style="border:1px solid #000;padding:2px 4px;text-align:center;">${ri + 1}</td>
@@ -81,7 +77,6 @@ function printPackingList(
             </td>
             <td style="border:1px solid #000;padding:2px 4px;text-align:right;white-space:nowrap;">
               <span style="font-weight:bold;">${line.qty.toLocaleString()} EA</span>
-              ${ctnQty > 0 ? `<br><span style="font-weight:bold;">${ctnQty} CTN</span>` : ""}
             </td>
           </tr>`;
         })
@@ -182,7 +177,6 @@ export default function PackingDetailPage() {
 
   const [data, setData] = useState<PackingStorageData | null>(null);
   const [packLines, setPackLines] = useState<PackLine[]>([]);
-  const [uomMap, setUomMap] = useState<Record<string, number>>({});
 
   /* ── Load from localStorage ── */
   useEffect(() => {
@@ -211,30 +205,7 @@ export default function PackingDetailPage() {
     }
   }, []); // eslint-disable-line
 
-  /* ── UOM fetch ── */
-  const fetchUom = useCallback(async (skus: string[]) => {
-    if (!supabase || skus.length === 0) return;
-    try {
-      const { data: rows } = await supabase
-        .from("product_uom")
-        .select("sku, units_per_carton")
-        .in("sku", skus);
-      if (rows) {
-        const map: Record<string, number> = {};
-        for (const r of rows as Array<{ sku: string; units_per_carton: number }>) {
-          map[r.sku] = r.units_per_carton;
-        }
-        setUomMap(map);
-      }
-    } catch { /* ignore */ }
-  }, []);
-
-  useEffect(() => {
-    if (data?.items) {
-      void user;
-      fetchUom(data.items.map((i: ScanItem) => i.sku));
-    }
-  }, [data, fetchUom, user]);
+  useEffect(() => { void user; }, [user]); // suppress unused warning
 
   /* ── PackLine helpers ── */
 
@@ -340,8 +311,7 @@ export default function PackingDetailPage() {
                 data.orderCode,
                 data.customerCode,
                 data.customerName,
-                packLines,
-                uomMap
+                packLines
               )
             }
             disabled={hasError}
@@ -520,33 +490,26 @@ export default function PackingDetailPage() {
 
               {/* Box items */}
               <div className="divide-y divide-slate-100">
-                {box.lines.map((line) => {
-                  const upc = uomMap[line.sku] ?? 0;
-                  const ctnQty = upc > 0 ? Math.floor(line.qty / upc) : 0;
-                  return (
-                    <div key={line.id} className="px-4 py-2.5">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="font-mono text-xs font-semibold text-slate-800 truncate">
-                            {line.sku}
-                          </div>
-                          {line.lot && (
-                            <div className="text-xs text-slate-400 mt-0.5">Lot: {line.lot}</div>
-                          )}
-                          {line.productName && (
-                            <div className="text-xs text-slate-500 mt-0.5 truncate">{line.productName}</div>
-                          )}
+                {box.lines.map((line) => (
+                  <div key={line.id} className="px-4 py-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-mono text-xs font-semibold text-slate-800 truncate">
+                          {line.sku}
                         </div>
-                        <div className="text-right flex-shrink-0">
-                          <div className="font-bold text-sm text-slate-800">{line.qty.toLocaleString()} EA</div>
-                          {ctnQty > 0 && (
-                            <div className="text-xs text-slate-400">{ctnQty} CTN</div>
-                          )}
-                        </div>
+                        {line.lot && (
+                          <div className="text-xs text-slate-400 mt-0.5">Lot: {line.lot}</div>
+                        )}
+                        {line.productName && (
+                          <div className="text-xs text-slate-500 mt-0.5 truncate">{line.productName}</div>
+                        )}
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <div className="font-bold text-sm text-slate-800">{line.qty.toLocaleString()} EA</div>
                       </div>
                     </div>
-                  );
-                })}
+                  </div>
+                ))}
               </div>
 
               {/* Box footer total */}
