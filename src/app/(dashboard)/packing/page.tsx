@@ -233,7 +233,7 @@ export default function PackingPage() {
         }));
         setItems(scanItems);
 
-        /* 3. Try to get customer info + addresses */
+        /* 3. Customer info from list, then pull full address from detail endpoint */
         try {
           const shRes = await fetch("/api/wms/shipping/list", {
             method: "POST",
@@ -246,35 +246,56 @@ export default function PackingPage() {
             if (first) {
               setCustomerCode(String(first.customerCode ?? ""));
               setCustomerName(String(first.customerName ?? ""));
-
-              // Ship-To (consignee)
-              setShipTo({
-                name: String(first.consigneeName ?? first.receiverName ?? ""),
-                address1: String(first.consigneeAddress1 ?? first.deliveryAddress ?? ""),
-                address2: String(first.consigneeAddress2 ?? ""),
-                city: String(first.consigneeCity ?? ""),
-                state: String(first.consigneeState ?? ""),
-                zip: String(first.consigneeZipCode ?? ""),
-                country: String(first.consigneeNationalCode ?? ""),
-                tel: String(first.consigneeTelLno ?? ""),
-                company: "",
-              });
-
-              // Ship-From (consignor, may be empty)
-              setShipFrom({
-                name: String(first.consignorName ?? ""),
-                address1: String(first.consignorAddress1 ?? ""),
-                city: String(first.consignorCity ?? ""),
-                state: String(first.consignorState ?? ""),
-                zip: String(first.consignorZip ?? first.consignorZipCode ?? ""),
-                country: String(first.consignorNationalCode ?? ""),
-                tel: String(first.consignorTelLno ?? ""),
-                company: "",
-                address2: "",
-              });
             }
           }
-        } catch { /* customer info optional */ }
+        } catch { /* optional */ }
+
+        /* 4. Fetch order detail for address fields (consignee / consignor) */
+        try {
+          const detailEndpoints = [
+            `/api/wms/shipping/${encodeURIComponent(code)}`,
+            `/api/wms/shipping/b2b/${encodeURIComponent(code)}`,
+            `/api/wms/shipping/b2c/${encodeURIComponent(code)}`,
+            `/api/wms/shipping/detail/${encodeURIComponent(code)}`,
+          ];
+
+          for (const ep of detailEndpoints) {
+            const res = await fetch(ep, { headers });
+            if (!res.ok) continue;
+            const json = await res.json().catch(() => null);
+            if (!json) continue;
+            const d = (json?.data ?? json) as Record<string, unknown>;
+            if (!d || typeof d !== "object" || Array.isArray(d)) continue;
+
+            const str = (v: unknown) => (v && String(v) !== "-" ? String(v) : "");
+
+            setShipTo({
+              name:     str(d.consigneeName),
+              company:  "",
+              address1: str(d.consigneeAddress1),
+              address2: str(d.consigneeAddress2),
+              city:     str(d.consigneeCity),
+              state:    str(d.consigneeState),
+              zip:      str(d.consigneeZipCode),
+              country:  str(d.consigneeNationalCode),
+              tel:      str(d.consigneeTelLno) || str(d.consigneeCellNo),
+            });
+
+            setShipFrom({
+              name:     str(d.consignorName),
+              company:  "",
+              address1: str(d.consignorAddress1),
+              address2: "",
+              city:     str(d.consignorCity),
+              state:    str(d.consignorState),
+              zip:      str(d.consignorZip) || str(d.consignorZipCode),
+              country:  str(d.consignorNationalCode),
+              tel:      str(d.consignorTelLno),
+            });
+
+            break; // got a valid response, stop trying
+          }
+        } catch { /* address info optional */ }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load items");
       } finally {
