@@ -264,36 +264,50 @@ export default function PackingPage() {
             if (!res.ok) continue;
             const json = await res.json().catch(() => null);
             if (!json) continue;
-            const d = (json?.data ?? json) as Record<string, unknown>;
-            if (!d || typeof d !== "object" || Array.isArray(d)) continue;
 
-            const str = (v: unknown) => (v && String(v) !== "-" ? String(v) : "");
+            // API may return flat object or { data: {...} }
+            const raw = (json?.data ?? json) as Record<string, unknown>;
+            if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+
+            // Case-insensitive field getter (WMS API casing is inconsistent)
+            const lower: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(raw)) lower[k.toLowerCase()] = v;
+            const f = (...keys: string[]): string => {
+              for (const k of keys) {
+                const v = lower[k.toLowerCase()];
+                if (v !== undefined && v !== null && String(v) !== "" && String(v) !== "-") return String(v);
+              }
+              return "";
+            };
+
+            // Must have at least a consignee name to consider this a valid detail response
+            if (!f("consigneeName", "receiverName")) continue;
 
             setShipTo({
-              name:     str(d.consigneeName),
+              name:     f("consigneeName", "receiverName"),
               company:  "",
-              address1: str(d.consigneeAddress1),
-              address2: str(d.consigneeAddress2),
-              city:     str(d.consigneeCity),
-              state:    str(d.consigneeState),
-              zip:      str(d.consigneeZipCode),
-              country:  str(d.consigneeNationalCode),
-              tel:      str(d.consigneeTelLno) || str(d.consigneeCellNo),
+              address1: f("consigneeAddress1", "deliveryAddress"),
+              address2: f("consigneeAddress2"),
+              city:     f("consigneeCity"),
+              state:    f("consigneeState"),
+              zip:      f("consigneeZipCode"),
+              country:  f("consigneeNationalCode"),
+              tel:      f("consigneeTelLNo", "consigneeTelLno", "consigneeCellNo"),
             });
 
             setShipFrom({
-              name:     str(d.consignorName),
+              name:     f("consignorName"),
               company:  "",
-              address1: str(d.consignorAddress1),
+              address1: f("consignorAddress1"),
               address2: "",
-              city:     str(d.consignorCity),
-              state:    str(d.consignorState),
-              zip:      str(d.consignorZip) || str(d.consignorZipCode),
-              country:  str(d.consignorNationalCode),
-              tel:      str(d.consignorTelLno),
+              city:     f("consignorCity"),
+              state:    f("consignorState"),
+              zip:      f("consignorZip", "consignorZipCode"),
+              country:  f("consignorNationalCode"),
+              tel:      f("consignorTelLNo", "consignorTelLno"),
             });
 
-            break; // got a valid response, stop trying
+            break;
           }
         } catch { /* address info optional */ }
       } catch (e) {
