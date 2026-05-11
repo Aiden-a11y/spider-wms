@@ -23,6 +23,8 @@ export default function ReceivingProcessDetailPage() {
   const [scanInput, setScanInput] = useState("");
   const [scanError, setScanError] = useState("");
   const [completedKeys, setCompletedKeys] = useState<Set<string>>(new Set());
+  // stow tag qty keyed by receiveItemId
+  const [taggedQtyMap, setTaggedQtyMap] = useState<Record<number, number>>({});
 
   const headers = useMemo(
     () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
@@ -42,9 +44,10 @@ export default function ReceivingProcessDetailPage() {
     if (!code) return;
     setLoading(true);
     try {
-      const [orderRes, itemsRes] = await Promise.all([
+      const [orderRes, itemsRes, tagsRes] = await Promise.all([
         fetch(`/api/wms/receiving/${code}`, { headers }),
         fetch(`/api/wms/receiving/items/${code}`, { headers }),
+        fetch("/api/stow-tags"),
       ]);
       const orderJson = await orderRes.json();
       const itemsJson = await itemsRes.json().catch(() => null);
@@ -57,6 +60,19 @@ export default function ReceivingProcessDetailPage() {
         ? itemsJson.data
         : [];
       setItems(list);
+
+      // Build tagged qty map from stow tags (pending only, for this order)
+      if (tagsRes.ok) {
+        const allTags: Array<{ orderCode: string; receiveItemId: number; qty: number; stowedAt?: string }> =
+          await tagsRes.json().catch(() => []);
+        const qtyMap: Record<number, number> = {};
+        for (const tag of allTags) {
+          if (tag.orderCode === code && !tag.stowedAt) {
+            qtyMap[tag.receiveItemId] = (qtyMap[tag.receiveItemId] ?? 0) + tag.qty;
+          }
+        }
+        setTaggedQtyMap(qtyMap);
+      }
     } catch {}
     setLoading(false);
   }, [code, headers]);
@@ -176,7 +192,7 @@ export default function ReceivingProcessDetailPage() {
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">LOT</th>
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Expire</th>
                 <th className="px-4 py-2.5 text-right text-slate-500 font-medium">Order Qty</th>
-                <th className="px-4 py-2.5 text-right text-slate-500 font-medium">Assigned</th>
+                <th className="px-4 py-2.5 text-right text-slate-500 font-medium">Tagged</th>
                 <th className="px-4 py-2.5 text-center text-slate-500 font-medium">Status</th>
               </tr>
             </thead>
@@ -202,7 +218,20 @@ export default function ReceivingProcessDetailPage() {
                     <td className="px-4 py-2.5 font-mono text-slate-500">{String(item.lotNo ?? "-")}</td>
                     <td className="px-4 py-2.5 text-slate-500">{String(item.expireDate ?? "-")}</td>
                     <td className="px-4 py-2.5 text-right font-semibold text-slate-800">{String(item.orderQty ?? "-")}</td>
-                    <td className="px-4 py-2.5 text-right text-slate-500">{String(item.assignedQty ?? "-")}</td>
+                    <td className="px-4 py-2.5 text-right">
+                      {(() => {
+                        const itemId = Number(item.receiveItemId ?? item.itemId ?? idx);
+                        const tagged = taggedQtyMap[itemId] ?? 0;
+                        const orderQty = Number(item.orderQty ?? 0);
+                        const isComplete = orderQty > 0 && tagged >= orderQty;
+                        if (tagged === 0) return <span className="text-slate-300">0</span>;
+                        return (
+                          <span className={`font-semibold ${isComplete ? "text-green-600" : "text-blue-600"}`}>
+                            {tagged}
+                          </span>
+                        );
+                      })()}
+                    </td>
                     <td className="px-4 py-2.5 text-center">
                       {done ? (
                         <span className="inline-flex items-center gap-1 text-xs text-green-700 font-medium">
