@@ -25,3 +25,17 @@ export async function PATCH(
     return NextResponse.json({ error: "Failed to update stow tag" }, { status: 500 });
   }
 }
+
+// DELETE /api/stow-tags/[id]  — delete a single tag
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    await redis.hdel(HASH_KEY, params.id);
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    console.error("DELETE /api/stow-tags/[id]", e);
+    return NextResponse.json({ error: "Failed to delete stow tag" }, { status: 500 });
+  }
+}

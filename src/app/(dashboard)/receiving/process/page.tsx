@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo, useRef } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import { useRouter } from "next/navigation";
-import { RefreshCw, PackageCheck, ScanLine, AlertCircle, Play, RotateCcw, Trash2 } from "lucide-react";
+import { RefreshCw, PackageCheck, ScanLine, AlertCircle, Play, RotateCcw } from "lucide-react";
 
 type Row = Record<string, unknown>;
 
@@ -27,7 +27,6 @@ export default function ReceivingProcessPage() {
   const [scanError, setScanError] = useState("");
   const [starting, setStarting] = useState<string | null>(null);
   const [stowCounts, setStowCounts] = useState<Record<string, number>>({});
-  const [deleting, setDeleting] = useState<string | null>(null);
   const scanRef = useRef<HTMLInputElement>(null);
 
   const headers = useMemo(
@@ -116,19 +115,6 @@ export default function ReceivingProcessPage() {
   function resumeReceiving(row: Row) {
     const orderCode = String(row.receiveOrderCode ?? row.orderCode ?? "");
     router.push(`/receiving/process/${orderCode}`);
-  }
-
-  /* ── Delete stow tickets ── */
-  async function deleteStowTickets(orderCode: string) {
-    if (!confirm(`Delete all pending stow tickets for ${orderCode}?`)) return;
-    setDeleting(orderCode);
-    try {
-      await fetch(`/api/stow-tags?orderCode=${encodeURIComponent(orderCode)}`, {
-        method: "DELETE",
-      });
-      await loadStowCounts();
-    } catch {}
-    setDeleting(null);
   }
 
   /* ── Scan handler ── */
@@ -235,7 +221,6 @@ export default function ReceivingProcessPage() {
                   const isStarting = starting === orderCode;
                   const statusMeta = STATUS_LABEL[status] ?? { label: status, badge: "bg-slate-100 text-slate-600 border-slate-200" };
                   const stowCount = stowCounts[orderCode] ?? 0;
-                  const isDeleting = deleting === orderCode;
 
                   return (
                     <tr key={idx} className={`border-b border-slate-100 hover:bg-slate-50 ${isInProgress ? "bg-amber-50/30" : ""}`}>
@@ -275,19 +260,11 @@ export default function ReceivingProcessPage() {
                             </button>
                           )}
 
-                          {/* Delete stow tickets button (shown when there are pending stow tickets) */}
+                          {/* Stow count badge (clickable → resume to manage tags) */}
                           {stowCount > 0 && (
-                            <button
-                              onClick={() => deleteStowTickets(orderCode)}
-                              disabled={isDeleting}
-                              title={`Delete ${stowCount} pending stow ticket${stowCount !== 1 ? "s" : ""}`}
-                              className="flex items-center gap-1.5 text-xs font-medium border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50 px-3 py-1.5 rounded-lg transition-colors"
-                            >
-                              {isDeleting
-                                ? <RefreshCw className="w-3 h-3 animate-spin" />
-                                : <Trash2 className="w-3 h-3" />}
-                              {stowCount} Stow
-                            </button>
+                            <span className="text-xs text-amber-600 bg-amber-50 border border-amber-200 px-2 py-1 rounded-full font-medium">
+                              {stowCount} stow tag{stowCount !== 1 ? "s" : ""}
+                            </span>
                           )}
                         </div>
                       </td>

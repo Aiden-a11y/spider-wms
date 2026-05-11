@@ -10,9 +10,26 @@ import {
   Printer,
   Tag,
   RotateCcw,
+  Trash2,
 } from "lucide-react";
 import BarcodeLabel, { type LabelData } from "@/components/BarcodeLabel";
 import { addStowTag } from "@/lib/stow-tags";
+
+type PersistedStowTag = {
+  id: number;
+  tagNo: number;
+  orderCode: string;
+  barcodeValue: string;
+  qty: number;
+  lotNo: string;
+  expireDate: string;
+  sku: string;
+  productName: string;
+  warehouseCode: string;
+  customerCode: string;
+  receiveItemId: number;
+  stowedAt?: string;
+};
 
 type Row = Record<string, unknown>;
 
@@ -43,6 +60,7 @@ export default function ReceivingInspectPage() {
 
   /* ── stow tags ── */
   const [tags, setTags] = useState<StowTag[]>([]);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   /* ── print trigger ── */
   const [printingTag, setPrintingTag] = useState<StowTag | null>(null);
@@ -73,6 +91,38 @@ export default function ReceivingInspectPage() {
           const raw = String(found.expireDate ?? "");
           setLotNo(String(found.lotNo ?? ""));
           setExpireDate(raw.length >= 10 ? raw.slice(0, 10) : raw);
+
+          // Load existing stow tags from Redis for this order+item
+          try {
+            const tagsRes = await fetch("/api/stow-tags");
+            if (tagsRes.ok) {
+              const allTags: PersistedStowTag[] = await tagsRes.json();
+              const itemId = Number(found.receiveItemId ?? found.itemId ?? idx);
+              const existing = allTags
+                .filter((t) => t.orderCode === code && t.receiveItemId === itemId && !t.stowedAt)
+                .sort((a, b) => a.tagNo - b.tagNo);
+
+              setTags(existing.map((t) => ({
+                id: t.id,
+                tagNo: t.tagNo,
+                barcodeValue: t.barcodeValue,
+                qty: t.qty,
+                lotNo: t.lotNo ?? "",
+                expireDate: t.expireDate ?? "",
+                labelData: {
+                  barcodeValue: t.barcodeValue,
+                  orderCode: t.orderCode,
+                  sku: t.sku,
+                  productName: t.productName,
+                  lotNo: t.lotNo || undefined,
+                  expireDate: t.expireDate || undefined,
+                  qty: t.qty,
+                  warehouseCode: t.warehouseCode || undefined,
+                  customerCode: t.customerCode || undefined,
+                },
+              })));
+            }
+          } catch { /* ignore */ }
         }
       } catch {}
       setLoading(false);
@@ -100,7 +150,7 @@ export default function ReceivingInspectPage() {
   /* ── generate a new stow tag ── */
   async function generateTag() {
     if (!item || !tagQty || Number(tagQty) <= 0) return;
-    const tagNo = tags.length + 1;
+    const tagNo = tags.length > 0 ? Math.max(...tags.map((t) => t.tagNo)) + 1 : 1;
     const itemId = String(item.receiveItemId ?? item.itemId ?? idx);
     const barcodeValue = `${code}::${itemId}-T${tagNo}`;
 
@@ -148,6 +198,15 @@ export default function ReceivingInspectPage() {
     });
 
     triggerPrint(newTag);
+  }
+
+  async function deleteTag(tag: StowTag) {
+    setDeletingId(tag.id);
+    try {
+      await fetch(`/api/stow-tags/${tag.id}`, { method: "DELETE" });
+      setTags((prev) => prev.filter((t) => t.id !== tag.id));
+    } catch { /* ignore */ }
+    setDeletingId(null);
   }
 
   function triggerPrint(tag: StowTag) {
@@ -384,13 +443,25 @@ export default function ReceivingInspectPage() {
                         <div className="font-mono text-slate-300 truncate">{tag.barcodeValue}</div>
                       </div>
                     </div>
-                    <button
-                      onClick={() => triggerPrint(tag)}
-                      title="Reprint"
-                      className="flex-shrink-0 p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
-                    >
-                      <RotateCcw className="w-4 h-4" />
-                    </button>
+                    <div className="flex flex-col gap-1 flex-shrink-0">
+                      <button
+                        onClick={() => triggerPrint(tag)}
+                        title="Reprint"
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                      >
+                        <RotateCcw className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => deleteTag(tag)}
+                        disabled={deletingId === tag.id}
+                        title="Delete this stow tag"
+                        className="p-1.5 rounded-lg text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-40"
+                      >
+                        {deletingId === tag.id
+                          ? <RefreshCw className="w-4 h-4 animate-spin" />
+                          : <Trash2 className="w-4 h-4" />}
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
