@@ -711,202 +711,240 @@ export default function ShippingTypePage() {
     const total   = allocRows.reduce((s, r) => s + r.totalQty, 0);
     const now     = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
     const dateStr = new Date().toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
-    const mergedCount = allocRows.filter((r) => Object.keys(r.perOrder).length > 1).length;
+    const totalCtn = allocRows.reduce((s, r) => { const u = uomMap[r.sku] ?? 0; return s + (u > 0 ? Math.ceil(r.totalQty / u) : 0); }, 0);
 
-    const hasUom = Object.keys(uomMap).length > 0;
-
-    const perOrderCols = codes.map((c, i) =>
-      `<th class="right" style="min-width:42px">#${i + 1}</th>`
-    ).join("");
-
-    const rows = allocRows.map((row, i) => {
+    // ── One 4×6 label per pick line ──────────────────────────────────────────
+    const labelPages = allocRows.map((row, i) => {
       const isShared = Object.keys(row.perOrder).length > 1;
-      const upc      = uomMap[row.sku] ?? 0;         // units per carton
+      const upc      = uomMap[row.sku] ?? 0;
       const cartons  = upc > 0 ? Math.ceil(row.totalQty / upc) : null;
-      const perCells = codes.map((c) => {
-        const qty    = row.perOrder[c];
-        const ctnPer = upc > 0 && qty != null ? Math.ceil(qty / upc) : null;
-        return `<td class="td-per">
-          ${qty != null ? `<span style="font-weight:700">${Number(qty).toLocaleString()}</span>${ctnPer != null ? `<br><span style="font-size:9px;color:#6b7280">${ctnPer} ctn</span>` : ""}` : "<span style='color:#ccc'>—</span>"}
-        </td>`;
-      }).join("");
+
+      // Per-order qty breakdown (only orders that have qty for this row)
+      const orderBadges = codes
+        .filter((c) => row.perOrder[c] != null)
+        .map((c, idx) => {
+          const oIdx = codes.indexOf(c);
+          const qty  = row.perOrder[c]!;
+          const ctn  = upc > 0 ? Math.ceil(qty / upc) : null;
+          return `<div class="order-badge">
+            <span class="order-num">#${oIdx + 1}</span>
+            <span class="order-code">${c}</span>
+            <span class="order-qty">${qty.toLocaleString()} EA${ctn != null ? ` / ${ctn} CTN` : ""}</span>
+          </div>`;
+        }).join("");
+
+      // Location parts (split by dash for big display)
+      const locParts = (row.location || "—").split("-");
+
       return `
-        <tr class="${i % 2 === 0 ? "row-even" : "row-odd"}">
-          <td class="td-seq">${i + 1}</td>
-          <td class="td-loc">
-            ${row.location || "—"}
-            ${isShared ? '<span class="merged-badge">MERGED</span>' : ""}
-          </td>
-          <td class="td-sku">${row.sku || "—"}</td>
-          <td class="td-prod">${row.productName || "—"}</td>
-          <td class="td-lot">${row.lot || "—"}</td>
-          ${perCells}
-          <td class="td-total">
-            ${row.totalQty.toLocaleString()} EA
-            ${cartons != null ? `<div style="font-size:12px;font-weight:900;color:#065f46;margin-top:1px">${cartons} CTN</div>${upc > 0 ? `<div style="font-size:9px;color:#6b7280;margin-top:1px">${upc} ea/ctn</div>` : ""}` : ""}
-          </td>
-          <td class="td-chk"><div class="chk-box"></div></td>
-        </tr>`;
+      <div class="label${i < allocRows.length - 1 ? " page-break" : ""}">
+        <!-- TOP BAR -->
+        <div class="top-bar">
+          <div class="top-left">
+            <span class="company-name">STL WMS</span>
+            <span class="wh-code">${warehouseCode}</span>
+          </div>
+          <div class="top-center">
+            <span class="pick-seq">PICK ${i + 1} / ${allocRows.length}</span>
+            ${isShared ? '<span class="merged-tag">MERGED</span>' : ""}
+          </div>
+          <div class="top-right">
+            <span class="gen-date">${dateStr}</span>
+          </div>
+        </div>
+
+        <!-- LOCATION (dominant) -->
+        <div class="loc-block">
+          <div class="loc-label">LOCATION</div>
+          <div class="loc-value">${locParts.join('<span class="loc-sep">-</span>')}</div>
+        </div>
+
+        <!-- SKU + PRODUCT -->
+        <div class="item-block">
+          <div class="item-row">
+            <span class="item-lbl">SKU</span>
+            <span class="item-val sku-val">${row.sku || "—"}</span>
+          </div>
+          ${row.productName ? `<div class="item-row">
+            <span class="item-lbl">PRODUCT</span>
+            <span class="item-val prod-val">${row.productName}</span>
+          </div>` : ""}
+          ${row.lot ? `<div class="item-row">
+            <span class="item-lbl">LOT</span>
+            <span class="item-val lot-val">${row.lot}</span>
+          </div>` : ""}
+        </div>
+
+        <!-- QTY (dominant) -->
+        <div class="qty-block">
+          <div class="qty-left">
+            <div class="qty-number">${row.totalQty.toLocaleString()}</div>
+            <div class="qty-unit">EA</div>
+          </div>
+          ${cartons != null ? `
+          <div class="qty-divider"></div>
+          <div class="qty-right">
+            <div class="ctn-number">${cartons}</div>
+            <div class="ctn-unit">CTN</div>
+            ${upc > 0 ? `<div class="ctn-rate">${upc} ea/ctn</div>` : ""}
+          </div>` : ""}
+        </div>
+
+        <!-- ORDER BREAKDOWN (if multi-order or just show single order) -->
+        <div class="orders-block">
+          <div class="orders-label">ORDER${codes.filter(c => row.perOrder[c] != null).length > 1 ? "S" : ""}</div>
+          <div class="orders-list">${orderBadges}</div>
+        </div>
+
+        <!-- FOOTER / SIGN -->
+        <div class="sign-bar">
+          <div class="sign-field">
+            <div class="sign-line"></div>
+            <div class="sign-name">Picker</div>
+          </div>
+          <div class="sign-field">
+            <div class="sign-line"></div>
+            <div class="sign-name">Checked</div>
+          </div>
+          <div class="chk-circle"></div>
+        </div>
+      </div>`;
     }).join("");
 
-    const footCells = codes.map((c) =>
-      `<td style="text-align:right;padding:6px 8px;font-weight:700;font-size:11px;">
-        ${allocRows.reduce((s, r) => s + (r.perOrder[c] ?? 0), 0).toLocaleString()}
-      </td>`
+    // ── Summary label (last page) ─────────────────────────────────────────────
+    const orderList = codes.map((c, i) =>
+      `<div class="sum-order"><span class="sum-num">#${i + 1}</span><span class="sum-code">${c}</span></div>`
     ).join("");
 
-    const legend = codes.map((c, i) =>
-      `<span class="legend-item"><b style="color:#2563eb">#${i + 1}</b> → ${c}</span>`
-    ).join("");
+    const summaryPage = `
+      <div class="label page-break">
+        <div class="top-bar" style="background:#1e3a8a">
+          <div class="top-left"><span class="company-name">STL WMS</span><span class="wh-code">${warehouseCode}</span></div>
+          <div class="top-center"><span class="pick-seq" style="color:#fff;font-size:11px">SUMMARY</span></div>
+          <div class="top-right"><span class="gen-date">${dateStr}</span></div>
+        </div>
+        <div style="padding:6px 10px 4px;border-bottom:1px solid #e2e8f0">
+          <div style="font-size:8px;text-transform:uppercase;letter-spacing:.7px;color:#64748b;margin-bottom:2px">Picking Summary</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px">
+            <div class="sum-stat"><div class="sum-stat-n">${codes.length}</div><div class="sum-stat-l">Orders</div></div>
+            <div class="sum-stat"><div class="sum-stat-n">${allocRows.length}</div><div class="sum-stat-l">Pick Lines</div></div>
+            <div class="sum-stat"><div class="sum-stat-n" style="color:#1d4ed8">${total.toLocaleString()}</div><div class="sum-stat-l">Total EA</div></div>
+          </div>
+          ${totalCtn > 0 ? `<div style="margin-top:4px;text-align:center;font-size:18px;font-weight:900;color:#065f46">${totalCtn} CTN TOTAL</div>` : ""}
+        </div>
+        <div style="padding:6px 10px">
+          <div style="font-size:8px;text-transform:uppercase;letter-spacing:.7px;color:#64748b;margin-bottom:4px">Order References</div>
+          <div style="display:flex;flex-direction:column;gap:3px">${orderList}</div>
+        </div>
+        <div class="sign-bar" style="margin-top:auto">
+          <div class="sign-field"><div class="sign-line"></div><div class="sign-name">Picker Name</div></div>
+          <div class="sign-field"><div class="sign-line"></div><div class="sign-name">Completed</div></div>
+          <div class="sign-field"><div class="sign-line"></div><div class="sign-name">Supervisor</div></div>
+        </div>
+      </div>`;
 
     const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Picking Ticket · ${dateStr}</title>
+<title>Pick Labels · ${dateStr}</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#111;background:#fff}
-  .print-bar{background:#1e293b;padding:10px 20px;display:flex;align-items:center;gap:12px}
-  .print-btn{background:#2563eb;color:#fff;border:none;padding:8px 22px;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;letter-spacing:.3px}
-  .print-btn:hover{background:#1d4ed8}
-  .hint{color:#94a3b8;font-size:11px}
-  .page{padding:13mm 14mm;max-width:297mm;margin:0 auto}
+  body{font-family:Arial,Helvetica,sans-serif;background:#e5e7eb;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 
-  /* ─ Header ─ */
-  .hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #111;padding-bottom:10px;margin-bottom:12px}
-  .hdr-left .company{font-size:20px;font-weight:900;letter-spacing:-0.5px}
-  .hdr-left .sub{font-size:10px;color:#555;margin-top:2px}
-  .hdr-right{text-align:right}
-  .hdr-right .doc-title{font-size:24px;font-weight:900;letter-spacing:3px;color:#111}
-  .hdr-right .doc-date{font-size:9px;color:#777;margin-top:3px}
+  @page{size:4in 6in;margin:0}
 
-  /* ─ Info grid ─ */
-  .info-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-bottom:12px;padding:8px 10px;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:5px}
-  .info-cell .lbl{font-size:8px;text-transform:uppercase;letter-spacing:.6px;color:#64748b}
-  .info-cell .val{font-size:13px;font-weight:800;margin-top:1px}
+  /* Screen: show labels as cards */
+  @media screen{
+    .print-bar{background:#1e293b;padding:10px 18px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:99}
+    .print-btn{background:#2563eb;color:#fff;border:none;padding:7px 20px;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer}
+    .print-btn:hover{background:#1d4ed8}
+    .hint{color:#94a3b8;font-size:11px}
+    .labels-wrap{display:flex;flex-direction:column;align-items:center;gap:16px;padding:20px 0 40px}
+    .label{width:4in;min-height:6in;background:#fff;border-radius:6px;box-shadow:0 2px 12px rgba(0,0,0,.18);overflow:hidden;display:flex;flex-direction:column}
+  }
 
-  /* ─ Legend ─ */
-  .legend{margin-bottom:10px}
-  .legend-title{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#475569;margin-bottom:4px}
-  .legend-grid{display:flex;flex-wrap:wrap;gap:4px}
-  .legend-item{font-size:10px;font-family:monospace;background:#e2e8f0;padding:2px 9px;border-radius:3px;border:1px solid #cbd5e1}
-
-  /* ─ Table ─ */
-  table{width:100%;border-collapse:collapse;border:1px solid #94a3b8}
-  thead tr{background:#1e293b;color:#fff}
-  thead th{padding:6px 7px;text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;border-right:1px solid #334155}
-  thead th.right{text-align:right}
-  .row-even{background:#fff}
-  .row-odd{background:#f8fafc}
-  tbody tr{border-bottom:1px solid #e2e8f0}
-  td{padding:5px 7px;vertical-align:middle;border-right:1px solid #e2e8f0}
-
-  .td-seq{color:#94a3b8;font-size:10px;width:24px;text-align:right}
-  .td-loc{font-size:15px;font-weight:900;font-family:monospace;white-space:nowrap;color:#0f172a}
-  .merged-badge{font-size:8px;font-weight:800;color:#065f46;background:#d1fae5;border:1px solid #6ee7b7;padding:1px 6px;border-radius:9px;margin-left:5px;letter-spacing:.3px;vertical-align:middle}
-  .td-sku{font-family:monospace;font-size:10px;white-space:nowrap;color:#1e40af}
-  .td-prod{font-size:10px;color:#374151;max-width:180px}
-  .td-lot{font-family:monospace;font-size:9px;color:#6b7280;white-space:nowrap}
-  .td-per{text-align:right;font-size:10px;color:#374151;min-width:38px}
-  .td-total{text-align:right;font-size:17px;font-weight:900;color:#1d4ed8;white-space:nowrap;background:#eff6ff;border-left:2px solid #bfdbfe}
-  .td-chk{text-align:center;width:30px;background:#fafafa}
-  .chk-box{width:16px;height:16px;border:2px solid #374151;display:inline-block;border-radius:2px}
-
-  /* ─ Footer ─ */
-  tfoot tr{background:#1e293b;color:#fff}
-  tfoot td{padding:6px 7px;font-weight:700;font-size:11px;border-right:1px solid #334155}
-  .foot-total{text-align:right;font-size:18px;font-weight:900;background:#1d4ed8;color:#fff}
-
-  /* ─ Sign / Footer bar ─ */
-  .sign-area{display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;margin-top:18px}
-  .sign-box{border-top:1.5px solid #000;padding-top:4px;font-size:8px;text-transform:uppercase;letter-spacing:.6px;color:#6b7280}
-  .page-footer{margin-top:14px;border-top:1px solid #cbd5e1;padding-top:6px;display:flex;justify-content:space-between;font-size:8px;color:#94a3b8}
-
+  /* Print: each label = one page */
   @media print{
     .print-bar{display:none!important}
-    .page{padding:8mm 10mm}
-    body{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .labels-wrap{display:block;background:#fff}
+    .label{width:4in;height:6in;overflow:hidden;display:flex;flex-direction:column;background:#fff}
+    .page-break{page-break-before:always}
   }
+
+  /* ─ Top bar ─ */
+  .top-bar{background:#0f172a;color:#fff;display:flex;align-items:center;justify-content:space-between;padding:5px 8px;flex-shrink:0}
+  .company-name{font-size:11px;font-weight:900;letter-spacing:.5px}
+  .wh-code{font-size:9px;color:#94a3b8;margin-left:5px}
+  .top-center{display:flex;align-items:center;gap:5px}
+  .pick-seq{font-size:10px;font-weight:700;color:#93c5fd;letter-spacing:.3px}
+  .merged-tag{background:#059669;color:#fff;font-size:8px;font-weight:800;padding:1px 5px;border-radius:3px;letter-spacing:.3px}
+  .gen-date{font-size:8px;color:#94a3b8}
+
+  /* ─ Location ─ */
+  .loc-block{padding:6px 10px 5px;border-bottom:2px solid #e2e8f0;flex-shrink:0}
+  .loc-label{font-size:7.5px;text-transform:uppercase;letter-spacing:.8px;color:#64748b;margin-bottom:2px}
+  .loc-value{font-size:36px;font-weight:900;font-family:'Courier New',monospace;color:#0f172a;letter-spacing:1px;line-height:1}
+  .loc-sep{color:#94a3b8;margin:0 1px}
+
+  /* ─ Item info ─ */
+  .item-block{padding:5px 10px;border-bottom:1px solid #e2e8f0;flex-shrink:0}
+  .item-row{display:flex;align-items:baseline;gap:5px;margin-bottom:2px}
+  .item-lbl{font-size:7px;text-transform:uppercase;letter-spacing:.7px;color:#94a3b8;width:40px;flex-shrink:0}
+  .item-val{font-size:11px;font-weight:600;color:#1e293b}
+  .sku-val{font-family:'Courier New',monospace;font-size:13px;font-weight:800;color:#1e40af;letter-spacing:.5px}
+  .prod-val{font-size:10px;font-weight:500;color:#374151}
+  .lot-val{font-family:'Courier New',monospace;font-size:11px;font-weight:700;color:#7c3aed}
+
+  /* ─ Qty ─ */
+  .qty-block{display:flex;align-items:center;padding:6px 10px;border-bottom:1px solid #e2e8f0;background:#f8fafc;flex-shrink:0}
+  .qty-left{display:flex;align-items:baseline;gap:4px}
+  .qty-number{font-size:48px;font-weight:900;color:#1d4ed8;line-height:1;letter-spacing:-1px}
+  .qty-unit{font-size:13px;font-weight:700;color:#3b82f6;align-self:flex-end;margin-bottom:6px}
+  .qty-divider{width:2px;background:#e2e8f0;margin:0 10px;align-self:stretch}
+  .qty-right{display:flex;flex-direction:column;align-items:flex-start}
+  .ctn-number{font-size:34px;font-weight:900;color:#059669;line-height:1}
+  .ctn-unit{font-size:11px;font-weight:700;color:#10b981}
+  .ctn-rate{font-size:8px;color:#6b7280;margin-top:1px}
+
+  /* ─ Orders ─ */
+  .orders-block{padding:5px 10px;border-bottom:1px solid #e2e8f0;flex-shrink:0}
+  .orders-label{font-size:7.5px;text-transform:uppercase;letter-spacing:.7px;color:#64748b;margin-bottom:3px}
+  .orders-list{display:flex;flex-direction:column;gap:2px}
+  .order-badge{display:flex;align-items:center;gap:5px;font-size:9px}
+  .order-num{font-weight:900;color:#2563eb;font-size:10px;width:20px}
+  .order-code{font-family:'Courier New',monospace;color:#374151;font-size:9px;flex:1}
+  .order-qty{font-weight:700;color:#059669;white-space:nowrap}
+
+  /* ─ Sign bar ─ */
+  .sign-bar{display:flex;align-items:flex-end;gap:6px;padding:6px 10px 7px;margin-top:auto;border-top:1px solid #e2e8f0}
+  .sign-field{flex:1}
+  .sign-line{height:1px;background:#000;margin-bottom:2px}
+  .sign-name{font-size:7px;text-transform:uppercase;letter-spacing:.5px;color:#94a3b8}
+  .chk-circle{width:28px;height:28px;border:2.5px solid #1d4ed8;border-radius:50%;flex-shrink:0}
+
+  /* ─ Summary page ─ */
+  .sum-order{display:flex;align-items:center;gap:6px;padding:3px 5px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:3px}
+  .sum-num{font-weight:900;color:#2563eb;font-size:11px;width:22px}
+  .sum-code{font-family:'Courier New',monospace;font-size:9px;color:#374151;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sum-stat{text-align:center;padding:4px 3px;background:#f1f5f9;border-radius:4px}
+  .sum-stat-n{font-size:20px;font-weight:900;color:#0f172a}
+  .sum-stat-l{font-size:7px;text-transform:uppercase;letter-spacing:.5px;color:#64748b}
 </style>
 </head>
 <body>
 <div class="print-bar">
-  <button class="print-btn" onclick="window.print()">🖨&nbsp; Print / Save as PDF</button>
-  <span class="hint">In the print dialog → choose "Save as PDF" as the destination</span>
+  <button class="print-btn" onclick="window.print()">🖨&nbsp; Print Labels (4×6)</button>
+  <span class="hint">Print dialog → Paper size: 4×6 in · Margins: None · Scale: 100%</span>
 </div>
-<div class="page">
-
-  <div class="hdr">
-    <div class="hdr-left">
-      <div class="company">STL WAREHOUSE</div>
-      <div class="sub">Warehouse Management System — WMS Dashboard</div>
-    </div>
-    <div class="hdr-right">
-      <div class="doc-title">PICKING TICKET</div>
-      <div class="doc-date">Generated: ${now}</div>
-    </div>
-  </div>
-
-  <div class="info-grid">
-    <div class="info-cell"><div class="lbl">Warehouse</div><div class="val">${warehouseCode}</div></div>
-    <div class="info-cell"><div class="lbl">Orders</div><div class="val">${codes.length}</div></div>
-    <div class="info-cell"><div class="lbl">Pick Lines</div><div class="val">${allocRows.length}</div></div>
-    <div class="info-cell"><div class="lbl">Merged Lines</div><div class="val" style="color:${mergedCount > 0 ? "#065f46" : "#94a3b8"}">${mergedCount}</div></div>
-    <div class="info-cell"><div class="lbl">Total Units</div><div class="val" style="color:#1d4ed8">${total.toLocaleString()}</div></div>
-    <div class="info-cell"><div class="lbl">Date</div><div class="val" style="font-size:11px">${dateStr}</div></div>
-  </div>
-
-  <div class="legend">
-    <div class="legend-title">Order Reference</div>
-    <div class="legend-grid">${legend}</div>
-  </div>
-
-  <table>
-    <thead>
-      <tr>
-        <th class="right">#</th>
-        <th>Location</th>
-        <th>SKU</th>
-        <th>Product</th>
-        <th>Lot</th>
-        ${perOrderCols}
-        <th class="right" style="background:#1e3a8a;min-width:72px">Total${hasUom ? " / CTN" : " Qty"}</th>
-        <th style="text-align:center;width:34px">✓</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${rows}
-    </tbody>
-    <tfoot>
-      <tr>
-        <td colspan="5" style="font-size:12px;letter-spacing:1px">GRAND TOTAL</td>
-        ${footCells}
-        <td class="foot-total">
-          ${total.toLocaleString()} EA
-          ${hasUom ? `<div style="font-size:13px;color:#86efac;margin-top:2px">${allocRows.reduce((s, r) => { const upc2 = uomMap[r.sku] ?? 0; return s + (upc2 > 0 ? Math.ceil(r.totalQty / upc2) : 0); }, 0)} CTN</div>` : ""}
-        </td>
-        <td></td>
-      </tr>
-    </tfoot>
-  </table>
-
-  <div class="sign-area">
-    <div class="sign-box">Picker Name</div>
-    <div class="sign-box">Picker Signature</div>
-    <div class="sign-box">Completed Time</div>
-  </div>
-
-  <div class="page-footer">
-    <span>STL WMS Dashboard — Picking Ticket · Confidential</span>
-    <span>${now}</span>
-  </div>
-
+<div class="labels-wrap">
+  ${labelPages}
+  ${summaryPage}
 </div>
 </body>
 </html>`;
 
-    const win = window.open("", "_blank", "width=1200,height=900");
+    const win = window.open("", "_blank", "width=560,height=900");
     if (win) { win.document.write(html); win.document.close(); }
   }
 
