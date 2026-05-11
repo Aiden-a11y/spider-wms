@@ -1027,10 +1027,20 @@ export default function ShippingTypePage() {
   const d = detail ?? selected ?? {};
   const orderCode = String(d.shippingOrderCode ?? d.orderCode ?? d.outboundCode ?? "");
 
+  /* Case-insensitive field getter — WMS API casing is inconsistent */
+  const dGet = (key: string): unknown => {
+    if (d[key] !== undefined) return d[key];
+    const lower = key.toLowerCase();
+    for (const [k, v] of Object.entries(d)) {
+      if (k.toLowerCase() === lower) return v;
+    }
+    return undefined;
+  };
+
   /* edit field helper: read from editData in edit mode, d otherwise */
   const ef = (key: string) => editMode
-    ? { value: editData[key], onChange: (v: string) => setEditData((p) => ({ ...p, [key]: v })) }
-    : { value: d[key] };
+    ? { value: editData[key] ?? dGet(key), onChange: (v: string) => setEditData((p) => ({ ...p, [key]: v })) }
+    : { value: dGet(key) };
   const itemList: Order[] =
     itemsRaw.length > 0 ? itemsRaw
     : Array.isArray(d.itemList ?? d.items ?? d.shippingItemList)
