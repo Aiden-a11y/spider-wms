@@ -3,10 +3,11 @@
 import { useEffect, useState, useMemo } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 import {
   RefreshCw, AlertCircle, Truck, Search, Download, X,
   Building2, User, Store, Globe, MapPin, Save, CheckCircle2, ArrowLeftRight,
-  ClipboardList, AlertTriangle,
+  ClipboardList, AlertTriangle, PackageCheck,
 } from "lucide-react";
 import { buildLocationOccupancyLookup, getLocationOccupancyInfo } from "@/lib/wms";
 import { supabase } from "@/lib/supabase";
@@ -1217,6 +1218,16 @@ export default function ShippingTypePage() {
                             <CheckCircle2 className="w-4 h-4" />
                           </span>
                         ) : null}
+                      </td>
+                      {/* Pack button */}
+                      <td className="px-2 py-2.5 text-center" onClick={(e) => e.stopPropagation()}>
+                        <Link
+                          href={`/packing?order=${encodeURIComponent(orderCode_)}`}
+                          title="Start Packing"
+                          className="inline-flex items-center justify-center w-6 h-6 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                        >
+                          <PackageCheck className="w-4 h-4" />
+                        </Link>
                       </td>
                     </tr>
                   );
