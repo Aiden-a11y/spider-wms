@@ -232,7 +232,7 @@ export default function ReceivingPage() {
 
         const lines = [
           MARKER,
-          saved.receivingDate      ? `Receiving Date: ${saved.receivingDate}` : "",
+          saved.receivingDate      ? `Receiving Completion Date: ${saved.receivingDate}` : "",
           saved.arriveDate         ? `Arrive Date: ${saved.arriveDate}` : "",
           saved.containerSize      ? `Container Size: ${saved.containerSize}` : "",
           (saved.pltReceived || saved.ctnReceived)
@@ -847,7 +847,7 @@ export default function ReceivingPage() {
                     <div className="grid grid-cols-2 gap-5">
                       {/* Receiving Date */}
                       <div>
-                        <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">Receiving Date</label>
+                        <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">Receiving Completion Date</label>
                         <input
                           type="date"
                           value={recvInfo.receivingDate}

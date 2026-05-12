@@ -62,7 +62,7 @@ export function formatRecvInfoText(info: ReceivingInfo): string {
   const cs = CONTAINER_SIZES.find((c) => c.value === info.containerSize)?.label ?? info.containerSize;
   const lines = [
     "--- RECEIVING INFO ---",
-    info.receivingDate   ? `Receiving Date: ${info.receivingDate}` : "",
+    info.receivingDate   ? `Receiving Completion Date: ${info.receivingDate}` : "",
     info.arriveDate      ? `Arrive Date: ${info.arriveDate}` : "",
     cs                   ? `Container Size: ${cs}` : "",
     (info.pltReceived || info.ctnReceived)
