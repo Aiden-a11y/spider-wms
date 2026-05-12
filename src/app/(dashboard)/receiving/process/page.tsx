@@ -34,19 +34,38 @@ export default function ReceivingProcessPage() {
     [user]
   );
 
-  /* ── Load orders (AA = Pre-Alert, CA = In-Progress) ── */
+  /* ── Load orders (AA = Pre-Alert, CA = In-Progress) — paginate all pages ── */
   async function loadOrders() {
     setLoading(true);
     try {
-      const res = await fetch("/api/wms/receiving/list", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ page: 1, limit: 200 }),
-      });
-      const json = await res.json();
-      const list = json?.data?.list ?? json?.data ?? json?.list ?? [];
-      const all: Row[] = Array.isArray(list) ? list : [];
-      const filtered = all.filter((r) => {
+      const LIMIT = 100;
+      const allRows: Row[] = [];
+      let pageNum = 1;
+      let effectivePageSize = LIMIT;
+      const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+      while (true) {
+        if (pageNum > 1) await sleep(400 + Math.random() * 200);
+
+        const res = await fetch("/api/wms/receiving/list", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ page: pageNum, limit: LIMIT }),
+        });
+        const json = await res.json();
+        const list: Row[] = json?.data?.list ?? json?.data ?? json?.list ?? [];
+
+        if (!Array.isArray(list) || list.length === 0) break;
+        if (pageNum === 1) effectivePageSize = list.length;
+
+        allRows.push(...list);
+
+        if (list.length < effectivePageSize) break;
+        if (pageNum >= 50) break; // safety cap
+        pageNum++;
+      }
+
+      const filtered = allRows.filter((r) => {
         const s = String(r.status ?? "").toUpperCase();
         return s === "AA" || s === "CA";
       });
