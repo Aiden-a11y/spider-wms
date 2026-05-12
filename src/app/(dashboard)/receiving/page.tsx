@@ -233,6 +233,7 @@ export default function ReceivingPage() {
         const lines = [
           MARKER,
           saved.receivingDate      ? `Receiving Date: ${saved.receivingDate}` : "",
+          saved.arriveDate         ? `Arrive Date: ${saved.arriveDate}` : "",
           saved.containerSize      ? `Container Size: ${saved.containerSize}` : "",
           (saved.pltReceived || saved.ctnReceived)
             ? `Pallets Received: ${saved.pltReceived} PLT / ${saved.ctnReceived} CTN` : "",
@@ -855,20 +856,31 @@ export default function ReceivingPage() {
                         />
                       </div>
 
-                      {/* Container Size */}
+                      {/* Arrive Date */}
                       <div>
-                        <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">Container Size</label>
-                        <select
-                          value={recvInfo.containerSize}
-                          onChange={(e) => updateRecvInfo("containerSize", e.target.value)}
-                          className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
-                        >
-                          <option value="">— Select —</option>
-                          {CONTAINER_SIZES.map((c) => (
-                            <option key={c.value} value={c.value}>{c.label}</option>
-                          ))}
-                        </select>
+                        <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">Arrive Date</label>
+                        <input
+                          type="date"
+                          value={recvInfo.arriveDate ?? ""}
+                          onChange={(e) => updateRecvInfo("arriveDate", e.target.value)}
+                          className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                        />
                       </div>
+                    </div>
+
+                    {/* Container Size */}
+                    <div>
+                      <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">Container Size</label>
+                      <select
+                        value={recvInfo.containerSize}
+                        onChange={(e) => updateRecvInfo("containerSize", e.target.value)}
+                        className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white"
+                      >
+                        <option value="">— Select —</option>
+                        {CONTAINER_SIZES.map((c) => (
+                          <option key={c.value} value={c.value}>{c.label}</option>
+                        ))}
+                      </select>
                     </div>
 
                     {/* Pallets Received */}

@@ -1,6 +1,7 @@
 export type ReceivingInfo = {
   orderCode: string;
   receivingDate: string;       // "YYYY-MM-DD"
+  arriveDate: string;          // "YYYY-MM-DD"
   pltReceived: number;
   ctnReceived: number;
   pltPutAway: number;
@@ -27,6 +28,7 @@ export function emptyRecvInfo(orderCode: string): ReceivingInfo {
   return {
     orderCode,
     receivingDate: "",
+    arriveDate: "",
     pltReceived: 0,
     ctnReceived: 0,
     pltPutAway: 0,
@@ -44,6 +46,7 @@ export function hasRecvInfo(info: ReceivingInfo | undefined | null): boolean {
   if (!info) return false;
   return !!(
     info.receivingDate ||
+    info.arriveDate ||
     info.pltReceived > 0 ||
     info.ctnReceived > 0 ||
     info.pltPutAway > 0 ||
@@ -60,6 +63,7 @@ export function formatRecvInfoText(info: ReceivingInfo): string {
   const lines = [
     "--- RECEIVING INFO ---",
     info.receivingDate   ? `Receiving Date: ${info.receivingDate}` : "",
+    info.arriveDate      ? `Arrive Date: ${info.arriveDate}` : "",
     cs                   ? `Container Size: ${cs}` : "",
     (info.pltReceived || info.ctnReceived)
       ? `Pallets Received: ${info.pltReceived} PLT / ${info.ctnReceived} CTN` : "",
