@@ -105,6 +105,7 @@ type AllocRow = {
   sku: string;
   productName: string;
   lot: string;
+  expDate: string;
   totalQty: number;
   perOrder: Record<string, number>;
 };
@@ -694,8 +695,9 @@ export default function ShippingTypePage() {
           const location = locParts.join("-") || String(item.location ?? item.locationCode ?? "");
           const sku      = String(item.productSku ?? item.sku ?? "");
           const lot      = String(item.lotNo ?? item.lot ?? "");
+          const expDate  = String(item.expireDate ?? item.expDate ?? item.expiryDate ?? item.expire_date ?? "");
           const qty      = Number(item.qty ?? 0);
-          const key      = `${location}||${sku}||${lot}`;
+          const key      = `${location}||${sku}||${lot}||${expDate}`;
 
           if (rowMap[key]) {
             rowMap[key].totalQty += qty;
@@ -704,7 +706,7 @@ export default function ShippingTypePage() {
             rowMap[key] = {
               locationKey: key, location, sku,
               productName: String(item.productName ?? item.itemName ?? ""),
-              lot, totalQty: qty, perOrder: { [code]: qty },
+              lot, expDate, totalQty: qty, perOrder: { [code]: qty },
             };
           }
         }
@@ -743,15 +745,15 @@ export default function ShippingTypePage() {
     const { utils, writeFile } = await import("xlsx");
     const codes = Object.keys(selectedCodes).filter((k) => selectedCodes[k]);
     const shortCode = (c: string) => c.slice(-5);
-    const header = ["#", "Location", "SKU", "Product", "Lot", ...codes.map(shortCode), "Total Qty"];
+    const header = ["#", "Location", "SKU", "Product", "Lot", "Exp Date", ...codes.map(shortCode), "Total Qty"];
     const dataRows = allocRows.map((row, i) => [
-      i + 1, row.location, row.sku, row.productName, row.lot,
+      i + 1, row.location, row.sku, row.productName, row.lot, row.expDate,
       ...codes.map((c) => row.perOrder[c] ?? 0),
       row.totalQty,
     ]);
     const ws = utils.aoa_to_sheet([header, ...dataRows]);
     ws["!cols"] = [
-      { wch: 4 }, { wch: 24 }, { wch: 20 }, { wch: 32 }, { wch: 12 },
+      { wch: 4 }, { wch: 24 }, { wch: 20 }, { wch: 32 }, { wch: 12 }, { wch: 12 },
       ...codes.map(() => ({ wch: 10 })),
       { wch: 10 },
     ];
@@ -799,7 +801,8 @@ export default function ShippingTypePage() {
         <td style="border:1pt solid #000;padding:3pt 5pt;vertical-align:top">
           <div style="font-size:9pt;font-weight:bold;font-family:'Courier New',monospace">Location: ${row.location || "—"}${isShared ? " [MERGED]" : ""}</div>
           <div style="font-size:9pt">SKU: <span style="font-family:'Courier New',monospace;font-weight:bold">${row.sku || "—"}</span></div>
-          ${row.lot    ? `<div style="font-size:9pt">Lot: <span style="font-family:'Courier New',monospace;font-weight:bold">${row.lot}</span></div>` : ""}
+          ${row.lot     ? `<div style="font-size:9pt">Lot: <span style="font-family:'Courier New',monospace;font-weight:bold">${row.lot}</span></div>` : ""}
+          ${row.expDate ? `<div style="font-size:9pt">Exp: <span style="font-family:'Courier New',monospace;font-weight:bold">${row.expDate}</span></div>` : ""}
           ${row.productName ? `<div style="font-size:9pt">Product: ${row.productName}</div>` : ""}
           ${orderLines}
         </td>
@@ -2034,6 +2037,7 @@ export default function ShippingTypePage() {
                               <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">SKU</th>
                               <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide">Product</th>
                               <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">Lot</th>
+                              <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">Exp Date</th>
                               {codes.map((c, i) => (
                                 <th key={c} className="px-3 py-2.5 text-right text-blue-600 font-semibold uppercase tracking-wide whitespace-nowrap bg-blue-50/60">
                                   #{i + 1}
@@ -2066,6 +2070,7 @@ export default function ShippingTypePage() {
                                   <td className="px-3 py-2 font-mono text-slate-700 whitespace-nowrap">{row.sku || "—"}</td>
                                   <td className="px-3 py-2 text-slate-600 max-w-[200px] truncate">{row.productName || "—"}</td>
                                   <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{row.lot || "—"}</td>
+                                  <td className="px-3 py-2 font-mono text-slate-500 whitespace-nowrap">{row.expDate || "—"}</td>
                                   {codes.map((c) => {
                                     const qty = row.perOrder[c];
                                     const ctn = upc_ > 0 && qty != null ? Math.ceil(qty / upc_) : null;
@@ -2095,7 +2100,7 @@ export default function ShippingTypePage() {
                           </tbody>
                           <tfoot>
                             <tr className="border-t-2 border-slate-300 bg-slate-50">
-                              <td colSpan={5} className="px-3 py-2.5 text-xs font-bold text-slate-500 uppercase tracking-wide">Total</td>
+                              <td colSpan={6} className="px-3 py-2.5 text-xs font-bold text-slate-500 uppercase tracking-wide">Total</td>
                               {codes.map((c) => (
                                 <td key={c} className="px-3 py-2.5 text-right tabular-nums font-bold text-blue-700 bg-blue-50">
                                   {allocRows.reduce((s, r) => s + (r.perOrder[c] ?? 0), 0).toLocaleString()}
