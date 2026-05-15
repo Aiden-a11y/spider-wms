@@ -1220,7 +1220,7 @@ export default function BillingPage() {
       const { supabase } = await import("@/lib/supabase");
       if (!supabase) throw new Error("Supabase not configured");
 
-      async function fetchSnap(date: string): Promise<Record<string, number>> {
+      const fetchSnap = async (date: string): Promise<Record<string, number>> => {
         const { data, error } = await supabase!
           .from("inventory_history")
           .select("location, customer_code")
@@ -1244,7 +1244,7 @@ export default function BillingPage() {
         const result: Record<string, number> = {};
         for (const [k, s] of Object.entries(locSets)) result[k] = s.size;
         return result;
-      }
+      };
 
       const [data15, dataLast] = await Promise.all([
         fetchSnap(date15),
