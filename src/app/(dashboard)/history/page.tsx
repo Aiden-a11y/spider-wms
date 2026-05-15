@@ -66,6 +66,7 @@ export default function HistoryPage() {
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [occupancyLookup, setOccupancyLookup] = useState<Map<string, string>>(() => new Map());
+  const [customerMap, setCustomerMap] = useState<Record<string, string>>({}); // code → name
 
   function parseLocationArr(json: unknown): Record<string, unknown>[] {
     const j = json as Record<string, unknown>;
@@ -134,13 +135,35 @@ export default function HistoryPage() {
       .catch(() => {});
   }, [user]);
 
+  async function loadCustomerMap(whCode: string) {
+    try {
+      const r = await fetch(`/api/wms/combo/customer-by-warehouse/${whCode}`, {
+        headers: { Authorization: `Bearer ${user!.token}` },
+      });
+      const json = await r.json();
+      const arr: Record<string, unknown>[] = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
+      const map: Record<string, string> = {};
+      arr.forEach((c) => {
+        const code = String(c.code ?? c.customerCode ?? c.id ?? "");
+        const name = String(c.name ?? c.customerName ?? code);
+        if (code) map[code] = name;
+      });
+      setCustomerMap(map);
+    } catch {
+      setCustomerMap({});
+    }
+  }
+
   async function loadSnapshot() {
     if (!supabase) { setError("Supabase environment variables not configured."); return; }
     setLoading(true);
     setError("");
     setRows([]);
-    setOccupancyLookup(await loadOccupancyLookup(warehouseCode));
-
+    const [occupancy] = await Promise.all([
+      loadOccupancyLookup(warehouseCode),
+      loadCustomerMap(warehouseCode),
+    ]);
+    setOccupancyLookup(occupancy);
     const { data, error: err } = await supabase
       .from("inventory_history")
       .select("*")
@@ -225,7 +248,9 @@ export default function HistoryPage() {
       r.product_name?.toLowerCase().includes(q) ||
       r.location?.toLowerCase().includes(q) ||
       rowOccupancyInfo(r).toLowerCase().includes(q) ||
-      r.lot?.toLowerCase().includes(q)
+      r.lot?.toLowerCase().includes(q) ||
+      r.customer_code?.toLowerCase().includes(q) ||
+      (r.customer_code ? customerMap[r.customer_code] ?? "" : "").toLowerCase().includes(q)
     );
   }, [rows, search, occupancyLookup]);
 
@@ -235,6 +260,7 @@ export default function HistoryPage() {
     const { utils, writeFile } = await import("xlsx");
     const sheet = utils.json_to_sheet(filtered.map(r => ({
       Date: r.captured_date,
+      Customer: r.customer_code ? (customerMap[r.customer_code] ?? r.customer_code) : "",
       Location: r.location,
       occupancyInfo: rowOccupancyInfo(r),
       SKU: r.sku,
@@ -376,6 +402,7 @@ export default function HistoryPage() {
           <table className="w-full text-xs">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200">
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Customer</th>
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Location</th>
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">occupancyInfo</th>
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">SKU</th>
@@ -389,6 +416,11 @@ export default function HistoryPage() {
             <tbody>
               {filtered.map((r) => (
                 <tr key={r.id} className="hover:bg-slate-50 border-b border-slate-100 last:border-0">
+                  <td className="px-4 py-2.5 text-slate-700 whitespace-nowrap">
+                    {r.customer_code
+                      ? <span title={r.customer_code}>{customerMap[r.customer_code] ?? r.customer_code}</span>
+                      : <span className="text-slate-300">—</span>}
+                  </td>
                   <td className="px-4 py-2.5 font-mono text-slate-600 whitespace-nowrap">{r.location}</td>
                   <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap">{rowOccupancyInfo(r) || "-"}</td>
                   <td className="px-4 py-2.5">
