@@ -72,6 +72,7 @@ import {
 } from "@/lib/billing-calc";
 import { BILLING_CATEGORIES, RATE_VERSION } from "@/lib/billing-rates";
 import type { BillingCategory } from "@/lib/billing-rates";
+import { buildLocationOccupancyLookup, getLocationOccupancyInfo } from "@/lib/wms";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -1079,6 +1080,7 @@ export default function BillingPage() {
   const [storageUploadingLast, setStorageUploadingLast] = useState(false);
   const [storageLoadingHistory, setStorageLoadingHistory] = useState(false);
   const [storageHistoryError, setStorageHistoryError] = useState("");
+  const [storageHistoryDebug, setStorageHistoryDebug] = useState<{date15: string; dateLast: string; rows15: number; rowsLast: number; matched15: number; matchedLast: number} | null>(null);
 
   // Derived: merge 15일 + 말일 → avg
   const storageRows = useMemo<StorageRow[]>(() => {
@@ -1181,6 +1183,7 @@ export default function BillingPage() {
     if (!editing) return;
     setStorageLoadingHistory(true);
     setStorageHistoryError("");
+    setStorageHistoryDebug(null);
 
     try {
       const [year, month] = editing.period.split("-").map(Number);
@@ -1189,7 +1192,7 @@ export default function BillingPage() {
       const dateLast = `${editing.period}-${String(lastDayNum).padStart(2, "0")}`;
       const whCode   = "STOO1";
 
-      // 1. Fetch WMS location list → build location → occupancyInfo lookup
+      // 1. Fetch WMS location list → build occupancyInfo lookup (reuse wms.ts helpers)
       const locRes = await fetch("/api/wms/warehouse/location/list", {
         method: "POST",
         headers,
@@ -1200,65 +1203,70 @@ export default function BillingPage() {
         ? locJson.data.list
         : Array.isArray(locJson?.data) ? locJson.data : Array.isArray(locJson) ? locJson : [];
 
-      // Build location code → occupancyInfo (location type label) map
-      const locTypeMap: Record<string, string> = {};
-      for (const loc of locArr) {
-        const parts = [
-          String(loc.zoneName ?? loc.zone ?? ""),
-          String(loc.aisleName ?? loc.aisle ?? ""),
-          String(loc.bayName ?? loc.bay ?? ""),
-          String(loc.levelName ?? loc.level ?? ""),
-          String(loc.positionName ?? loc.position ?? ""),
-        ].filter(Boolean);
-        const locCode = parts.join("-");
-        // occupancyInfo = location type name (e.g. "Pallet Regular", "Bin", ...)
-        const typeLabel = String(loc.occupancyInfo ?? loc.locationType ?? loc.locationTypeName ?? loc.typeName ?? "");
-        if (locCode && typeLabel) locTypeMap[locCode] = typeLabel;
-      }
+      // Use the same lookup builder as the history page (handles key normalization)
+      const occupancyLookup = buildLocationOccupancyLookup(locArr);
 
       // 2. Query Supabase inventory_history for both dates
       const { supabase } = await import("@/lib/supabase");
       if (!supabase) throw new Error("Supabase not configured");
 
-      const fetchSnap = async (date: string): Promise<Record<string, number>> => {
+      const fetchSnap = async (date: string): Promise<{ data: Record<string, number>; totalRows: number; matchedRows: number }> => {
         const { data, error } = await supabase!
           .from("inventory_history")
-          .select("location, customer_code")
+          .select("location")
           .eq("captured_date", date)
           .eq("warehouse_code", whCode)
           .eq("customer_code", editing!.customer);
 
         if (error) throw new Error(`Supabase error (${date}): ${error.message}`);
-        if (!data || data.length === 0) return {};
+        if (!data || data.length === 0) return { data: {}, totalRows: 0, matchedRows: 0 };
 
-        // Count distinct locations per storage type
+        // Count distinct locations per storage type using the same wms.ts lookup
         const locSets: Record<string, Set<string>> = {};
+        let matchedRows = 0;
         for (const row of data) {
           const loc = String(row.location ?? "").trim();
           if (!loc) continue;
-          const typeLabel = locTypeMap[loc] ?? "";
+          // Build a LocationLike row so getLocationOccupancyInfo can normalize the key
+          const [zone, aisle, bay, level, position] = loc.split("-");
+          const fakeRow = { location: loc, locationCode: loc, zone, aisle, bay, level, position,
+            zoneName: zone, aisleName: aisle, bayName: bay, levelName: level, positionName: position };
+          const typeLabel = getLocationOccupancyInfo(occupancyLookup, fakeRow);
           const key = STORAGE_LABEL_MAP[typeLabel.toLowerCase()];
           if (!key) continue;
+          matchedRows++;
           (locSets[key] ??= new Set()).add(loc);
         }
         const result: Record<string, number> = {};
         for (const [k, s] of Object.entries(locSets)) result[k] = s.size;
-        return result;
+        return { data: result, totalRows: data.length, matchedRows };
       };
 
-      const [data15, dataLast] = await Promise.all([
+      const [snap15, snapLast] = await Promise.all([
         fetchSnap(date15),
         fetchSnap(dateLast),
       ]);
 
-      const total15   = Object.values(data15).reduce((s, v) => s + v, 0);
-      const totalLast = Object.values(dataLast).reduce((s, v) => s + v, 0);
+      // Always store debug info
+      setStorageHistoryDebug({
+        date15, dateLast,
+        rows15: snap15.totalRows,    rowsLast: snapLast.totalRows,
+        matched15: snap15.matchedRows, matchedLast: snapLast.matchedRows,
+      });
 
-      if (total15 === 0 && totalLast === 0) {
-        setStorageHistoryError(`No inventory data found for ${editing.customerName} on ${date15} or ${dateLast}. Make sure snapshots were saved for those dates.`);
+      const total15   = Object.values(snap15.data).reduce((s, v) => s + v, 0);
+      const totalLast = Object.values(snapLast.data).reduce((s, v) => s + v, 0);
+
+      if (snap15.totalRows === 0 && snapLast.totalRows === 0) {
+        setStorageHistoryError(`No snapshot found for ${editing.customer} on ${date15} or ${dateLast}.`);
+      } else if (total15 === 0 && totalLast === 0) {
+        setStorageHistoryError(
+          `Snapshots found (${date15}: ${snap15.totalRows} rows, ${dateLast}: ${snapLast.totalRows} rows) but 0 locations matched a known type. ` +
+          `The WMS location list returned ${locArr.length} locations (${occupancyLookup.size} with occupancyInfo).`
+        );
       } else {
-        setStorage15({ data: data15,   file: `WMS History · ${date15} (${total15} locations)` });
-        setStorageLast({ data: dataLast, file: `WMS History · ${dateLast} (${totalLast} locations)` });
+        setStorage15({ data: snap15.data,   file: `WMS History · ${date15}` });
+        setStorageLast({ data: snapLast.data, file: `WMS History · ${dateLast}` });
       }
     } catch (e) {
       setStorageHistoryError(e instanceof Error ? e.message : "Failed to load history data");
@@ -2569,7 +2577,7 @@ export default function BillingPage() {
               </button>
               {(storage15 || storageLast) && (
                 <button
-                  onClick={() => { setStorage15(null); setStorageLast(null); setStorageHistoryError(""); }}
+                  onClick={() => { setStorage15(null); setStorageLast(null); setStorageHistoryError(""); setStorageHistoryDebug(null); }}
                   className="text-xs text-slate-400 hover:text-red-500 transition-colors"
                 >
                   Reset
@@ -2577,9 +2585,20 @@ export default function BillingPage() {
               )}
             </div>
           </div>
-          {storageHistoryError && (
-            <div className="flex items-center gap-2 px-5 py-2.5 bg-red-50 border-b border-red-200 text-xs text-red-600">
-              <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />{storageHistoryError}
+          {(storageHistoryError || storageHistoryDebug) && (
+            <div className={`px-5 py-2.5 border-b text-xs ${storageHistoryError ? "bg-red-50 border-red-200 text-red-600" : "bg-slate-50 border-slate-200 text-slate-500"}`}>
+              {storageHistoryError && (
+                <div className="flex items-start gap-2 mb-1">
+                  <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                  <span>{storageHistoryError}</span>
+                </div>
+              )}
+              {storageHistoryDebug && (
+                <div className="flex flex-wrap gap-x-4 gap-y-0.5 font-mono text-[11px] text-slate-500">
+                  <span>📅 {storageHistoryDebug.date15}: <b>{storageHistoryDebug.rows15}</b> rows, <b>{storageHistoryDebug.matched15}</b> matched</span>
+                  <span>📅 {storageHistoryDebug.dateLast}: <b>{storageHistoryDebug.rowsLast}</b> rows, <b>{storageHistoryDebug.matchedLast}</b> matched</span>
+                </div>
+              )}
             </div>
           )}
 
