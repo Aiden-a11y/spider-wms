@@ -1077,6 +1077,8 @@ export default function BillingPage() {
   const [storageLast, setStorageLast] = useState<StorageSnap | null>(null);
   const [storageUploading15, setStorageUploading15] = useState(false);
   const [storageUploadingLast, setStorageUploadingLast] = useState(false);
+  const [storageLoadingHistory, setStorageLoadingHistory] = useState(false);
+  const [storageHistoryError, setStorageHistoryError] = useState("");
 
   // Derived: merge 15일 + 말일 → avg
   const storageRows = useMemo<StorageRow[]>(() => {
@@ -1171,6 +1173,97 @@ export default function BillingPage() {
     } finally {
       setStorageUploadingLast(false);
       e.target.value = "";
+    }
+  }
+
+  // ── Load storage data from inventory_history (Supabase) ──
+  async function loadStorageFromHistory() {
+    if (!editing) return;
+    setStorageLoadingHistory(true);
+    setStorageHistoryError("");
+
+    try {
+      const [year, month] = editing.period.split("-").map(Number);
+      const lastDayNum = new Date(year, month, 0).getDate();
+      const date15   = `${editing.period}-15`;
+      const dateLast = `${editing.period}-${String(lastDayNum).padStart(2, "0")}`;
+      const whCode   = "STOO1";
+
+      // 1. Fetch WMS location list → build location → occupancyInfo lookup
+      const locRes = await fetch("/api/wms/warehouse/location/list", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ page: 1, pageSize: 9999, warehouseCode: whCode, search: "", sortField: "WarehouseCode", sortDir: "asc" }),
+      });
+      const locJson = await locRes.json().catch(() => ({}));
+      const locArr: Record<string, unknown>[] = Array.isArray(locJson?.data?.list)
+        ? locJson.data.list
+        : Array.isArray(locJson?.data) ? locJson.data : Array.isArray(locJson) ? locJson : [];
+
+      // Build location code → occupancyInfo (location type label) map
+      const locTypeMap: Record<string, string> = {};
+      for (const loc of locArr) {
+        const parts = [
+          String(loc.zoneName ?? loc.zone ?? ""),
+          String(loc.aisleName ?? loc.aisle ?? ""),
+          String(loc.bayName ?? loc.bay ?? ""),
+          String(loc.levelName ?? loc.level ?? ""),
+          String(loc.positionName ?? loc.position ?? ""),
+        ].filter(Boolean);
+        const locCode = parts.join("-");
+        // occupancyInfo = location type name (e.g. "Pallet Regular", "Bin", ...)
+        const typeLabel = String(loc.occupancyInfo ?? loc.locationType ?? loc.locationTypeName ?? loc.typeName ?? "");
+        if (locCode && typeLabel) locTypeMap[locCode] = typeLabel;
+      }
+
+      // 2. Query Supabase inventory_history for both dates
+      const { supabase } = await import("@/lib/supabase");
+      if (!supabase) throw new Error("Supabase not configured");
+
+      async function fetchSnap(date: string): Promise<Record<string, number>> {
+        const { data, error } = await supabase!
+          .from("inventory_history")
+          .select("location, customer_code")
+          .eq("captured_date", date)
+          .eq("warehouse_code", whCode)
+          .eq("customer_code", editing!.customer);
+
+        if (error) throw new Error(`Supabase error (${date}): ${error.message}`);
+        if (!data || data.length === 0) return {};
+
+        // Count distinct locations per storage type
+        const locSets: Record<string, Set<string>> = {};
+        for (const row of data) {
+          const loc = String(row.location ?? "").trim();
+          if (!loc) continue;
+          const typeLabel = locTypeMap[loc] ?? "";
+          const key = STORAGE_LABEL_MAP[typeLabel.toLowerCase()];
+          if (!key) continue;
+          (locSets[key] ??= new Set()).add(loc);
+        }
+        const result: Record<string, number> = {};
+        for (const [k, s] of Object.entries(locSets)) result[k] = s.size;
+        return result;
+      }
+
+      const [data15, dataLast] = await Promise.all([
+        fetchSnap(date15),
+        fetchSnap(dateLast),
+      ]);
+
+      const total15   = Object.values(data15).reduce((s, v) => s + v, 0);
+      const totalLast = Object.values(dataLast).reduce((s, v) => s + v, 0);
+
+      if (total15 === 0 && totalLast === 0) {
+        setStorageHistoryError(`No inventory data found for ${editing.customerName} on ${date15} or ${dateLast}. Make sure snapshots were saved for those dates.`);
+      } else {
+        setStorage15({ data: data15,   file: `WMS History · ${date15} (${total15} locations)` });
+        setStorageLast({ data: dataLast, file: `WMS History · ${dateLast} (${totalLast} locations)` });
+      }
+    } catch (e) {
+      setStorageHistoryError(e instanceof Error ? e.message : "Failed to load history data");
+    } finally {
+      setStorageLoadingHistory(false);
     }
   }
 
@@ -2462,17 +2555,33 @@ export default function BillingPage() {
           <div className="flex items-center justify-between px-5 py-3.5 border-b border-purple-100 bg-purple-50/60">
             <div className="flex items-center gap-2">
               <span className="text-xs font-semibold px-2 py-0.5 rounded-full border bg-purple-50 border-purple-200 text-purple-800">Storage</span>
-              <span className="text-xs text-purple-600 font-medium">Upload inventory snapshots → auto-calculate average by Location Type</span>
+              <span className="text-xs text-purple-600 font-medium">15th &amp; last-day snapshot → avg by Location Type</span>
             </div>
-            {(storage15 || storageLast) && (
+            <div className="flex items-center gap-2">
               <button
-                onClick={() => { setStorage15(null); setStorageLast(null); }}
-                className="text-xs text-slate-400 hover:text-red-500 transition-colors"
+                onClick={loadStorageFromHistory}
+                disabled={storageLoadingHistory}
+                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-purple-300 bg-purple-600 hover:bg-purple-700 text-white disabled:opacity-50 transition-colors"
               >
-                Reset
+                {storageLoadingHistory
+                  ? <><RefreshCw className="w-3 h-3 animate-spin" />Loading…</>
+                  : <><CloudDownload className="w-3 h-3" />Load from WMS History</>}
               </button>
-            )}
+              {(storage15 || storageLast) && (
+                <button
+                  onClick={() => { setStorage15(null); setStorageLast(null); setStorageHistoryError(""); }}
+                  className="text-xs text-slate-400 hover:text-red-500 transition-colors"
+                >
+                  Reset
+                </button>
+              )}
+            </div>
           </div>
+          {storageHistoryError && (
+            <div className="flex items-center gap-2 px-5 py-2.5 bg-red-50 border-b border-red-200 text-xs text-red-600">
+              <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />{storageHistoryError}
+            </div>
+          )}
 
           {/* Two upload zones */}
           <div className="grid grid-cols-2 divide-x divide-purple-100">
@@ -2486,7 +2595,7 @@ export default function BillingPage() {
                   <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
                     <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
                     <span className="text-xs text-green-700 truncate font-medium">{snap.file}</span>
-                    <span className="text-xs text-green-600 ml-auto flex-shrink-0">{Object.values(snap.data).reduce((s,v)=>s+v,0)} locations</span>
+                    <span className="text-xs text-green-600 ml-auto flex-shrink-0 whitespace-nowrap">{Object.values(snap.data).reduce((s,v)=>s+v,0)} loc</span>
                   </div>
                 ) : (
                   <label className={`flex items-center justify-center gap-2 border-2 border-dashed rounded-lg px-4 py-4 cursor-pointer transition-colors ${
@@ -2499,7 +2608,7 @@ export default function BillingPage() {
                   </label>
                 )}
                 <p className="text-[10px] text-slate-400">
-                  Columns: Location / occupancyInfo / Customer / SKU / Product Name / Qty …
+                  Auto-loaded from WMS History, or upload Excel (Location / occupancyInfo / Customer …)
                 </p>
               </div>
             ))}
