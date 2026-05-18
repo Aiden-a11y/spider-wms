@@ -231,12 +231,26 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // ── Purge records older than 1 month ──────────────────────────────────────────
+  // Calculate cutoff: first day of the month 1 month ago (LA timezone)
+  const nowLA = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
+  const cutoffDate = new Date(nowLA.getFullYear(), nowLA.getMonth() - 1, 1);
+  const cutoffStr = cutoffDate.toLocaleDateString("en-CA"); // YYYY-MM-DD
+  let purgedRows = 0;
+  const { count, error: purgeErr } = await sb
+    .from("inventory_history")
+    .delete({ count: "exact" })
+    .lt("captured_date", cutoffStr);
+  if (!purgeErr) purgedRows = count ?? 0;
+
   return NextResponse.json({
     ok: true,
     date: today,
     captured_at: capturedAt,
     inserted: totalInserted,
     warehouses: warehouses.length,
+    purged_before: cutoffStr,
+    purged_rows: purgedRows,
     supabase_key_type: usingServiceKey ? "service_role" : "anon",
     errors: errors.length > 0 ? errors : undefined,
   });

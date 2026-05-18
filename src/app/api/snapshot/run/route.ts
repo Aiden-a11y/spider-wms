@@ -234,6 +234,12 @@ export async function POST(req: NextRequest) {
           }
         }
 
+        // ── Purge records older than 1 month ──
+        const nowLA = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
+        const cutoffDate = new Date(nowLA.getFullYear(), nowLA.getMonth() - 1, 1);
+        const cutoffStr = cutoffDate.toLocaleDateString("en-CA"); // YYYY-MM-DD
+        await sb.from("inventory_history").delete().lt("captured_date", cutoffStr);
+
         send({
           type: "done",
           inserted: totalInserted,

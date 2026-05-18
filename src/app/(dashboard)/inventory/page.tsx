@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/auth-context";
 import {
@@ -129,41 +129,6 @@ export default function InventoryPage() {
     }
   }
 
-  const saveSnapshot = useCallback(async (whCode: string, allItems: InventoryItem[]) => {
-    if (!supabase || allItems.length === 0) return;
-    // Use America/Los_Angeles (PST/PDT auto DST) so date label matches LA business day
-    const capturedAt = new Date().toISOString();
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" }); // YYYY-MM-DD
-    const cacheKey = `snapshot_saved__${whCode}__${today}`;
-    if (sessionStorage.getItem(cacheKey)) return;
-
-    // 오늘 이미 저장된 행 삭제 후 재삽입 (중복 방지)
-    await supabase
-      .from("inventory_history")
-      .delete()
-      .eq("captured_date", today)
-      .eq("warehouse_code", whCode);
-
-    const rows = allItems.map((item) => ({
-      captured_date: today,
-      captured_at: capturedAt,
-      warehouse_code: whCode,
-      customer_code: item.customerCode ?? null,
-      location: [item.zone, item.aisle, item.bay, item.level, item.position].join("-"),
-      sku: item.sku,
-      product_name: item.productName,
-      qty: item.qty,
-      available_qty: item.availableQty ?? null,
-      lot: item.lot ?? null,
-      expire_date: item.expireDate ?? null,
-    }));
-
-    for (let i = 0; i < rows.length; i += 500) {
-      const { error } = await supabase.from("inventory_history").insert(rows.slice(i, i + 500));
-      if (error) return;
-    }
-    sessionStorage.setItem(cacheKey, "1");
-  }, []);
 
   async function loadInventory() {
     await loadInventoryWith(warehouseCode, customerCode, customers);
@@ -312,7 +277,6 @@ export default function InventoryPage() {
       }));
 
       setItems(mappedItems);
-      saveSnapshot(whCode, mappedItems);
     } catch (e) {
       setError(`Request failed: ${String(e)}`);
     }
