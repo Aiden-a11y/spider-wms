@@ -67,6 +67,7 @@ export default function HistoryPage() {
   const [search, setSearch] = useState("");
   const [occupancyLookup, setOccupancyLookup] = useState<Map<string, string>>(() => new Map());
   const [customerMap, setCustomerMap] = useState<Record<string, string>>({}); // code → name
+  const [searched, setSearched] = useState(false);
 
   function parseLocationArr(json: unknown): Record<string, unknown>[] {
     const j = json as Record<string, unknown>;
@@ -159,6 +160,7 @@ export default function HistoryPage() {
     setLoading(true);
     setError("");
     setRows([]);
+    setSearched(true);
     const [occupancy] = await Promise.all([
       loadOccupancyLookup(warehouseCode),
       loadCustomerMap(warehouseCode),
@@ -389,13 +391,39 @@ export default function HistoryPage() {
         </div>
       )}
 
-      {!loading && rows.length === 0 && !error && (
+      {!loading && rows.length === 0 && !error && !searched && (
         <div className="text-center py-20 text-slate-400">
           <Calendar className="w-10 h-10 mx-auto mb-3 opacity-40" />
           <p className="font-medium">Select a date and warehouse, then click Search</p>
           <p className="text-sm mt-1">Dates without a saved snapshot will show no data</p>
         </div>
       )}
+
+      {!loading && rows.length === 0 && !error && searched && (() => {
+        const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+        const isToday = date === today;
+        return (
+          <div className={`rounded-xl border px-6 py-8 text-center mb-5 ${isToday ? "bg-amber-50 border-amber-200" : "bg-slate-50 border-slate-200"}`}>
+            <Calendar className={`w-10 h-10 mx-auto mb-3 opacity-50 ${isToday ? "text-amber-400" : "text-slate-400"}`} />
+            {isToday ? (
+              <>
+                <p className="font-semibold text-amber-700 text-sm">No snapshot saved yet for today</p>
+                <p className="text-amber-600 text-xs mt-1.5">
+                  Inventory snapshots are saved automatically every day at <b>4:00 PM PT</b>.
+                </p>
+                <p className="text-amber-500 text-xs mt-1">
+                  You can also trigger a manual save using the <b>Save Now</b> button above.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="font-medium text-slate-500 text-sm">No snapshot found for {date}</p>
+                <p className="text-slate-400 text-xs mt-1">No data was saved on this date, or it has been purged (snapshots older than 1 month are automatically deleted).</p>
+              </>
+            )}
+          </div>
+        );
+      })()}
 
       {filtered.length > 0 && (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
