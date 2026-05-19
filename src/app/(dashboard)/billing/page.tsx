@@ -194,9 +194,7 @@ function fillInvoiceSheet(ws: ExcelJS.Worksheet, invoice: BillingInvoice) {
   let sectionNo = 1;
 
   for (const cat of BILLING_CATEGORIES) {
-    const catItems = invoice.lineItems.filter(
-      (l) => l.category === cat && l.qty !== 0
-    );
+    const catItems = invoice.lineItems.filter((l) => l.category === cat);
     if (catItems.length === 0) continue;
 
     // Section header row (light blue, numbered)
@@ -210,32 +208,35 @@ function fillInvoiceSheet(ws: ExcelJS.Worksheet, invoice: BillingInvoice) {
     applyBorder(secCell, "medium");
     sectionNo++;
 
-    // Data rows — only non-zero qty
+    // Data rows — all items including qty=0
     for (const item of catItems) {
       const amt = calcLineAmount(item);
       const rateDisplay = item.costPlus ? "cost+10%" : item.rate;
-      const r = ws.addRow([lineNo, cat, item.description, rateDisplay, item.unit, item.qty, amt]);
+      // Round qty to avoid floating-point noise, then pick format based on whether it's an integer
+      const qtyVal = Math.round(item.qty * 100) / 100;
+      const qtyFmt = Number.isInteger(qtyVal) ? "#,##0" : "#,##0.00";
+      const r = ws.addRow([lineNo, cat, item.description, rateDisplay, item.unit, qtyVal, amt]);
       r.height = 15;
 
       const isAlt = lineNo % 2 === 0;
       r.eachCell((cell, col) => {
         cell.fill = {
           type: "pattern", pattern: "solid",
-          fgColor: { argb: isAlt ? C.rowAlt : C.white },
+          fgColor: { argb: item.qty === 0 ? C.subtotalBg : (isAlt ? C.rowAlt : C.white) },
         };
-        cell.font = { size: 10, color: { argb: C.black } };
+        cell.font = { size: 10, color: { argb: item.qty === 0 ? C.border : C.black } };
         cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
         applyBorder(cell);
       });
       // Rate in teal
-      r.getCell(4).font = { size: 10, color: { argb: C.teal } };
+      r.getCell(4).font = { size: 10, color: { argb: item.qty === 0 ? C.border : C.teal } };
       if (!item.costPlus) r.getCell(4).numFmt = "$#,##0.00";
-      r.getCell(6).numFmt = "#,##0.##";
+      r.getCell(6).numFmt = qtyFmt;
       r.getCell(7).numFmt = "$#,##0.00";
       lineNo++;
     }
 
-    // Subtotal row
+    // Subtotal row (only non-zero items count toward subtotal)
     const sub = catItems.reduce((s, i) => s + calcLineAmount(i), 0);
     const subRow = ws.addRow(["", "", "", "", "", "Subtotal", sub]);
     subRow.height = 15;
