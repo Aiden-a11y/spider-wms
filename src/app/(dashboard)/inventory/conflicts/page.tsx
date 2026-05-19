@@ -2,19 +2,20 @@
 
 import { useEffect, useState, useMemo } from "react";
 import { useAuth } from "@/contexts/auth-context";
-import { RefreshCw, AlertTriangle, Search, Download, ChevronDown, ChevronUp, Info } from "lucide-react";
+import { normalizeInventory } from "@/lib/wms";
+import { RefreshCw, AlertTriangle, Search, Download, ChevronDown, ChevronUp } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type ConflictItem = {
-  location: string;
-  customer_code: string;
+  customerCode: string;
   sku: string;
-  product_name: string | null;
-  lot: string | null;
-  expire_date: string | null;
+  productName: string;
+  lot: string;
+  expireDate: string;
   qty: number;
-  available_qty: number | null;
+  availableQty: number | null;
+  locationCode: string;
 };
 
 type ConflictGroup = {
@@ -25,6 +26,20 @@ type ConflictGroup = {
   items: ConflictItem[];
 };
 
+const BADGE_COLORS = [
+  "bg-blue-100 text-blue-800 border-blue-200",
+  "bg-purple-100 text-purple-800 border-purple-200",
+  "bg-amber-100 text-amber-800 border-amber-200",
+  "bg-rose-100 text-rose-800 border-rose-200",
+  "bg-teal-100 text-teal-800 border-teal-200",
+  "bg-orange-100 text-orange-800 border-orange-200",
+];
+
+const BATCH_SIZE   = 5;
+const BATCH_DELAY  = 400;
+const SKU_DELAY    = 300;
+const CACHE_TTL    = 10 * 60 * 1000; // 10 min
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function LocationConflictsPage() {
@@ -34,15 +49,14 @@ export default function LocationConflictsPage() {
     [user]
   );
 
-  const [warehouseCode, setWarehouseCode]   = useState("");
-  const [warehouses,    setWarehouses]       = useState<{ id: string; name: string }[]>([]);
-  const [loading,       setLoading]          = useState(false);
-  const [error,         setError]            = useState("");
-  const [conflicts,     setConflicts]        = useState<ConflictGroup[]>([]);
-  const [snapshotDate,  setSnapshotDate]     = useState("");
-  const [totalRows,     setTotalRows]        = useState(0);
-  const [search,        setSearch]           = useState("");
-  const [expanded,      setExpanded]         = useState<Set<string>>(new Set());
+  const [warehouseCode, setWarehouseCode] = useState("");
+  const [warehouses,    setWarehouses]    = useState<{ id: string; name: string }[]>([]);
+  const [loading,       setLoading]       = useState(false);
+  const [progress,      setProgress]      = useState<{ total: number; loaded: number } | null>(null);
+  const [error,         setError]         = useState("");
+  const [conflicts,     setConflicts]     = useState<ConflictGroup[]>([]);
+  const [search,        setSearch]        = useState("");
+  const [expanded,      setExpanded]      = useState<Set<string>>(new Set());
 
   // Load warehouses on mount
   useEffect(() => {
@@ -52,10 +66,7 @@ export default function LocationConflictsPage() {
         const arr: Record<string, unknown>[] =
           Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
         const list = arr
-          .map((w) => ({
-            id:   String(w.code ?? w.id ?? ""),
-            name: String(w.name ?? w.code ?? ""),
-          }))
+          .map((w) => ({ id: String(w.code ?? w.id ?? ""), name: String(w.name ?? w.code ?? "") }))
           .filter((w) => w.id);
         setWarehouses(list);
         const pref = list.find((w) => w.id === "STOO1") ?? list[0];
@@ -64,36 +75,139 @@ export default function LocationConflictsPage() {
       .catch(() => {});
   }, []); // eslint-disable-line
 
-  // Run conflict analysis via Supabase snapshot API
   async function analyze(whCode = warehouseCode) {
     if (!whCode) return;
     setLoading(true);
     setError("");
     setConflicts([]);
-    setSnapshotDate("");
-    setTotalRows(0);
     setExpanded(new Set());
+    setProgress(null);
 
     try {
-      const res  = await fetch(`/api/inventory-conflicts?warehouseCode=${encodeURIComponent(whCode)}`);
-      const json = await res.json();
+      // 1. Get all customers for this warehouse
+      const custRes  = await fetch(`/api/wms/combo/customer-by-warehouse/${whCode}`, { headers });
+      const custJson = await custRes.json();
+      const custArr: Record<string, unknown>[] =
+        Array.isArray(custJson?.data) ? custJson.data : Array.isArray(custJson) ? custJson : [];
+      const customers = custArr
+        .map((c) => ({
+          code: String(c.code ?? c.customerCode ?? c.id ?? ""),
+          name: String(c.name ?? c.customerName ?? c.code ?? ""),
+        }))
+        .filter((c) => c.code);
 
-      if (!res.ok) {
-        setError(json.error ?? "Unknown error");
-        return;
+      if (customers.length === 0) throw new Error("No customers found for this warehouse.");
+
+      // 2. Collect all (customerCode, sku) pairs — with session cache
+      const pairs: { custCode: string; sku: string }[] = [];
+
+      for (const cust of customers) {
+        const cacheKey = `sku_cache__${whCode}__${cust.code}`;
+        let skus: string[] | null = null;
+        try {
+          const cached = JSON.parse(sessionStorage.getItem(cacheKey) ?? "null");
+          if (cached && Date.now() - cached.ts < CACHE_TTL) skus = cached.skus;
+        } catch { /* ignore */ }
+
+        if (!skus) {
+          skus = [];
+          let page = 1;
+          while (true) {
+            const res  = await fetch("/api/wms/product/list", {
+              method: "POST", headers,
+              body: JSON.stringify({ warehouseCode: whCode, customerCode: cust.code, pageNum: page, pageSize: 500 }),
+            });
+            const json = await res.json();
+            const list: Record<string, unknown>[] = json?.data?.list ?? [];
+            const pageSkus = list.map((p) => String(p.productSku ?? "")).filter(Boolean);
+            skus.push(...pageSkus);
+            if (pageSkus.length < 500) break;
+            page++;
+            await new Promise((r) => setTimeout(r, SKU_DELAY));
+          }
+          try { sessionStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), skus })); } catch { /* ignore */ }
+        }
+
+        skus.forEach((sku) => pairs.push({ custCode: cust.code, sku }));
       }
 
-      setSnapshotDate(json.snapshotDate ?? "");
-      setTotalRows(json.totalRows ?? 0);
-      setConflicts(json.conflicts ?? []);
+      if (pairs.length === 0) throw new Error("No products registered for this warehouse.");
+
+      setProgress({ total: pairs.length, loaded: 0 });
+
+      // 3. Fetch inventory/detail in batches of 5
+      const allItems: ConflictItem[] = [];
+      let loaded = 0;
+
+      for (let i = 0; i < pairs.length; i += BATCH_SIZE) {
+        const batch = pairs.slice(i, i + BATCH_SIZE);
+        const results = await Promise.all(
+          batch.map(({ custCode, sku }) =>
+            fetch("/api/wms/inventory/detail", {
+              method: "POST", headers,
+              body: JSON.stringify({ warehouseCode: whCode, customerCode: custCode, productSku: sku }),
+            })
+              .then((r) => r.json())
+              .then((j) => {
+                const rows = normalizeInventory(j);
+                return rows.map((item) => ({
+                  customerCode: item.customerCode || custCode,
+                  sku:          item.sku ?? sku,
+                  productName:  item.productName ?? "",
+                  lot:          item.lot ?? "",
+                  expireDate:   item.expireDate ?? "",
+                  qty:          item.qty ?? 0,
+                  availableQty: item.availableQty ?? null,
+                  locationCode: item.locationCode ?? "",
+                }));
+              })
+              .catch(() => [])
+          )
+        );
+        for (const rows of results) {
+          allItems.push(...rows);
+          loaded++;
+          setProgress({ total: pairs.length, loaded });
+        }
+        if (i + BATCH_SIZE < pairs.length) {
+          await new Promise((r) => setTimeout(r, BATCH_DELAY));
+        }
+      }
+
+      if (allItems.length === 0) throw new Error("No inventory found.");
+
+      // 4. Group by locationCode, find locations with 2+ distinct customers
+      const locMap = new Map<string, ConflictItem[]>();
+      for (const item of allItems) {
+        if (!item.locationCode) continue;
+        const arr = locMap.get(item.locationCode) ?? [];
+        arr.push(item);
+        locMap.set(item.locationCode, arr);
+      }
+
+      const found: ConflictGroup[] = [];
+      locMap.forEach((items, location) => {
+        const custSet = new Set(items.map((i) => i.customerCode));
+        if (custSet.size < 2) return;
+        found.push({
+          location,
+          customers: Array.from(custSet),
+          itemCount: items.length,
+          totalQty:  items.reduce((s, i) => s + i.qty, 0),
+          items,
+        });
+      });
+
+      found.sort((a, b) => b.customers.length - a.customers.length || a.location.localeCompare(b.location));
+      setConflicts(found);
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
     } finally {
       setLoading(false);
+      setProgress(null);
     }
   }
 
-  // Run when warehouse is first selected
   useEffect(() => {
     if (warehouseCode) analyze(warehouseCode);
   }, [warehouseCode]); // eslint-disable-line
@@ -107,8 +221,8 @@ export default function LocationConflictsPage() {
         g.customers.some((c) => c.toLowerCase().includes(q)) ||
         g.items.some(
           (i) =>
-            (i.sku ?? "").toLowerCase().includes(q) ||
-            (i.product_name ?? "").toLowerCase().includes(q)
+            i.sku.toLowerCase().includes(q) ||
+            i.productName.toLowerCase().includes(q)
         )
     );
   }, [conflicts, search]);
@@ -128,36 +242,20 @@ export default function LocationConflictsPage() {
     for (const g of filtered) {
       for (const item of g.items) {
         rows.push([
-          g.location,
-          item.customer_code,
-          item.sku ?? "",
-          item.product_name ?? "",
-          item.lot ?? "",
-          item.expire_date ?? "",
+          g.location, item.customerCode, item.sku,
+          item.productName, item.lot, item.expireDate,
           String(item.qty),
-          item.available_qty != null ? String(item.available_qty) : "",
+          item.availableQty != null ? String(item.availableQty) : "",
         ]);
       }
     }
-    const csv = rows
-      .map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(","))
-      .join("\n");
+    const csv = rows.map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `location-conflicts-${warehouseCode}-${snapshotDate}.csv`;
+    a.download = `location-conflicts-${warehouseCode}.csv`;
     a.click();
   }
-
-  // Badge colors cycling
-  const BADGE_COLORS = [
-    "bg-blue-100 text-blue-800 border-blue-200",
-    "bg-purple-100 text-purple-800 border-purple-200",
-    "bg-amber-100 text-amber-800 border-amber-200",
-    "bg-rose-100 text-rose-800 border-rose-200",
-    "bg-teal-100 text-teal-800 border-teal-200",
-    "bg-orange-100 text-orange-800 border-orange-200",
-  ];
 
   return (
     <div className="p-6 space-y-5">
@@ -189,7 +287,7 @@ export default function LocationConflictsPage() {
             className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white rounded-lg transition-colors"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-            {loading ? "Loading…" : "Refresh"}
+            {loading ? "Analyzing…" : "Refresh"}
           </button>
 
           {filtered.length > 0 && (
@@ -203,15 +301,6 @@ export default function LocationConflictsPage() {
           )}
         </div>
       </div>
-
-      {/* Snapshot info bar */}
-      {snapshotDate && !loading && (
-        <div className="flex items-center gap-2 text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-4 py-2">
-          <Info className="w-3.5 h-3.5 flex-shrink-0" />
-          Based on inventory snapshot dated <strong className="text-slate-700 ml-1">{snapshotDate}</strong>
-          <span className="ml-1">— {totalRows.toLocaleString()} total rows</span>
-        </div>
-      )}
 
       {/* Error */}
       {error && (
@@ -258,22 +347,34 @@ export default function LocationConflictsPage() {
 
       {/* Loading */}
       {loading && (
-        <div className="bg-white rounded-xl border border-slate-200 p-8 text-center">
-          <RefreshCw className="w-8 h-8 animate-spin text-blue-400 mx-auto mb-3" />
-          <p className="text-sm text-slate-500">Analyzing inventory snapshot…</p>
+        <div className="bg-white rounded-xl border border-slate-200 p-8 text-center space-y-4">
+          <RefreshCw className="w-8 h-8 animate-spin text-blue-400 mx-auto" />
+          {progress ? (
+            <>
+              <p className="text-sm text-slate-600 font-medium">
+                Fetching inventory… {progress.loaded} / {progress.total} SKUs
+              </p>
+              <div className="w-full max-w-xs mx-auto bg-slate-100 rounded-full h-2">
+                <div
+                  className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${Math.round((progress.loaded / progress.total) * 100)}%` }}
+                />
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-slate-500">Fetching SKU list…</p>
+          )}
         </div>
       )}
 
       {/* No conflicts */}
-      {!loading && !error && conflicts.length === 0 && snapshotDate && (
+      {!loading && !error && conflicts.length === 0 && (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
           <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-3">
             <AlertTriangle className="w-6 h-6 text-green-600" />
           </div>
           <p className="font-semibold text-slate-800">No location conflicts found</p>
-          <p className="text-sm text-slate-500 mt-1">
-            All locations contain items from a single customer in the {snapshotDate} snapshot.
-          </p>
+          <p className="text-sm text-slate-500 mt-1">All locations contain items from a single customer.</p>
         </div>
       )}
 
@@ -282,13 +383,8 @@ export default function LocationConflictsPage() {
         <div className="space-y-3">
           {filtered.map((group) => {
             const isExpanded = expanded.has(group.location);
-
             return (
-              <div
-                key={group.location}
-                className="bg-white rounded-xl border border-amber-200 shadow-sm overflow-hidden"
-              >
-                {/* Location header */}
+              <div key={group.location} className="bg-white rounded-xl border border-amber-200 shadow-sm overflow-hidden">
                 <button
                   onClick={() => toggleExpand(group.location)}
                   className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-amber-50 transition-colors text-left"
@@ -297,7 +393,6 @@ export default function LocationConflictsPage() {
                     <span className="font-mono font-bold text-slate-900 text-sm">
                       {group.location || "—"}
                     </span>
-                    {/* Customer badges */}
                     <div className="flex gap-1.5 flex-wrap">
                       {group.customers.map((c, i) => (
                         <span
@@ -319,66 +414,50 @@ export default function LocationConflictsPage() {
                   </div>
                 </button>
 
-                {/* Expanded detail table */}
                 {isExpanded && (
                   <div className="border-t border-amber-100 overflow-x-auto">
                     <table className="w-full text-xs">
                       <thead>
                         <tr className="bg-amber-50">
-                          <th className="px-4 py-2 text-left text-slate-500 font-semibold uppercase tracking-wide">Customer</th>
-                          <th className="px-4 py-2 text-left text-slate-500 font-semibold uppercase tracking-wide">SKU</th>
-                          <th className="px-4 py-2 text-left text-slate-500 font-semibold uppercase tracking-wide">Product</th>
-                          <th className="px-4 py-2 text-left text-slate-500 font-semibold uppercase tracking-wide">Lot</th>
-                          <th className="px-4 py-2 text-left text-slate-500 font-semibold uppercase tracking-wide">Expire</th>
-                          <th className="px-4 py-2 text-right text-slate-500 font-semibold uppercase tracking-wide">Qty</th>
-                          <th className="px-4 py-2 text-right text-slate-500 font-semibold uppercase tracking-wide">Avail.</th>
+                          {["Customer", "SKU", "Product", "Lot", "Expire", "Qty", "Avail."].map((h) => (
+                            <th key={h} className={`px-4 py-2 text-slate-500 font-semibold uppercase tracking-wide ${h === "Qty" || h === "Avail." ? "text-right" : "text-left"}`}>{h}</th>
+                          ))}
                         </tr>
                       </thead>
                       <tbody>
                         {group.items.map((item, idx) => {
-                          const custIdx = group.customers.indexOf(item.customer_code);
-                          const badgeColor = BADGE_COLORS[Math.max(0, custIdx) % BADGE_COLORS.length];
+                          const custIdx = group.customers.indexOf(item.customerCode);
+                          const badge = BADGE_COLORS[Math.max(0, custIdx) % BADGE_COLORS.length];
                           return (
                             <tr key={idx} className="border-t border-slate-100 hover:bg-slate-50">
                               <td className="px-4 py-2">
-                                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${badgeColor}`}>
-                                  {item.customer_code}
+                                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${badge}`}>
+                                  {item.customerCode}
                                 </span>
                               </td>
                               <td className="px-4 py-2 font-mono text-slate-700">{item.sku || "—"}</td>
-                              <td className="px-4 py-2 text-slate-600 max-w-[200px] truncate" title={item.product_name ?? ""}>
-                                {item.product_name || "—"}
+                              <td className="px-4 py-2 text-slate-600 max-w-[200px] truncate" title={item.productName}>
+                                {item.productName || "—"}
                               </td>
                               <td className="px-4 py-2 text-slate-500 font-mono">{item.lot || "—"}</td>
-                              <td className="px-4 py-2 text-slate-500">{item.expire_date || "—"}</td>
-                              <td className="px-4 py-2 text-right font-semibold text-slate-800">
-                                {item.qty.toLocaleString()}
-                              </td>
+                              <td className="px-4 py-2 text-slate-500">{item.expireDate || "—"}</td>
+                              <td className="px-4 py-2 text-right font-semibold text-slate-800">{item.qty.toLocaleString()}</td>
                               <td className="px-4 py-2 text-right text-slate-500">
-                                {item.available_qty != null ? item.available_qty.toLocaleString() : "—"}
+                                {item.availableQty != null ? item.availableQty.toLocaleString() : "—"}
                               </td>
                             </tr>
                           );
                         })}
                         {/* Per-customer subtotals */}
                         {group.customers.map((cust, i) => {
-                          const custQty = group.items
-                            .filter((it) => it.customer_code === cust)
-                            .reduce((s, it) => s + it.qty, 0);
+                          const custQty = group.items.filter((it) => it.customerCode === cust).reduce((s, it) => s + it.qty, 0);
                           return (
-                            <tr
-                              key={`sub-${cust}`}
-                              className="border-t border-dashed border-slate-200 bg-slate-50"
-                            >
+                            <tr key={`sub-${cust}`} className="border-t border-dashed border-slate-200 bg-slate-50">
                               <td className="px-4 py-1.5 font-semibold text-slate-600" colSpan={5}>
-                                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${BADGE_COLORS[i % BADGE_COLORS.length]}`}>
-                                  {cust}
-                                </span>
+                                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${BADGE_COLORS[i % BADGE_COLORS.length]}`}>{cust}</span>
                                 <span className="ml-2 text-slate-400">subtotal</span>
                               </td>
-                              <td className="px-4 py-1.5 text-right font-bold text-slate-800">
-                                {custQty.toLocaleString()}
-                              </td>
+                              <td className="px-4 py-1.5 text-right font-bold text-slate-800">{custQty.toLocaleString()}</td>
                               <td />
                             </tr>
                           );
