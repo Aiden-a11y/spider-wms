@@ -3,27 +3,24 @@
 import { useEffect, useState, useMemo } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import { normalizeInventory } from "@/lib/wms";
-import { RefreshCw, AlertTriangle, Search, Download, ChevronDown, ChevronUp } from "lucide-react";
+import { RefreshCw, AlertTriangle, Search, Download } from "lucide-react";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-type ConflictItem = {
+type ConflictRow = {
+  location:     string;
   customerCode: string;
-  sku: string;
-  productName: string;
-  lot: string;
-  expireDate: string;
-  qty: number;
+  sku:          string;
+  productName:  string;
+  lot:          string;
+  expireDate:   string;
+  qty:          number;
   availableQty: number | null;
-  locationCode: string;
 };
 
 type ConflictGroup = {
-  location: string;
+  location:  string;
   customers: string[];
-  itemCount: number;
-  totalQty: number;
-  items: ConflictItem[];
+  rows:      ConflictRow[];
+  totalQty:  number;
 };
 
 const BADGE_COLORS = [
@@ -35,12 +32,10 @@ const BADGE_COLORS = [
   "bg-orange-100 text-orange-800 border-orange-200",
 ];
 
-const BATCH_SIZE   = 5;
-const BATCH_DELAY  = 400;
-const SKU_DELAY    = 300;
-const CACHE_TTL    = 10 * 60 * 1000; // 10 min
-
-// ─── Page ─────────────────────────────────────────────────────────────────────
+const CACHE_TTL   = 10 * 60 * 1000;
+const BATCH_SIZE  = 5;
+const BATCH_DELAY = 400;
+const SKU_DELAY   = 300;
 
 export default function LocationConflictsPage() {
   const { user } = useAuth();
@@ -56,9 +51,7 @@ export default function LocationConflictsPage() {
   const [error,         setError]         = useState("");
   const [conflicts,     setConflicts]     = useState<ConflictGroup[]>([]);
   const [search,        setSearch]        = useState("");
-  const [expanded,      setExpanded]      = useState<Set<string>>(new Set());
 
-  // Load warehouses on mount
   useEffect(() => {
     fetch("/api/wms/combo/warehouse", { headers })
       .then((r) => r.json())
@@ -80,27 +73,21 @@ export default function LocationConflictsPage() {
     setLoading(true);
     setError("");
     setConflicts([]);
-    setExpanded(new Set());
     setProgress(null);
 
     try {
-      // 1. Get all customers for this warehouse
-      const custRes  = await fetch(`/api/wms/combo/customer-by-warehouse/${whCode}`, { headers });
-      const custJson = await custRes.json();
+      // 1. Customers
+      const custJson = await fetch(`/api/wms/combo/customer-by-warehouse/${whCode}`, { headers }).then((r) => r.json());
       const custArr: Record<string, unknown>[] =
         Array.isArray(custJson?.data) ? custJson.data : Array.isArray(custJson) ? custJson : [];
       const customers = custArr
-        .map((c) => ({
-          code: String(c.code ?? c.customerCode ?? c.id ?? ""),
-          name: String(c.name ?? c.customerName ?? c.code ?? ""),
-        }))
+        .map((c) => ({ code: String(c.code ?? c.customerCode ?? c.id ?? "") }))
         .filter((c) => c.code);
 
       if (customers.length === 0) throw new Error("No customers found for this warehouse.");
 
-      // 2. Collect all (customerCode, sku) pairs — with session cache
+      // 2. SKU pairs (with session cache)
       const pairs: { custCode: string; sku: string }[] = [];
-
       for (const cust of customers) {
         const cacheKey = `sku_cache__${whCode}__${cust.code}`;
         let skus: string[] | null = null;
@@ -113,12 +100,11 @@ export default function LocationConflictsPage() {
           skus = [];
           let page = 1;
           while (true) {
-            const res  = await fetch("/api/wms/product/list", {
+            const j = await fetch("/api/wms/product/list", {
               method: "POST", headers,
               body: JSON.stringify({ warehouseCode: whCode, customerCode: cust.code, pageNum: page, pageSize: 500 }),
-            });
-            const json = await res.json();
-            const list: Record<string, unknown>[] = json?.data?.list ?? [];
+            }).then((r) => r.json());
+            const list: Record<string, unknown>[] = j?.data?.list ?? [];
             const pageSkus = list.map((p) => String(p.productSku ?? "")).filter(Boolean);
             skus.push(...pageSkus);
             if (pageSkus.length < 500) break;
@@ -127,18 +113,15 @@ export default function LocationConflictsPage() {
           }
           try { sessionStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), skus })); } catch { /* ignore */ }
         }
-
         skus.forEach((sku) => pairs.push({ custCode: cust.code, sku }));
       }
 
-      if (pairs.length === 0) throw new Error("No products registered for this warehouse.");
-
+      if (pairs.length === 0) throw new Error("No products registered.");
       setProgress({ total: pairs.length, loaded: 0 });
 
-      // 3. Fetch inventory/detail in batches of 5
-      const allItems: ConflictItem[] = [];
+      // 3. Fetch inventory/detail
+      const allRows: ConflictRow[] = [];
       let loaded = 0;
-
       for (let i = 0; i < pairs.length; i += BATCH_SIZE) {
         const batch = pairs.slice(i, i + BATCH_SIZE);
         const results = await Promise.all(
@@ -148,9 +131,9 @@ export default function LocationConflictsPage() {
               body: JSON.stringify({ warehouseCode: whCode, customerCode: custCode, productSku: sku }),
             })
               .then((r) => r.json())
-              .then((j) => {
-                const rows = normalizeInventory(j);
-                return rows.map((item) => ({
+              .then((j) =>
+                normalizeInventory(j).map((item) => ({
+                  location:     item.locationCode ?? "",
                   customerCode: item.customerCode || custCode,
                   sku:          item.sku ?? sku,
                   productName:  item.productName ?? "",
@@ -158,46 +141,36 @@ export default function LocationConflictsPage() {
                   expireDate:   item.expireDate ?? "",
                   qty:          item.qty ?? 0,
                   availableQty: item.availableQty ?? null,
-                  locationCode: item.locationCode ?? "",
-                }));
-              })
-              .catch(() => [])
+                }))
+              )
+              .catch(() => [] as ConflictRow[])
           )
         );
-        for (const rows of results) {
-          allItems.push(...rows);
-          loaded++;
-          setProgress({ total: pairs.length, loaded });
-        }
-        if (i + BATCH_SIZE < pairs.length) {
-          await new Promise((r) => setTimeout(r, BATCH_DELAY));
-        }
+        for (const rows of results) { allRows.push(...rows); loaded++; }
+        setProgress({ total: pairs.length, loaded });
+        if (i + BATCH_SIZE < pairs.length) await new Promise((r) => setTimeout(r, BATCH_DELAY));
       }
 
-      if (allItems.length === 0) throw new Error("No inventory found.");
-
-      // 4. Group by locationCode, find locations with 2+ distinct customers
-      const locMap = new Map<string, ConflictItem[]>();
-      for (const item of allItems) {
-        if (!item.locationCode) continue;
-        const arr = locMap.get(item.locationCode) ?? [];
-        arr.push(item);
-        locMap.set(item.locationCode, arr);
+      // 4. Group by location → keep only locations with 2+ customers
+      const locMap = new Map<string, ConflictRow[]>();
+      for (const row of allRows) {
+        if (!row.location) continue;
+        const arr = locMap.get(row.location) ?? [];
+        arr.push(row);
+        locMap.set(row.location, arr);
       }
 
       const found: ConflictGroup[] = [];
-      locMap.forEach((items, location) => {
-        const custSet = new Set(items.map((i) => i.customerCode));
-        if (custSet.size < 2) return;
+      locMap.forEach((rows, location) => {
+        const custSet = Array.from(new Set(rows.map((r) => r.customerCode)));
+        if (custSet.length < 2) return;
         found.push({
           location,
-          customers: Array.from(custSet),
-          itemCount: items.length,
-          totalQty:  items.reduce((s, i) => s + i.qty, 0),
-          items,
+          customers: custSet,
+          rows,
+          totalQty: rows.reduce((s, r) => s + r.qty, 0),
         });
       });
-
       found.sort((a, b) => b.customers.length - a.customers.length || a.location.localeCompare(b.location));
       setConflicts(found);
     } catch (e) {
@@ -208,9 +181,7 @@ export default function LocationConflictsPage() {
     }
   }
 
-  useEffect(() => {
-    if (warehouseCode) analyze(warehouseCode);
-  }, [warehouseCode]); // eslint-disable-line
+  useEffect(() => { if (warehouseCode) analyze(warehouseCode); }, [warehouseCode]); // eslint-disable-line
 
   const filtered = useMemo(() => {
     if (!search.trim()) return conflicts;
@@ -219,41 +190,19 @@ export default function LocationConflictsPage() {
       (g) =>
         g.location.toLowerCase().includes(q) ||
         g.customers.some((c) => c.toLowerCase().includes(q)) ||
-        g.items.some(
-          (i) =>
-            i.sku.toLowerCase().includes(q) ||
-            i.productName.toLowerCase().includes(q)
-        )
+        g.rows.some((r) => r.sku.toLowerCase().includes(q) || r.productName.toLowerCase().includes(q))
     );
   }, [conflicts, search]);
 
-  function toggleExpand(loc: string) {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      next.has(loc) ? next.delete(loc) : next.add(loc);
-      return next;
-    });
-  }
-
   function exportCSV() {
-    const rows: string[][] = [
-      ["Location", "Customer", "SKU", "Product", "Lot", "Expire", "Qty", "Available Qty"],
-    ];
-    for (const g of filtered) {
-      for (const item of g.items) {
-        rows.push([
-          g.location, item.customerCode, item.sku,
-          item.productName, item.lot, item.expireDate,
-          String(item.qty),
-          item.availableQty != null ? String(item.availableQty) : "",
-        ]);
-      }
-    }
+    const rows = [["Location", "Customer", "SKU", "Product", "Lot", "Expire", "Qty", "Avail."]];
+    for (const g of filtered)
+      for (const r of g.rows)
+        rows.push([g.location, r.customerCode, r.sku, r.productName, r.lot, r.expireDate, String(r.qty), r.availableQty != null ? String(r.availableQty) : ""]);
     const csv = rows.map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `location-conflicts-${warehouseCode}.csv`;
+    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    a.download = `conflicts-${warehouseCode}.csv`;
     a.click();
   }
 
@@ -270,17 +219,14 @@ export default function LocationConflictsPage() {
             Locations shared by multiple customers — potential inventory mix-up risk
           </p>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
           <select
             value={warehouseCode}
             onChange={(e) => { setWarehouseCode(e.target.value); analyze(e.target.value); }}
-            className="border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+            className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
-            {warehouses.map((w) => (
-              <option key={w.id} value={w.id}>{w.name}</option>
-            ))}
+            {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
           </select>
-
           <button
             onClick={() => analyze()}
             disabled={loading}
@@ -289,14 +235,9 @@ export default function LocationConflictsPage() {
             <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
             {loading ? "Analyzing…" : "Refresh"}
           </button>
-
           {filtered.length > 0 && (
-            <button
-              onClick={exportCSV}
-              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-lg transition-colors"
-            >
-              <Download className="w-4 h-4" />
-              Export CSV
+            <button onClick={exportCSV} className="flex items-center gap-1.5 px-3 py-2 text-sm border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-lg transition-colors">
+              <Download className="w-4 h-4" /> Export CSV
             </button>
           )}
         </div>
@@ -305,29 +246,22 @@ export default function LocationConflictsPage() {
       {/* Error */}
       {error && (
         <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
-          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-          {error}
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" /> {error}
         </div>
       )}
 
       {/* Summary stats */}
       {!loading && conflicts.length > 0 && (
         <div className="flex gap-4 flex-wrap">
-          <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-3 flex flex-col">
-            <span className="text-2xl font-bold text-amber-700">{conflicts.length}</span>
-            <span className="text-xs text-amber-600">Conflict Locations</span>
+          <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-3">
+            <div className="text-2xl font-bold text-amber-700">{conflicts.length}</div>
+            <div className="text-xs text-amber-600">Conflict Locations</div>
           </div>
-          <div className="bg-rose-50 border border-rose-200 rounded-xl px-5 py-3 flex flex-col">
-            <span className="text-2xl font-bold text-rose-700">
-              {conflicts.reduce((s, g) => s + g.itemCount, 0).toLocaleString()}
-            </span>
-            <span className="text-xs text-rose-600">Affected Rows</span>
-          </div>
-          <div className="bg-slate-50 border border-slate-200 rounded-xl px-5 py-3 flex flex-col">
-            <span className="text-2xl font-bold text-slate-700">
+          <div className="bg-slate-50 border border-slate-200 rounded-xl px-5 py-3">
+            <div className="text-2xl font-bold text-slate-700">
               {Array.from(new Set(conflicts.flatMap((g) => g.customers))).length}
-            </span>
-            <span className="text-xs text-slate-500">Customers Involved</span>
+            </div>
+            <div className="text-xs text-slate-500">Customers Involved</div>
           </div>
         </div>
       )}
@@ -336,9 +270,7 @@ export default function LocationConflictsPage() {
       {conflicts.length > 0 && (
         <div className="relative max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+          <input value={search} onChange={(e) => setSearch(e.target.value)}
             placeholder="Search location, customer, SKU…"
             className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
@@ -355,10 +287,8 @@ export default function LocationConflictsPage() {
                 Fetching inventory… {progress.loaded} / {progress.total} SKUs
               </p>
               <div className="w-full max-w-xs mx-auto bg-slate-100 rounded-full h-2">
-                <div
-                  className="bg-blue-500 h-2 rounded-full transition-all duration-300"
-                  style={{ width: `${Math.round((progress.loaded / progress.total) * 100)}%` }}
-                />
+                <div className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${Math.round((progress.loaded / progress.total) * 100)}%` }} />
               </div>
             </>
           ) : (
@@ -378,97 +308,59 @@ export default function LocationConflictsPage() {
         </div>
       )}
 
-      {/* Conflict list */}
+      {/* Conflict table — one block per location, rows always visible */}
       {!loading && filtered.length > 0 && (
-        <div className="space-y-3">
-          {filtered.map((group) => {
-            const isExpanded = expanded.has(group.location);
-            return (
-              <div key={group.location} className="bg-white rounded-xl border border-amber-200 shadow-sm overflow-hidden">
-                <button
-                  onClick={() => toggleExpand(group.location)}
-                  className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-amber-50 transition-colors text-left"
-                >
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <span className="font-mono font-bold text-slate-900 text-sm">
-                      {group.location || "—"}
-                    </span>
-                    <div className="flex gap-1.5 flex-wrap">
-                      {group.customers.map((c, i) => (
-                        <span
-                          key={c}
-                          className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${BADGE_COLORS[i % BADGE_COLORS.length]}`}
-                        >
-                          {c}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-4 flex-shrink-0 ml-4">
-                    <span className="text-xs text-slate-500">
-                      {group.itemCount} rows · qty {group.totalQty.toLocaleString()}
-                    </span>
-                    {isExpanded
-                      ? <ChevronUp className="w-4 h-4 text-slate-400" />
-                      : <ChevronDown className="w-4 h-4 text-slate-400" />}
-                  </div>
-                </button>
-
-                {isExpanded && (
-                  <div className="border-t border-amber-100 overflow-x-auto">
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="bg-amber-50">
-                          {["Customer", "SKU", "Product", "Lot", "Expire", "Qty", "Avail."].map((h) => (
-                            <th key={h} className={`px-4 py-2 text-slate-500 font-semibold uppercase tracking-wide ${h === "Qty" || h === "Avail." ? "text-right" : "text-left"}`}>{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {group.items.map((item, idx) => {
-                          const custIdx = group.customers.indexOf(item.customerCode);
-                          const badge = BADGE_COLORS[Math.max(0, custIdx) % BADGE_COLORS.length];
-                          return (
-                            <tr key={idx} className="border-t border-slate-100 hover:bg-slate-50">
-                              <td className="px-4 py-2">
-                                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${badge}`}>
-                                  {item.customerCode}
-                                </span>
-                              </td>
-                              <td className="px-4 py-2 font-mono text-slate-700">{item.sku || "—"}</td>
-                              <td className="px-4 py-2 text-slate-600 max-w-[200px] truncate" title={item.productName}>
-                                {item.productName || "—"}
-                              </td>
-                              <td className="px-4 py-2 text-slate-500 font-mono">{item.lot || "—"}</td>
-                              <td className="px-4 py-2 text-slate-500">{item.expireDate || "—"}</td>
-                              <td className="px-4 py-2 text-right font-semibold text-slate-800">{item.qty.toLocaleString()}</td>
-                              <td className="px-4 py-2 text-right text-slate-500">
-                                {item.availableQty != null ? item.availableQty.toLocaleString() : "—"}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                        {/* Per-customer subtotals */}
-                        {group.customers.map((cust, i) => {
-                          const custQty = group.items.filter((it) => it.customerCode === cust).reduce((s, it) => s + it.qty, 0);
-                          return (
-                            <tr key={`sub-${cust}`} className="border-t border-dashed border-slate-200 bg-slate-50">
-                              <td className="px-4 py-1.5 font-semibold text-slate-600" colSpan={5}>
-                                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${BADGE_COLORS[i % BADGE_COLORS.length]}`}>{cust}</span>
-                                <span className="ml-2 text-slate-400">subtotal</span>
-                              </td>
-                              <td className="px-4 py-1.5 text-right font-bold text-slate-800">{custQty.toLocaleString()}</td>
-                              <td />
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+        <div className="space-y-4">
+          {filtered.map((group) => (
+            <div key={group.location} className="bg-white rounded-xl border border-amber-200 shadow-sm overflow-hidden">
+              {/* Location header */}
+              <div className="flex items-center gap-3 px-5 py-3 bg-amber-50 border-b border-amber-200 flex-wrap">
+                <span className="font-mono font-bold text-slate-900">{group.location}</span>
+                {group.customers.map((c, i) => (
+                  <span key={c} className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${BADGE_COLORS[i % BADGE_COLORS.length]}`}>
+                    {c}
+                  </span>
+                ))}
+                <span className="ml-auto text-xs text-slate-500">Total qty: {group.totalQty.toLocaleString()}</span>
               </div>
-            );
-          })}
+
+              {/* Rows table */}
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-slate-100">
+                    <th className="px-4 py-2 text-left text-slate-400 font-medium uppercase tracking-wide">Customer</th>
+                    <th className="px-4 py-2 text-left text-slate-400 font-medium uppercase tracking-wide">SKU</th>
+                    <th className="px-4 py-2 text-left text-slate-400 font-medium uppercase tracking-wide">Product</th>
+                    <th className="px-4 py-2 text-left text-slate-400 font-medium uppercase tracking-wide">Lot</th>
+                    <th className="px-4 py-2 text-left text-slate-400 font-medium uppercase tracking-wide">Expire</th>
+                    <th className="px-4 py-2 text-right text-slate-400 font-medium uppercase tracking-wide">Qty</th>
+                    <th className="px-4 py-2 text-right text-slate-400 font-medium uppercase tracking-wide">Avail.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {group.rows.map((row, idx) => {
+                    const custIdx = group.customers.indexOf(row.customerCode);
+                    const badge = BADGE_COLORS[Math.max(0, custIdx) % BADGE_COLORS.length];
+                    return (
+                      <tr key={idx} className={`border-t border-slate-100 ${idx % 2 === 1 ? "bg-slate-50" : ""}`}>
+                        <td className="px-4 py-2">
+                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${badge}`}>
+                            {row.customerCode}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2 font-mono text-slate-700">{row.sku || "—"}</td>
+                        <td className="px-4 py-2 text-slate-600 max-w-[200px] truncate" title={row.productName}>{row.productName || "—"}</td>
+                        <td className="px-4 py-2 text-slate-500 font-mono">{row.lot || "—"}</td>
+                        <td className="px-4 py-2 text-slate-500">{row.expireDate || "—"}</td>
+                        <td className="px-4 py-2 text-right font-semibold text-slate-800">{row.qty.toLocaleString()}</td>
+                        <td className="px-4 py-2 text-right text-slate-500">{row.availableQty != null ? row.availableQty.toLocaleString() : "—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ))}
         </div>
       )}
     </div>
