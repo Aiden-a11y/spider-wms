@@ -468,6 +468,25 @@ const OM_SUBSIDY = {
   allocToSTL:        0.40,
 } as const;
 
+/** Calculate STL OM-subsidy allocation amount from raw state strings */
+function calcStlAlloc(omWages: string, omAllocPct: string): number {
+  const S = OM_SUBSIDY;
+  const wages = parseFloat(omWages) || 0;
+  if (wages <= 0) return 0;
+  const fica = wages * S.employerTaxRate;
+  const wcExpected =
+    S.wcWarehouseExp * S.wcRate +
+    S.wcOfficeExp * S.wcOfficeRate +
+    S.wcSalesExp * S.wcSalesRate;
+  const wcDiscount = 1 - S.wcActualPremium / wcExpected;
+  const wcNetRate = S.wcRate * (1 - wcDiscount);
+  const wc = wages * wcNetRate;
+  const gl = wages * (S.glAnnualPremium / S.glRevenueBase);
+  const totalOverhead = fica + wc + gl + S.dental + S.medical;
+  const allocPct = Math.max(0, Math.min(100, parseFloat(omAllocPct) || 0));
+  return totalOverhead * (allocPct / 100);
+}
+
 function addOmSubsidySheet(wb: ExcelJS.Workbook) {
   const ws = wb.addWorksheet("OM Subsidy");
   ws.columns = [{ width: 32 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 12 }, { width: 18 }, { width: 14 }];
@@ -774,7 +793,7 @@ async function exportInvoiceToExcel(invoice: BillingInvoice, source?: WmsSource 
 }
 
 /** Export multiple invoices — styled Summary tab + one tab per customer + optional raw data tabs */
-async function exportAllToExcel(invoices: BillingInvoice[], period: string, source?: WmsSource | null) {
+async function exportAllToExcel(invoices: BillingInvoice[], period: string, source?: WmsSource | null, omSubsidy?: number) {
   if (invoices.length === 0) return;
   const wb = new ExcelJS.Workbook();
 
@@ -822,13 +841,20 @@ async function exportAllToExcel(invoices: BillingInvoice[], period: string, sour
   });
 
   // ── Aggregate line items across all invoices (sum qty by item id) ──
-  // Build a merged item list: use first invoice's item as template, sum qty across all
+  // Pre-populate with ALL default line items at qty=0 so every row always appears
   const itemMap = new Map<string, BillingLineItem & { totalQty: number }>();
+  for (const def of buildDefaultLineItems()) {
+    itemMap.set(def.id, { ...def, totalQty: 0 });
+  }
+  // Sum qty from each invoice on top of the defaults
   for (const inv of invoices) {
     for (const item of inv.lineItems) {
       const existing = itemMap.get(item.id);
       if (existing) {
         existing.totalQty += item.qty;
+        // Keep description/rate/unit from the invoice (may have custom rates)
+        existing.rate = item.rate;
+        existing.costPlus = item.costPlus;
       } else {
         itemMap.set(item.id, { ...item, totalQty: item.qty });
       }
@@ -841,7 +867,7 @@ async function exportAllToExcel(invoices: BillingInvoice[], period: string, sour
 
   for (const cat of BILLING_CATEGORIES) {
     const catItems = Array.from(itemMap.values()).filter(
-      (it) => it.category === cat && it.totalQty !== 0
+      (it) => it.category === cat
     );
     if (catItems.length === 0) continue;
 
@@ -859,7 +885,7 @@ async function exportAllToExcel(invoices: BillingInvoice[], period: string, sour
     for (const item of catItems) {
       // For aggregated qty, recalculate amount
       const aggQty = item.totalQty;
-      const aggAmt = item.costPlus ? aggQty * 1.1 : aggQty * item.rate;
+      const aggAmt = aggQty === 0 ? 0 : (item.costPlus ? aggQty * 1.1 : aggQty * item.rate);
       catTotal += aggAmt;
       grandTotal += aggAmt;
 
@@ -869,16 +895,19 @@ async function exportAllToExcel(invoices: BillingInvoice[], period: string, sour
         item.unit, aggQty, aggAmt,
       ]);
       r.height = 15;
+      const isZero = aggQty === 0;
       const isAlt = lineNo % 2 === 0;
       r.eachCell((cell, col) => {
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: isAlt ? C.rowAlt : C.white } };
-        cell.font = { size: 10, color: { argb: C.black } };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: isZero ? C.subtotalBg : (isAlt ? C.rowAlt : C.white) } };
+        cell.font = { size: 10, color: { argb: isZero ? C.border : C.black } };
         cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
         applyBorder(cell);
       });
-      r.getCell(4).font = { size: 10, color: { argb: C.teal } };
+      r.getCell(4).font = { size: 10, color: { argb: isZero ? C.border : C.teal } };
       if (!item.costPlus) r.getCell(4).numFmt = "$#,##0.00";
-      r.getCell(6).numFmt = "#,##0.##";
+      // Fix trailing dot: use integer format when qty is whole number
+      const qtyVal = Math.round(aggQty * 100) / 100;
+      r.getCell(6).numFmt = Number.isInteger(qtyVal) ? "#,##0" : "#,##0.00";
       r.getCell(7).numFmt = "$#,##0.00";
       lineNo++;
     }
@@ -893,6 +922,21 @@ async function exportAllToExcel(invoices: BillingInvoice[], period: string, sour
       applyBorder(cell);
     });
     sub.getCell(7).numFmt = "$#,##0.00";
+  }
+
+  // ── OM Subsidy row (if provided) ──
+  if (omSubsidy && omSubsidy > 0) {
+    grandTotal += omSubsidy;
+    const omRow = ws.addRow(["", "OM Subsidy", "OM Subsidy — STL Allocation", "", "monthly", 1, omSubsidy]);
+    omRow.height = 15;
+    omRow.eachCell((cell, col) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF5F3FF" } };
+      cell.font = { size: 10, color: { argb: "FF7C3AED" } };
+      cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
+      applyBorder(cell);
+    });
+    omRow.getCell(6).numFmt = "#,##0";
+    omRow.getCell(7).numFmt = "$#,##0.00";
   }
 
   // ── Grand Total ──
@@ -1891,7 +1935,7 @@ export default function BillingPage() {
             <button
               onClick={() => {
                 const group = getCurrentGroup();
-                if (isMultiMode) exportAllToExcel(group, editing.period, wmsSource).catch(console.error);
+                if (isMultiMode) exportAllToExcel(group, editing.period, wmsSource, calcStlAlloc(omWages, omAllocPct)).catch(console.error);
                 else exportInvoiceToExcel({ ...editing, total: currentTotal }, wmsSource).catch(console.error);
               }}
               className="flex items-center gap-1.5 text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-600 hover:bg-slate-50 transition-colors"
