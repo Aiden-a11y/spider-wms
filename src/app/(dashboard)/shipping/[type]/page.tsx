@@ -102,6 +102,11 @@ type TaskItem = { type: string; qty: number };
 type AllocRow = {
   locationKey: string;
   location: string;
+  locZone:     string;
+  locAisle:    string;
+  locBay:      string;
+  locLevel:    string;
+  locPosition: string;
   sku: string;
   productName: string;
   lot: string;
@@ -109,6 +114,24 @@ type AllocRow = {
   totalQty: number;
   perOrder: Record<string, number>;
 };
+
+/** Picking priority sort: aisle → bay → level → position → zone (all numeric ascending) */
+function pickingSort(a: AllocRow, b: AllocRow): number {
+  const n = (s: string) => { const v = parseInt(s, 10); return isNaN(v) ? s : v; };
+  const cmp = (x: string, y: string) => {
+    const nx = n(x), ny = n(y);
+    return typeof nx === "number" && typeof ny === "number"
+      ? nx - ny
+      : String(nx).localeCompare(String(ny));
+  };
+  return (
+    cmp(a.locAisle,    b.locAisle)    ||
+    cmp(a.locBay,      b.locBay)      ||
+    cmp(a.locLevel,    b.locLevel)    ||
+    cmp(a.locPosition, b.locPosition) ||
+    cmp(a.locZone,     b.locZone)
+  );
+}
 
 /* ── Field display / edit helper ── */
 function Field({ label, value, onChange }: { label: string; value: unknown; onChange?: (v: string) => void }) {
@@ -688,23 +711,27 @@ export default function ShippingTypePage() {
         if (items.length === 0) { warnings.push(code); continue; }
 
         for (const item of items) {
-          const locParts = [
-            String(item.zoneNm  ?? ""), String(item.aisleNm ?? ""),
-            String(item.bayNm   ?? ""), String(item.levelNm ?? ""), String(item.positionNm ?? ""),
-          ].filter(Boolean);
-          const location = locParts.join("-") || String(item.location ?? item.locationCode ?? "");
-          const sku      = String(item.productSku ?? item.sku ?? "");
-          const lot      = String(item.lotNo ?? item.lot ?? "");
-          const expDate  = String(item.expireDate ?? item.expDate ?? item.expiryDate ?? item.expire_date ?? "");
-          const qty      = Number(item.qty ?? 0);
-          const key      = `${location}||${sku}||${lot}||${expDate}`;
+          const locZone     = String(item.zoneNm     ?? item.zone     ?? "");
+          const locAisle    = String(item.aisleNm    ?? item.aisle    ?? "");
+          const locBay      = String(item.bayNm      ?? item.bay      ?? "");
+          const locLevel    = String(item.levelNm    ?? item.level    ?? "");
+          const locPosition = String(item.positionNm ?? item.position ?? "");
+          const locParts    = [locZone, locAisle, locBay, locLevel, locPosition].filter(Boolean);
+          const location    = locParts.join("-") || String(item.location ?? item.locationCode ?? "");
+          const sku         = String(item.productSku ?? item.sku ?? "");
+          const lot         = String(item.lotNo ?? item.lot ?? "");
+          const expDate     = String(item.expireDate ?? item.expDate ?? item.expiryDate ?? item.expire_date ?? "");
+          const qty         = Number(item.qty ?? 0);
+          const key         = `${location}||${sku}||${lot}||${expDate}`;
 
           if (rowMap[key]) {
             rowMap[key].totalQty += qty;
             rowMap[key].perOrder[code] = (rowMap[key].perOrder[code] ?? 0) + qty;
           } else {
             rowMap[key] = {
-              locationKey: key, location, sku,
+              locationKey: key, location,
+              locZone, locAisle, locBay, locLevel, locPosition,
+              sku,
               productName: String(item.productName ?? item.itemName ?? ""),
               lot, expDate, totalQty: qty, perOrder: { [code]: qty },
             };
@@ -715,7 +742,7 @@ export default function ShippingTypePage() {
       }
     }
 
-    const rows = Object.values(rowMap).sort((a, b) => a.location.localeCompare(b.location));
+    const rows = Object.values(rowMap).sort(pickingSort);
     setAllocWarnings(warnings);
     setAllocRows(rows);
 
