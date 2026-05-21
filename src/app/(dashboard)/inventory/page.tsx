@@ -512,7 +512,8 @@ export default function InventoryPage() {
       warehouseCode: form.warehouseCode,
       warehouseCd:   form.warehouseCd || undefined,
       customerCode:  form.customerCode,
-      locationCode:  form.locationCode || undefined,
+      locationCode:  form.locationCode || undefined,  // some API versions use this
+      location:      form.locationCode || undefined,  // others use this
       itemCondition: form.condition,
       productSku:    form.sku || undefined,
       adjustQty:     adjustQtyNum,
@@ -525,6 +526,7 @@ export default function InventoryPage() {
     // strip undefined (but keep empty strings — API expects them)
     Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
     try {
+      console.log("[inventory/adjust] payload:", payload);
       const res = await fetch("/api/wms/inventory/adjust", {
         method: "POST",
         headers,
