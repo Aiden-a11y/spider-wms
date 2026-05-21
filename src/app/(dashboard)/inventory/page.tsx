@@ -1161,36 +1161,29 @@ export default function InventoryPage() {
                           <th className="px-3 py-2 text-right text-slate-500">Adj Qty</th>
                           <th className="px-3 py-2 text-left text-slate-500">Lot</th>
                           <th className="px-3 py-2 text-left text-slate-500">Expire</th>
-                          <th className="px-3 py-2 text-left text-slate-500">Remark</th>
+                          <th className="px-3 py-2 text-left text-slate-500">Error Message</th>
                         </tr>
                       </thead>
                       <tbody>
                         {batchRows.map((row, i) => (
-                          <>
-                            <tr key={i} className={`border-t border-slate-100 ${row._status === "ok" ? "bg-emerald-50" : row._status === "error" ? "bg-red-50" : ""}`}>
-                              <td className="px-3 py-1.5 whitespace-nowrap">
-                                {row._status === "ok"      && <span className="text-emerald-600 font-semibold">✓ OK</span>}
-                                {row._status === "error"   && <span className="text-red-600 font-semibold">✗ Err</span>}
-                                {row._status === "pending" && <span className="text-slate-400">—</span>}
-                              </td>
-                              <td className="px-3 py-1.5 font-mono">{row.customerCode}</td>
-                              <td className="px-3 py-1.5 font-mono">{row.warehouseCode}</td>
-                              <td className="px-3 py-1.5 font-mono">{row.locationCode}</td>
-                              <td className="px-3 py-1.5">{row.condition}</td>
-                              <td className="px-3 py-1.5 font-mono">{row.sku}</td>
-                              <td className={`px-3 py-1.5 text-right font-semibold ${Number(row.adjustQty) > 0 ? "text-emerald-600" : "text-red-600"}`}>{row.adjustQty}</td>
-                              <td className="px-3 py-1.5 font-mono text-slate-400">{row.lotNo || "—"}</td>
-                              <td className="px-3 py-1.5 font-mono text-slate-400">{row.expireDate || "—"}</td>
-                              <td className="px-3 py-1.5 text-slate-500 max-w-xs truncate">{row.remark || "—"}</td>
-                            </tr>
-                            {row._status === "error" && row._msg && (
-                              <tr key={`${i}-err`} className="bg-red-50">
-                                <td colSpan={10} className="px-3 pb-2 pt-0">
-                                  <span className="text-xs text-red-600 font-mono bg-red-100 rounded px-2 py-0.5">⚠ {row._msg}</span>
-                                </td>
-                              </tr>
-                            )}
-                          </>
+                          <tr key={i} className={`border-t border-slate-100 ${row._status === "ok" ? "bg-emerald-50" : row._status === "error" ? "bg-red-50" : ""}`}>
+                            <td className="px-3 py-1.5 whitespace-nowrap">
+                              {row._status === "ok"      && <span className="text-emerald-600 font-semibold">✓ OK</span>}
+                              {row._status === "error"   && <span className="text-red-600 font-semibold">✗ Err</span>}
+                              {row._status === "pending" && <span className="text-slate-400">—</span>}
+                            </td>
+                            <td className="px-3 py-1.5 font-mono">{row.customerCode}</td>
+                            <td className="px-3 py-1.5 font-mono">{row.warehouseCode}</td>
+                            <td className="px-3 py-1.5 font-mono">{row.locationCode}</td>
+                            <td className="px-3 py-1.5">{row.condition}</td>
+                            <td className="px-3 py-1.5 font-mono">{row.sku}</td>
+                            <td className={`px-3 py-1.5 text-right font-semibold ${Number(row.adjustQty) > 0 ? "text-emerald-600" : "text-red-600"}`}>{row.adjustQty}</td>
+                            <td className="px-3 py-1.5 font-mono text-slate-400">{row.lotNo || "—"}</td>
+                            <td className="px-3 py-1.5 font-mono text-slate-400">{row.expireDate || "—"}</td>
+                            <td className="px-3 py-1.5 text-xs text-red-600 font-mono max-w-xs">
+                              {row._status === "error" ? (row._msg || "Unknown error") : row._status === "ok" ? <span className="text-emerald-600">—</span> : "—"}
+                            </td>
+                          </tr>
                         ))}
                       </tbody>
                     </table>
