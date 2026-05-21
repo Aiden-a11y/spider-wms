@@ -428,11 +428,12 @@ export default function InventoryPage() {
     const direct = loc.locationCode ?? loc.locationCd ?? loc.locCode ?? loc.locCd ??
       loc.code ?? loc.location ?? loc.locationName ?? loc.name ?? loc.loc ?? "";
     if (direct) return String(direct);
-    // Construct from parts: aisle-bay-level-position
+    // Construct from parts: zone-aisle-bay-level-position
     const parts = [
-      loc.aisle ?? loc.aisleNo ?? loc.aisleName,
-      loc.bay   ?? loc.bayNo   ?? loc.bayName,
-      loc.level ?? loc.levelNo ?? loc.levelName,
+      loc.zone     ?? loc.zoneNo     ?? loc.zoneName,
+      loc.aisle    ?? loc.aisleNo    ?? loc.aisleName,
+      loc.bay      ?? loc.bayNo      ?? loc.bayName,
+      loc.level    ?? loc.levelNo    ?? loc.levelName,
       loc.position ?? loc.positionNo ?? loc.positionName,
     ].filter(Boolean);
     if (parts.length > 0) return parts.join("-");
