@@ -975,9 +975,45 @@ export default function InventoryPage() {
             </div>
 
             <div className="px-6 py-5 space-y-4 max-h-[75vh] overflow-y-auto">
-              {/* Template hint */}
+              {/* Template hint + download */}
               <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-xs text-blue-700 space-y-1">
-                <p className="font-semibold mb-1">Required Excel columns:</p>
+                <div className="flex items-center justify-between mb-1">
+                  <p className="font-semibold">Required Excel columns:</p>
+                  <button
+                    onClick={async () => {
+                      const { utils, writeFile } = await import("xlsx");
+                      const headers = ["Customer", "Warehouse", "Location", "Condition", "SKU", "Product Name", "Adjust Qty", "Lot No", "Expire Date", "Remark"];
+                      const sample  = [
+                        customers[0]?.code ?? "CUSTCODE",
+                        warehouseCode || "STOO1",
+                        "31-23-01-01",
+                        "NOR",
+                        "SKU-001",
+                        "Sample Product",
+                        10,
+                        "",
+                        "12/31/2027",
+                        "Manual adjustment",
+                      ];
+                      const ws = utils.aoa_to_sheet([headers, sample]);
+                      // Column widths
+                      ws["!cols"] = [16,12,16,10,18,28,10,12,14,24].map((w) => ({ wch: w }));
+                      // Header style (bold yellow background)
+                      headers.forEach((_, i) => {
+                        const cell = utils.encode_cell({ r: 0, c: i });
+                        if (!ws[cell]) return;
+                        ws[cell].s = { font: { bold: true }, fill: { fgColor: { rgb: "FFF3CD" } }, alignment: { horizontal: "center" } };
+                      });
+                      const wb = utils.book_new();
+                      utils.book_append_sheet(wb, ws, "Bulk Stock Upload");
+                      writeFile(wb, "bulk_stock_upload_template.xlsx");
+                    }}
+                    className="flex items-center gap-1 px-2.5 py-1 bg-blue-600 text-white rounded-lg text-[11px] font-semibold hover:bg-blue-700 transition-colors"
+                  >
+                    <Download className="w-3 h-3" />
+                    Download Template
+                  </button>
+                </div>
                 <p className="font-mono">Customer · Warehouse · Location · Condition · SKU · Product Name · Adjust Qty · Lot No · Expire Date · Remark</p>
                 <p className="text-blue-500 mt-1">• Warehouse defaults to current selection if omitted &nbsp;• Condition defaults to NOR &nbsp;• Expire Date: MM/DD/YYYY or YYYYMMDD</p>
               </div>
