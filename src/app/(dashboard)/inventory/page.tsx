@@ -28,11 +28,9 @@ import {
 // ────────────────────────────────────────────────
 
 const CONDITIONS = [
-  { code: "NOR", label: "NOR - Normal" },
-  { code: "STD", label: "STD - Standard" },
-  { code: "DMG", label: "DMG - Damage" },
-  { code: "QUA", label: "QUA - Quarantine" },
-  { code: "HLD", label: "HLD - Hold" },
+  { code: "GOOD", label: "GOOD - GOOD" },
+  { code: "DMG",  label: "DMG - DAMAGE" },
+  { code: "RTRN", label: "RTRN - RETURN" },
 ];
 
 type AdjustForm = {
@@ -54,7 +52,7 @@ type AdjustForm = {
 type BatchRow = AdjustForm & { _status?: "pending" | "ok" | "error"; _msg?: string };
 
 function blankForm(warehouseCode = "", warehouseCd = "", customerCode = ""): AdjustForm {
-  return { warehouseCode, warehouseCd, customerCode, locationCode: "", condition: "NOR", sku: "", productName: "", currentQty: 0, adjustQty: "", lotNo: "", expireDate: "", serialNo: "", remark: "" };
+  return { warehouseCode, warehouseCd, customerCode, locationCode: "", condition: "GOOD", sku: "", productName: "", currentQty: 0, adjustQty: "", lotNo: "", expireDate: "", serialNo: "", remark: "" };
 }
 
 // ────────────────────────────────────────────────
@@ -557,7 +555,7 @@ export default function InventoryPage() {
         warehouseCd:   wh?.cd ?? "",
         customerCode:  get("Customer Code", "Customer", "customerCode", "customer_code"),
         locationCode:  get("Location", "locationCode", "location_code"),
-        condition:     get("Condition", "itemCondition", "condition") || "NOR",
+        condition:     get("Condition", "itemCondition", "condition") || "GOOD",
         sku:           get("SKU", "productSku", "sku", "Product SKU"),
         productName:   get("Product Name", "productName", "product_name"),
         currentQty:    0,
@@ -1023,7 +1021,7 @@ export default function InventoryPage() {
                         "e.g. FCOKR (code, not name)",
                         "e.g. STOO1 (optional)",
                         "Zone-Aisle-Bay-Level-Pos  e.g. 01-31-23-01-01",
-                        "NOR / STD / DMG / QUA / HLD",
+                        "GOOD / DMG / RTRN",
                         "Product SKU",
                         "Optional",
                         "+N to add, -N to remove",
