@@ -95,6 +95,9 @@ const TASK_TYPES = [
   "FBA Labeling",
   "FBA Repacking",
   "Supplies",
+  "Labor Hours",
+  "Labor Hours (OT)",
+  "Labor Hours (Weekend/Holiday)",
 ] as const;
 
 type TaskItem = { type: string; qty: number };

@@ -1629,6 +1629,7 @@ export default function BillingPage() {
         let pickPiece = 0, pickCarton = 0, pickPallet = 0;
         let cartonPacking = 0, palletizing = 0;
         let labelQty = 0, insertQty = 0;
+        let laborRegular = 0, laborOT = 0, laborWeekend = 0;
         const b2bWarnings: string[] = [];
 
         for (const order of list) {
@@ -1639,7 +1640,7 @@ export default function BillingPage() {
           const ppl      = tasks["Picking per Pallet"]   ?? 0;
           const oc       = tasks["Out per Carton"]       ?? 0;
           const op       = tasks["Out per Pallet"]       ?? 0;
-          const supplies = tasks["Supplies"]             ?? 0;  // ← NEW
+          const supplies = tasks["Supplies"]             ?? 0;
 
           pickPiece  += pp;
           pickCarton += pc;
@@ -1657,10 +1658,15 @@ export default function BillingPage() {
           //   1) Out per Carton (when ≠ Picking per Carton — actual repacking)
           //   2) Supplies used → add that qty as additional carton packing
           if (oc > 0 && oc !== pc) cartonPacking += oc;
-          if (supplies > 0) cartonPacking += supplies;   // Supplies → b2b_carton_packing
+          if (supplies > 0) cartonPacking += supplies;
 
           // Palletizing: Out per Pallet UNLESS equals Picking per Pallet
           if (op > 0 && op !== ppl) palletizing += op;
+
+          // Labor Hours → Warehouse Labor billing items
+          laborRegular += tasks["Labor Hours"]                   ?? 0;
+          laborOT      += tasks["Labor Hours (OT)"]              ?? 0;
+          laborWeekend += tasks["Labor Hours (Weekend/Holiday)"] ?? 0;
 
           // Warning: piece-level picking but no outbound container info
           if (pp > 0 && oc === 0 && op === 0 && supplies === 0) {
@@ -1675,9 +1681,13 @@ export default function BillingPage() {
         if (cartonPacking > 0) updates["b2b_carton_packing"]  = cartonPacking;
         if (palletizing   > 0) updates["b2b_palletizing"]     = palletizing;
         if (b2bWarnings.length > 0) source.b2bWarnings = b2bWarnings;
-        // B2B Labels & Inserts → separate B2B line items
-        if (labelQty  > 0) updates["b2b_label"]  = labelQty;
-        if (insertQty > 0) updates["b2b_insert"]  = insertQty;
+        // B2B Labels & Inserts
+        if (labelQty     > 0) updates["b2b_label"]         = labelQty;
+        if (insertQty    > 0) updates["b2b_insert"]        = insertQty;
+        // Labor Hours → Warehouse Labor
+        if (laborRegular > 0) updates["labor_regular"]     = (updates["labor_regular"]     as number ?? 0) + laborRegular;
+        if (laborOT      > 0) updates["labor_ot_weekday"]  = (updates["labor_ot_weekday"]  as number ?? 0) + laborOT;
+        if (laborWeekend > 0) updates["labor_ot_weekend"]  = (updates["labor_ot_weekend"]  as number ?? 0) + laborWeekend;
       }
     } catch {}
 
@@ -1701,18 +1711,24 @@ export default function BillingPage() {
         const extraPicks = listB2C.reduce((s, o) => s + Math.max(0, Number(o.totalQty ?? o.orderQty ?? 0) - 5), 0);
         if (extraPicks > 0) updates["b2c_pick_piece"] = extraPicks;
 
-        // Parse B2C task comments for labels, inserts, fragile
+        // Parse B2C task comments for labels, inserts, fragile, labor
         let b2cLabelQty = 0, b2cInsertQty = 0, b2cFragileQty = 0;
+        let b2cLaborRegular = 0, b2cLaborOT = 0, b2cLaborWeekend = 0;
         for (const order of listB2C) {
           const tasks = parseTaskComment(String(order.comment ?? ""));
-          b2cLabelQty  += (tasks["Labels"] ?? 0) + (tasks["Amazon Labels"] ?? 0) + (tasks["FBA Labeling"] ?? 0);
-          b2cInsertQty += (tasks["Inserts"] ?? 0);
+          b2cLabelQty   += (tasks["Labels"] ?? 0) + (tasks["Amazon Labels"] ?? 0) + (tasks["FBA Labeling"] ?? 0);
+          b2cInsertQty  += (tasks["Inserts"] ?? 0);
           b2cFragileQty += (tasks["Fragile Pack"] ?? 0) + (tasks["Fragile"] ?? 0);
+          b2cLaborRegular += tasks["Labor Hours"]                   ?? 0;
+          b2cLaborOT      += tasks["Labor Hours (OT)"]              ?? 0;
+          b2cLaborWeekend += tasks["Labor Hours (Weekend/Holiday)"] ?? 0;
         }
-        // B2C Labels & Inserts → B2C line items
-        if (b2cLabelQty  > 0) updates["fulfillment_label"]  = (updates["fulfillment_label"]  as number ?? 0) + b2cLabelQty;
-        if (b2cInsertQty > 0) updates["fulfillment_insert"] = (updates["fulfillment_insert"] as number ?? 0) + b2cInsertQty;
-        if (b2cFragileQty > 0) updates["b2c_fragile"] = b2cFragileQty;
+        if (b2cLabelQty    > 0) updates["fulfillment_label"]  = (updates["fulfillment_label"]  as number ?? 0) + b2cLabelQty;
+        if (b2cInsertQty   > 0) updates["fulfillment_insert"] = (updates["fulfillment_insert"] as number ?? 0) + b2cInsertQty;
+        if (b2cFragileQty  > 0) updates["b2c_fragile"] = b2cFragileQty;
+        if (b2cLaborRegular > 0) updates["labor_regular"]    = (updates["labor_regular"]    as number ?? 0) + b2cLaborRegular;
+        if (b2cLaborOT      > 0) updates["labor_ot_weekday"] = (updates["labor_ot_weekday"] as number ?? 0) + b2cLaborOT;
+        if (b2cLaborWeekend > 0) updates["labor_ot_weekend"] = (updates["labor_ot_weekend"] as number ?? 0) + b2cLaborWeekend;
       }
     } catch {}
 
