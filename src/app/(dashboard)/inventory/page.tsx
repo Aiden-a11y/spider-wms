@@ -530,8 +530,17 @@ export default function InventoryPage() {
         headers,
         body: JSON.stringify(payload),
       });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) return { ok: false, msg: json?.message ?? json?.error ?? `HTTP ${res.status}` };
+      const text = await res.text();
+      const json = text ? JSON.parse(text) : {};
+      console.log("[inventory/adjust] status:", res.status, "body:", json);
+      if (!res.ok) {
+        const msg = json?.message ?? json?.error ?? json?.msg ?? JSON.stringify(json) ?? `HTTP ${res.status}`;
+        return { ok: false, msg: `HTTP ${res.status}: ${msg}` };
+      }
+      // Some WMS APIs return success=false even with 200
+      if (json?.success === false || json?.result === false) {
+        return { ok: false, msg: json?.message ?? json?.msg ?? JSON.stringify(json) };
+      }
       return { ok: true, msg: json?.message ?? "Adjustment saved." };
     } catch (e) {
       return { ok: false, msg: String(e) };
@@ -1157,22 +1166,31 @@ export default function InventoryPage() {
                       </thead>
                       <tbody>
                         {batchRows.map((row, i) => (
-                          <tr key={i} className={`border-t border-slate-100 ${row._status === "ok" ? "bg-emerald-50" : row._status === "error" ? "bg-red-50" : ""}`}>
-                            <td className="px-3 py-1.5 whitespace-nowrap">
-                              {row._status === "ok"    && <span className="text-emerald-600 font-semibold">✓ OK</span>}
-                              {row._status === "error" && <span className="text-red-600 font-semibold" title={row._msg}>✗ Err</span>}
-                              {row._status === "pending" && <span className="text-slate-400">—</span>}
-                            </td>
-                            <td className="px-3 py-1.5 font-mono">{row.customerCode}</td>
-                            <td className="px-3 py-1.5 font-mono">{row.warehouseCode}</td>
-                            <td className="px-3 py-1.5 font-mono">{row.locationCode}</td>
-                            <td className="px-3 py-1.5">{row.condition}</td>
-                            <td className="px-3 py-1.5 font-mono">{row.sku}</td>
-                            <td className={`px-3 py-1.5 text-right font-semibold ${Number(row.adjustQty) > 0 ? "text-emerald-600" : "text-red-600"}`}>{row.adjustQty}</td>
-                            <td className="px-3 py-1.5 font-mono text-slate-400">{row.lotNo || "—"}</td>
-                            <td className="px-3 py-1.5 font-mono text-slate-400">{row.expireDate || "—"}</td>
-                            <td className="px-3 py-1.5 text-slate-500 max-w-xs truncate">{row.remark || "—"}</td>
-                          </tr>
+                          <>
+                            <tr key={i} className={`border-t border-slate-100 ${row._status === "ok" ? "bg-emerald-50" : row._status === "error" ? "bg-red-50" : ""}`}>
+                              <td className="px-3 py-1.5 whitespace-nowrap">
+                                {row._status === "ok"      && <span className="text-emerald-600 font-semibold">✓ OK</span>}
+                                {row._status === "error"   && <span className="text-red-600 font-semibold">✗ Err</span>}
+                                {row._status === "pending" && <span className="text-slate-400">—</span>}
+                              </td>
+                              <td className="px-3 py-1.5 font-mono">{row.customerCode}</td>
+                              <td className="px-3 py-1.5 font-mono">{row.warehouseCode}</td>
+                              <td className="px-3 py-1.5 font-mono">{row.locationCode}</td>
+                              <td className="px-3 py-1.5">{row.condition}</td>
+                              <td className="px-3 py-1.5 font-mono">{row.sku}</td>
+                              <td className={`px-3 py-1.5 text-right font-semibold ${Number(row.adjustQty) > 0 ? "text-emerald-600" : "text-red-600"}`}>{row.adjustQty}</td>
+                              <td className="px-3 py-1.5 font-mono text-slate-400">{row.lotNo || "—"}</td>
+                              <td className="px-3 py-1.5 font-mono text-slate-400">{row.expireDate || "—"}</td>
+                              <td className="px-3 py-1.5 text-slate-500 max-w-xs truncate">{row.remark || "—"}</td>
+                            </tr>
+                            {row._status === "error" && row._msg && (
+                              <tr key={`${i}-err`} className="bg-red-50">
+                                <td colSpan={10} className="px-3 pb-2 pt-0">
+                                  <span className="text-xs text-red-600 font-mono bg-red-100 rounded px-2 py-0.5">⚠ {row._msg}</span>
+                                </td>
+                              </tr>
+                            )}
+                          </>
                         ))}
                       </tbody>
                     </table>
