@@ -156,7 +156,6 @@ export default function HistoryPage() {
   }
 
   async function loadSnapshot() {
-    if (!supabase) { setError("Supabase environment variables not configured."); return; }
     setLoading(true);
     setError("");
     setRows([]);
@@ -166,15 +165,15 @@ export default function HistoryPage() {
       loadCustomerMap(warehouseCode),
     ]);
     setOccupancyLookup(occupancy);
-    const { data, error: err } = await supabase
-      .from("inventory_history")
-      .select("*")
-      .eq("captured_date", date)
-      .eq("warehouse_code", warehouseCode)
-      .order("location", { ascending: true });
 
-    if (err) setError(err.message);
-    else setRows(data ?? []);
+    try {
+      const res = await fetch(`/api/inventory-history?date=${encodeURIComponent(date)}&warehouseCode=${encodeURIComponent(warehouseCode)}`);
+      const json = await res.json();
+      if (!res.ok) { setError(json.error ?? `HTTP ${res.status}`); }
+      else setRows((json.data ?? []) as SnapshotRow[]);
+    } catch (e) {
+      setError(String(e));
+    }
     setLoading(false);
   }
 
