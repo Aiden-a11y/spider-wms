@@ -408,6 +408,8 @@ export default function InventoryPage() {
         : Array.isArray(json?.data?.list) ? json.data.list
         : Array.isArray(json?.list) ? json.list
         : Array.isArray(json) ? json : [];
+      // debug: log first item so we can see real field names
+      if (arr.length > 0) console.log("[loc-search] sample row:", arr[0]);
       setLocResults(arr.slice(0, 50));
       setLocDropOpen(arr.length > 0);
     } catch { setLocResults([]); setLocDropOpen(false); }
@@ -421,8 +423,24 @@ export default function InventoryPage() {
     locDebounce.current = setTimeout(() => searchLocations(val, adjustForm.warehouseCode), 300);
   }
 
+  function getLocCode(loc: LocResult): string {
+    // Try all known field name variants
+    const direct = loc.locationCode ?? loc.locationCd ?? loc.locCode ?? loc.locCd ??
+      loc.code ?? loc.location ?? loc.locationName ?? loc.name ?? loc.loc ?? "";
+    if (direct) return String(direct);
+    // Construct from parts: aisle-bay-level-position
+    const parts = [
+      loc.aisle ?? loc.aisleNo ?? loc.aisleName,
+      loc.bay   ?? loc.bayNo   ?? loc.bayName,
+      loc.level ?? loc.levelNo ?? loc.levelName,
+      loc.position ?? loc.positionNo ?? loc.positionName,
+    ].filter(Boolean);
+    if (parts.length > 0) return parts.join("-");
+    return "";
+  }
+
   function selectLocation(loc: LocResult) {
-    const code = String(loc.locationCode ?? loc.code ?? loc.location ?? "");
+    const code = getLocCode(loc);
     setLocSearch(code);
     setAdjustForm((f) => ({ ...f, locationCode: code }));
     setLocDropOpen(false);
@@ -796,8 +814,14 @@ export default function InventoryPage() {
                     {locDropOpen && locResults.length > 0 && (
                       <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-52 overflow-y-auto">
                         {locResults.map((loc, i) => {
-                          const code = String(loc.locationCode ?? loc.code ?? loc.location ?? "");
-                          const parts = [loc.zone, loc.aisle, loc.bay, loc.level, loc.position].filter(Boolean).join("-");
+                          const code = getLocCode(loc);
+                          const parts = [
+                            loc.zone ?? loc.zoneName,
+                            loc.aisle ?? loc.aisleNo ?? loc.aisleName,
+                            loc.bay   ?? loc.bayNo   ?? loc.bayName,
+                            loc.level ?? loc.levelNo ?? loc.levelName,
+                            loc.position ?? loc.positionNo ?? loc.positionName,
+                          ].filter(Boolean).join("-");
                           return (
                             <button
                               key={i}
