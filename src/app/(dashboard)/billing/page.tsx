@@ -1255,16 +1255,46 @@ export default function BillingPage() {
       const { supabase } = await import("@/lib/supabase");
       if (!supabase) throw new Error("Supabase not configured");
 
-      const fetchSnap = async (date: string): Promise<{ data: Record<string, number>; totalRows: number; matchedRows: number }> => {
+      // Helper: find nearest available snapshot date (±7 days from target)
+      const findNearestDate = async (targetDate: string): Promise<string | null> => {
+        const target = new Date(targetDate);
+        // Get all distinct dates for this warehouse+customer in ±7 day window
+        const from = new Date(target); from.setDate(from.getDate() - 7);
+        const to   = new Date(target); to.setDate(to.getDate() + 7);
+        const fromStr = from.toISOString().slice(0, 10);
+        const toStr   = to.toISOString().slice(0, 10);
+        const { data: dates } = await supabase!
+          .from("inventory_history")
+          .select("captured_date")
+          .eq("warehouse_code", whCode)
+          .eq("customer_code", editing!.customer)
+          .gte("captured_date", fromStr)
+          .lte("captured_date", toStr)
+          .order("captured_date", { ascending: true });
+        if (!dates || dates.length === 0) return null;
+        // Find the date with minimum absolute distance to target
+        const unique = Array.from(new Set(dates.map((r: Record<string, string>) => r.captured_date as string)));
+        let best = unique[0];
+        let bestDist = Math.abs(new Date(best).getTime() - target.getTime());
+        for (const d of unique) {
+          const dist = Math.abs(new Date(d).getTime() - target.getTime());
+          if (dist < bestDist) { best = d; bestDist = dist; }
+        }
+        return best;
+      };
+
+      const fetchSnap = async (date: string): Promise<{ data: Record<string, number>; totalRows: number; matchedRows: number; actualDate: string }> => {
+        // Try exact date first, then nearest
+        const actualDate = await findNearestDate(date) ?? date;
         const { data, error } = await supabase!
           .from("inventory_history")
           .select("location")
-          .eq("captured_date", date)
+          .eq("captured_date", actualDate)
           .eq("warehouse_code", whCode)
           .eq("customer_code", editing!.customer);
 
-        if (error) throw new Error(`Supabase error (${date}): ${error.message}`);
-        if (!data || data.length === 0) return { data: {}, totalRows: 0, matchedRows: 0 };
+        if (error) throw new Error(`Supabase error (${actualDate}): ${error.message}`);
+        if (!data || data.length === 0) return { data: {}, totalRows: 0, matchedRows: 0, actualDate };
 
         // Count distinct locations per storage type using the same wms.ts lookup
         const locSets: Record<string, Set<string>> = {};
@@ -1284,7 +1314,7 @@ export default function BillingPage() {
         }
         const result: Record<string, number> = {};
         for (const [k, s] of Object.entries(locSets)) result[k] = s.size;
-        return { data: result, totalRows: data.length, matchedRows };
+        return { data: result, totalRows: data.length, matchedRows, actualDate };
       };
 
       const [snap15, snapLast] = await Promise.all([
@@ -1294,7 +1324,7 @@ export default function BillingPage() {
 
       // Always store debug info
       setStorageHistoryDebug({
-        date15, dateLast,
+        date15: snap15.actualDate, dateLast: snap15.actualDate !== date15 ? `${snap15.actualDate} (nearest to ${date15})` : date15,
         rows15: snap15.totalRows,    rowsLast: snapLast.totalRows,
         matched15: snap15.matchedRows, matchedLast: snapLast.matchedRows,
       });
@@ -1303,15 +1333,17 @@ export default function BillingPage() {
       const totalLast = Object.values(snapLast.data).reduce((s, v) => s + v, 0);
 
       if (snap15.totalRows === 0 && snapLast.totalRows === 0) {
-        setStorageHistoryError(`No snapshot found for ${editing.customer} on ${date15} or ${dateLast}.`);
+        setStorageHistoryError(`No snapshot found for ${editing.customer} near ${date15} or ${dateLast} (searched ±7 days). Please run Save Now in the History page.`);
       } else if (total15 === 0 && totalLast === 0) {
         setStorageHistoryError(
-          `Snapshots found (${date15}: ${snap15.totalRows} rows, ${dateLast}: ${snapLast.totalRows} rows) but 0 locations matched a known type. ` +
+          `Snapshots found (${snap15.actualDate}: ${snap15.totalRows} rows, ${snapLast.actualDate}: ${snapLast.totalRows} rows) but 0 locations matched a known type. ` +
           `The WMS location list returned ${locArr.length} locations (${occupancyLookup.size} with occupancyInfo).`
         );
       } else {
-        setStorage15({ data: snap15.data,   file: `WMS History · ${date15}` });
-        setStorageLast({ data: snapLast.data, file: `WMS History · ${dateLast}` });
+        const label15   = snap15.actualDate   !== date15   ? `WMS History · ${snap15.actualDate} (nearest to ${date15})`   : `WMS History · ${date15}`;
+        const labelLast = snapLast.actualDate !== dateLast ? `WMS History · ${snapLast.actualDate} (nearest to ${dateLast})` : `WMS History · ${dateLast}`;
+        setStorage15({ data: snap15.data,   file: label15 });
+        setStorageLast({ data: snapLast.data, file: labelLast });
       }
     } catch (e) {
       setStorageHistoryError(e instanceof Error ? e.message : "Failed to load history data");
