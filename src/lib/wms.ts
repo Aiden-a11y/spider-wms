@@ -119,6 +119,7 @@ export interface Warehouse {
   id: string;
   name: string;
   code?: string;
+  cd?: string;  // internal warehouse ID (e.g. "W2026032400000002")
 }
 
 export function buildLocationTree(items: InventoryItem[]): Record<string, LocationNode> {

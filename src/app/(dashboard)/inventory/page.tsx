@@ -37,22 +37,24 @@ const CONDITIONS = [
 
 type AdjustForm = {
   warehouseCode: string;
+  warehouseCd: string;      // internal warehouse ID e.g. "W2026032400000002"
   customerCode: string;
   locationCode: string;
-  condition: string;
-  sku: string;
+  condition: string;        // → itemCondition in payload
+  sku: string;              // → productSku in payload
   productName: string;
   currentQty: number;
   adjustQty: string;
   lotNo: string;
   expireDate: string;
+  serialNo: string;
   remark: string;
 };
 
 type BatchRow = AdjustForm & { _status?: "pending" | "ok" | "error"; _msg?: string };
 
-function blankForm(warehouseCode = "", customerCode = ""): AdjustForm {
-  return { warehouseCode, customerCode, locationCode: "", condition: "NOR", sku: "", productName: "", currentQty: 0, adjustQty: "", lotNo: "", expireDate: "", remark: "" };
+function blankForm(warehouseCode = "", warehouseCd = "", customerCode = ""): AdjustForm {
+  return { warehouseCode, warehouseCd, customerCode, locationCode: "", condition: "NOR", sku: "", productName: "", currentQty: 0, adjustQty: "", lotNo: "", expireDate: "", serialNo: "", remark: "" };
 }
 
 // ────────────────────────────────────────────────
@@ -145,6 +147,7 @@ export default function InventoryPage() {
           id: String(w.code ?? w.id ?? w.warehouseId ?? ""),
           name: String(w.name ?? w.warehouseName ?? w.code ?? ""),
           code: String(w.code ?? ""),
+          cd: String(w.id ?? w.warehouseId ?? w.warehouseCd ?? w.cd ?? ""),
         })).filter((w) => w.id);
         setWarehouses(list);
         if (list.length > 0) {
@@ -414,17 +417,19 @@ export default function InventoryPage() {
     }
     const payload: Record<string, unknown> = {
       warehouseCode: form.warehouseCode,
-      customerCode: form.customerCode,
-      locationCode: form.locationCode,
-      condition: form.condition,
-      sku: form.sku || undefined,
-      productName: form.productName || undefined,
-      adjustQty: adjustQtyNum,
-      lotNo: form.lotNo || undefined,
-      expireDate: form.expireDate ? form.expireDate.replace(/-/g, "") : undefined,
-      remark: form.remark || undefined,
+      warehouseCd:   form.warehouseCd || undefined,
+      customerCode:  form.customerCode,
+      locationCode:  form.locationCode || undefined,
+      itemCondition: form.condition,
+      productSku:    form.sku || undefined,
+      adjustQty:     adjustQtyNum,
+      adjustType:    "N",
+      lotNo:         form.lotNo || "",
+      expireDate:    form.expireDate ? form.expireDate.replace(/-/g, "") : "",
+      serialNo:      form.serialNo || "",
+      remark:        form.remark || "",
     };
-    // strip undefined
+    // strip undefined (but keep empty strings — API expects them)
     Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
     try {
       const res = await fetch("/api/wms/inventory/adjust", {
@@ -471,17 +476,21 @@ export default function InventoryPage() {
       } else if (/^\d{8}$/.test(rawDate)) {
         expDate = `${rawDate.slice(0,4)}-${rawDate.slice(4,6)}-${rawDate.slice(6,8)}`;
       }
+      const whCode = get("Warehouse", "warehouseCode", "warehouse_code") || warehouseCode;
+      const wh = warehouses.find((w) => w.id === whCode);
       return {
-        warehouseCode: get("Warehouse", "warehouseCode", "warehouse_code") || warehouseCode,
+        warehouseCode: whCode,
+        warehouseCd:   wh?.cd ?? "",
         customerCode:  get("Customer", "customerCode", "customer_code"),
         locationCode:  get("Location", "locationCode", "location_code"),
-        condition:     get("Condition", "condition") || "NOR",
-        sku:           get("SKU", "sku", "Product SKU"),
+        condition:     get("Condition", "itemCondition", "condition") || "NOR",
+        sku:           get("SKU", "productSku", "sku", "Product SKU"),
         productName:   get("Product Name", "productName", "product_name"),
         currentQty:    0,
         adjustQty:     get("Adjust Qty", "adjustQty", "adjust_qty", "Qty"),
         lotNo:         get("Lot No", "lotNo", "lot_no", "LOT"),
         expireDate:    expDate,
+        serialNo:      get("Serial No", "serialNo", "serial_no"),
         remark:        get("Remark", "remark", "Reason"),
         _status: "pending" as const,
       };
@@ -512,7 +521,7 @@ export default function InventoryPage() {
         <h1 className="text-xl font-bold text-slate-900">Inventory</h1>
         <div className="flex items-center gap-2 ml-auto">
           <button
-            onClick={() => { setAdjustForm(blankForm(warehouseCode, customerCode === "ALL" ? "" : customerCode)); setAdjustResult(null); setAdjustOpen(true); }}
+            onClick={() => { const wh = warehouses.find((w) => w.id === warehouseCode); setAdjustForm(blankForm(warehouseCode, wh?.cd ?? "", customerCode === "ALL" ? "" : customerCode)); setAdjustResult(null); setAdjustOpen(true); }}
             className="flex items-center gap-1.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg px-3 py-2 transition-colors"
           >
             <Plus className="w-4 h-4" />
@@ -687,7 +696,7 @@ export default function InventoryPage() {
                     </label>
                     <select
                       value={adjustForm.warehouseCode}
-                      onChange={(e) => setAdjustForm((f) => ({ ...f, warehouseCode: e.target.value, customerCode: "" }))}
+                      onChange={(e) => { const wh = warehouses.find((w) => w.id === e.target.value); setAdjustForm((f) => ({ ...f, warehouseCode: e.target.value, warehouseCd: wh?.cd ?? "", customerCode: "" })); }}
                       className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="">-- Select --</option>
