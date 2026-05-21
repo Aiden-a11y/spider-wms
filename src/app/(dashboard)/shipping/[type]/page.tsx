@@ -932,6 +932,153 @@ export default function ShippingTypePage() {
     if (win) { win.document.write(html); win.document.close(); }
   }
 
+  // ── Picking Labels — one 4×6 label per pick location ──────────────────────
+  function printPickingLabels() {
+    const codes    = Object.keys(selectedCodes).filter((k) => selectedCodes[k]);
+    const custName = customers.find((c) => c.code === customerCode)?.name ?? customerCode ?? warehouseCode;
+    const dateStr  = new Date().toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+    const now      = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+
+    const labels = allocRows.map((row, i) => {
+      const upc     = uomMap[row.sku] ?? 0;
+      const cartons = upc > 0 ? Math.ceil(row.totalQty / upc) : null;
+
+      // Order breakdown lines (when merged from multiple orders)
+      const isShared = Object.keys(row.perOrder).length > 1;
+      const orderLines = isShared
+        ? codes.filter((c) => row.perOrder[c] != null).map((c) => {
+            const oIdx = codes.indexOf(c);
+            const qty  = row.perOrder[c]!;
+            const ctn  = upc > 0 ? Math.ceil(qty / upc) : null;
+            return `<div style="font-size:9pt;margin-top:2pt;padding-left:8pt">
+              #${oIdx + 1} ${c.slice(-8)}: <b>${qty.toLocaleString()} EA${ctn != null ? ` / ${ctn} CTN` : ""}</b>
+            </div>`;
+          }).join("")
+        : "";
+
+      // QR: location + SKU
+      const qrData = encodeURIComponent(`${row.location}\n${row.sku}${row.lot ? "\nLOT:" + row.lot : ""}${row.expDate ? "\nEXP:" + row.expDate : ""}`);
+      const qrUrl  = `https://api.qrserver.com/v1/create-qr-code/?size=100x100&margin=2&color=000000&bgcolor=ffffff&data=${qrData}`;
+
+      const orderNos = codes.map((c, idx) => `<div style="font-size:8pt;font-family:'Courier New',monospace">#${idx+1} ${c}</div>`).join("");
+
+      return `
+<div class="label-page">
+
+  <!-- ── Top bar: Label # and client ── -->
+  <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:2pt solid #000;padding-bottom:4pt;margin-bottom:6pt">
+    <div>
+      <div style="font-size:8pt;color:#555">Pick Label ${i + 1} / ${allocRows.length}</div>
+      <div style="font-size:9pt;font-weight:bold">${custName}</div>
+    </div>
+    <div style="font-size:8pt;color:#555;text-align:right">${dateStr}</div>
+  </div>
+
+  <!-- ── Location (large, most important) ── -->
+  <div style="border:2pt solid #000;border-radius:4pt;padding:6pt 8pt;margin-bottom:6pt;text-align:center">
+    <div style="font-size:8pt;color:#555;text-transform:uppercase;letter-spacing:1pt;margin-bottom:2pt">LOCATION</div>
+    <div style="font-size:22pt;font-weight:bold;font-family:'Courier New',monospace;letter-spacing:1pt">${row.location || "—"}</div>
+  </div>
+
+  <!-- ── SKU / Product ── -->
+  <div style="margin-bottom:5pt">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6pt">
+      <div style="flex:1">
+        <div style="font-size:7pt;color:#555;text-transform:uppercase;letter-spacing:0.5pt">SKU</div>
+        <div style="font-size:13pt;font-weight:bold;font-family:'Courier New',monospace">${row.sku || "—"}</div>
+        ${row.productName ? `<div style="font-size:8pt;color:#333;margin-top:1pt">${row.productName}</div>` : ""}
+      </div>
+      <img src="${qrUrl}" width="72" height="72" style="border:1pt solid #ccc;flex-shrink:0" onerror="this.style.display='none'"/>
+    </div>
+  </div>
+
+  <!-- ── LOT / EXP ── -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:4pt;margin-bottom:5pt">
+    <div style="border:1pt solid #ccc;border-radius:3pt;padding:4pt 6pt">
+      <div style="font-size:7pt;color:#555;text-transform:uppercase;letter-spacing:0.5pt">LOT</div>
+      <div style="font-size:11pt;font-weight:bold;font-family:'Courier New',monospace">${row.lot || "—"}</div>
+    </div>
+    <div style="border:1pt solid #ccc;border-radius:3pt;padding:4pt 6pt">
+      <div style="font-size:7pt;color:#555;text-transform:uppercase;letter-spacing:0.5pt">EXP DATE</div>
+      <div style="font-size:11pt;font-weight:bold;font-family:'Courier New',monospace">${row.expDate || "—"}</div>
+    </div>
+  </div>
+
+  <!-- ── Qty (large) ── -->
+  <div style="border:2pt solid #000;border-radius:4pt;padding:5pt 8pt;margin-bottom:5pt;text-align:center">
+    <div style="font-size:7pt;color:#555;text-transform:uppercase;letter-spacing:0.5pt;margin-bottom:1pt">PICK QTY</div>
+    <div style="font-size:20pt;font-weight:bold">${row.totalQty.toLocaleString()} EA${cartons != null ? `  <span style="font-size:14pt">/ ${cartons} CTN</span>` : ""}</div>
+    ${upc > 0 ? `<div style="font-size:8pt;color:#555">${upc} ea/ctn</div>` : ""}
+  </div>
+
+  ${isShared ? `
+  <!-- ── Per-order breakdown ── -->
+  <div style="border:1pt solid #ccc;border-radius:3pt;padding:4pt 8pt;margin-bottom:5pt">
+    <div style="font-size:7pt;color:#555;text-transform:uppercase;letter-spacing:0.5pt;margin-bottom:2pt">ORDER BREAKDOWN</div>
+    ${orderLines}
+  </div>` : ""}
+
+  <!-- ── Order nos ── -->
+  <div style="border-top:1pt solid #ccc;padding-top:4pt;margin-top:auto">
+    <div style="font-size:7pt;color:#555;text-transform:uppercase;letter-spacing:0.5pt;margin-bottom:1pt">ORDER NO.</div>
+    ${orderNos}
+  </div>
+
+  <!-- ── Sign ── -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:6pt;margin-top:5pt">
+    <div><div style="border-top:1pt solid #000;margin-bottom:2pt"></div><div style="font-size:8pt;color:#555">Picker</div></div>
+    <div><div style="border-top:1pt solid #000;margin-bottom:2pt"></div><div style="font-size:8pt;color:#555">Checked</div></div>
+  </div>
+
+</div>`;
+    }).join("\n");
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Picking Labels · ${dateStr}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Arial,Helvetica,sans-serif;font-size:9pt;color:#000;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+
+  @page{size:4in 6in;margin:4mm 5mm}
+
+  .label-page{
+    width:100%;
+    min-height:calc(6in - 8mm);
+    page-break-after:always;
+    display:flex;
+    flex-direction:column;
+  }
+  .label-page:last-child{page-break-after:auto}
+
+  @media screen{
+    .print-bar{background:#1e293b;padding:8px 16px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:99}
+    .print-btn{background:#333;color:#fff;border:none;padding:6px 18px;border-radius:5px;font-size:12px;font-weight:bold;cursor:pointer}
+    .print-btn:hover{background:#000}
+    .hint{color:#94a3b8;font-size:10px}
+    .label-page{width:4in;margin:20px auto;background:#fff;padding:4mm 5mm;box-shadow:0 2px 16px rgba(0,0,0,.2);border-radius:4px}
+  }
+  @media print{
+    .print-bar{display:none!important}
+    .label-page{width:100%;margin:0;padding:0;box-shadow:none;border-radius:0}
+  }
+</style>
+</head>
+<body>
+<div class="print-bar">
+  <button class="print-btn" onclick="window.print()">Print Labels (4×6)</button>
+  <span class="hint">${allocRows.length} labels · Paper: 4×6 in · Margins: None · Scale: 100%</span>
+</div>
+${labels}
+</body>
+</html>`;
+
+    const win = window.open("", "_blank", "width=500,height=860");
+    if (win) { win.document.write(html); win.document.close(); }
+  }
+
   function addTaskItem() {
     if (!taskType || !taskQty || Number(taskQty) <= 0) return;
     setTaskItems((prev) => {
@@ -1958,6 +2105,11 @@ export default function ShippingTypePage() {
                       className="flex items-center gap-2 text-sm font-medium text-white bg-slate-700 hover:bg-slate-900 rounded-lg px-3 py-2 transition-colors shadow-sm">
                       <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
                       Print Ticket (PDF)
+                    </button>
+                    <button onClick={printPickingLabels}
+                      className="flex items-center gap-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg px-3 py-2 transition-colors shadow-sm">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="10" y1="14" x2="14" y2="14"/></svg>
+                      Picking Labels
                     </button>
                     <button onClick={exportAllocExcel}
                       className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors">
