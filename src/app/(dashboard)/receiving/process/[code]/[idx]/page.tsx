@@ -119,6 +119,7 @@ export default function ReceivingInspectPage() {
                   qty: t.qty,
                   warehouseCode: t.warehouseCode || undefined,
                   customerCode: t.customerCode || undefined,
+                  tagNo: t.tagNo,
                 },
               })));
             }
@@ -164,6 +165,7 @@ export default function ReceivingInspectPage() {
       qty: Number(tagQty),
       warehouseCode: warehouseCode || undefined,
       customerCode: customerCode || undefined,
+      tagNo,
     };
 
     const newTag: StowTag = {
@@ -262,15 +264,24 @@ export default function ReceivingInspectPage() {
         </div>
       )}
 
-      {/* Print CSS */}
+      {/* Print CSS — Zebra ZD420 4×6 */}
       <style jsx global>{`
         @media print {
+          @page { size: 4in 6in; margin: 0; }
           body > * { visibility: hidden; }
           #stow-print-area,
           #stow-print-area * { visibility: visible; }
           #stow-print-area {
             position: fixed;
             top: 0; left: 0;
+            width: 4in;
+            height: 6in;
+          }
+          #stow-print-area .label-card {
+            width: 4in !important;
+            min-height: 6in !important;
+            box-shadow: none !important;
+            border: none !important;
           }
         }
         @media screen {

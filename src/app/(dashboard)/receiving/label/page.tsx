@@ -59,25 +59,22 @@ function LabelContent() {
         <BarcodeLabel data={data} />
       </div>
 
-      {/* Print styles */}
+      {/* Print styles — Zebra ZD420 4×6 */}
       <style jsx global>{`
         @media print {
-          body * {
-            visibility: hidden;
-          }
+          @page { size: 4in 6in; margin: 0; }
+          body * { visibility: hidden; }
           .label-card,
-          .label-card * {
-            visibility: visible;
-          }
+          .label-card * { visibility: visible; }
           .label-card {
             position: fixed;
-            top: 0;
-            left: 0;
+            top: 0; left: 0;
+            width: 4in !important;
+            min-height: 6in !important;
+            box-shadow: none !important;
             border: none !important;
           }
-          .no-print {
-            display: none !important;
-          }
+          .no-print { display: none !important; }
         }
       `}</style>
     </div>

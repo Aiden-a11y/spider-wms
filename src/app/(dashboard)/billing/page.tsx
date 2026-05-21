@@ -2341,7 +2341,7 @@ export default function BillingPage() {
                 </div>
 
                 {/* Table area */}
-                <div className="overflow-x-auto" style={{ maxHeight: "32rem" }}>
+                <div className="overflow-y-auto" style={{ maxHeight: "32rem" }}>
                   {/* ── Inbound ── */}
                   {sourceTab === "receiving" && (
                     wmsSource.receiving.length === 0 ? (
@@ -2434,7 +2434,7 @@ export default function BillingPage() {
                     wmsSource.b2b.length === 0 ? (
                       <p className="text-center text-sm text-slate-400 py-8">No B2B orders this period</p>
                     ) : (
-                      <div>
+                      <div className="overflow-x-scroll">
                         {/* Warning banner */}
                         {(wmsSource.b2bWarnings?.length ?? 0) > 0 && (
                           <div className="flex items-start gap-2 bg-amber-50 border-b border-amber-200 px-4 py-2.5 text-xs text-amber-700">
@@ -2445,7 +2445,7 @@ export default function BillingPage() {
                             </span>
                           </div>
                         )}
-                        <table className="w-full text-xs">
+                        <table className="w-full text-xs min-w-max">
                           <thead className="bg-slate-50 sticky top-0">
                             <tr>
                               <th className="px-3 py-2 text-left text-slate-500 font-semibold">Order Code</th>
@@ -2460,6 +2460,9 @@ export default function BillingPage() {
                               <th className="px-3 py-2 text-right text-slate-500 font-semibold">Palletize✓</th>
                               <th className="px-3 py-2 text-right text-violet-500 font-semibold">Labels</th>
                               <th className="px-3 py-2 text-right text-violet-500 font-semibold">Inserts</th>
+                              <th className="px-3 py-2 text-right text-orange-500 font-semibold">Labor Hrs</th>
+                              <th className="px-3 py-2 text-right text-orange-500 font-semibold">Labor OT</th>
+                              <th className="px-3 py-2 text-right text-orange-500 font-semibold">Labor Wknd</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -2477,6 +2480,9 @@ export default function BillingPage() {
                               const palletizeCharged = op > 0 && op !== ppl;
                               const warn = pp > 0 && oc === 0 && op === 0 && supplies === 0;
                               const packingTotal = (oc > 0 && oc !== pc ? oc : 0) + supplies;
+                              const lh   = tasks["Labor Hours"]              ?? 0;
+                              const lhOT = tasks["Labor Hours (OT)"]         ?? 0;
+                              const lhWk = tasks["Labor Hours (Weekend/Holiday)"] ?? 0;
                               return (
                                 <tr key={i} className={`border-b border-slate-50 ${warn ? "bg-amber-50" : ""}`}>
                                   <td className="px-3 py-1.5 font-mono text-emerald-600">
@@ -2501,6 +2507,15 @@ export default function BillingPage() {
                                   </td>
                                   <td className="px-3 py-1.5 text-right font-semibold">
                                     {inserts > 0 ? <span className="text-violet-600">{inserts}</span> : "—"}
+                                  </td>
+                                  <td className="px-3 py-1.5 text-right font-semibold">
+                                    {lh > 0 ? <span className="text-orange-600">{lh}</span> : "—"}
+                                  </td>
+                                  <td className="px-3 py-1.5 text-right font-semibold">
+                                    {lhOT > 0 ? <span className="text-orange-600">{lhOT}</span> : "—"}
+                                  </td>
+                                  <td className="px-3 py-1.5 text-right font-semibold">
+                                    {lhWk > 0 ? <span className="text-orange-600">{lhWk}</span> : "—"}
                                   </td>
                                 </tr>
                               );
@@ -2528,6 +2543,15 @@ export default function BillingPage() {
                               </td>
                               <td className="px-3 py-1.5 text-right text-violet-700">
                                 {wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Inserts"] ?? 0), 0) || "—"}
+                              </td>
+                              <td className="px-3 py-1.5 text-right text-orange-700">
+                                {wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Labor Hours"] ?? 0), 0) || "—"}
+                              </td>
+                              <td className="px-3 py-1.5 text-right text-orange-700">
+                                {wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Labor Hours (OT)"] ?? 0), 0) || "—"}
+                              </td>
+                              <td className="px-3 py-1.5 text-right text-orange-700">
+                                {wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Labor Hours (Weekend/Holiday)"] ?? 0), 0) || "—"}
                               </td>
                             </tr>
                           </tbody>
