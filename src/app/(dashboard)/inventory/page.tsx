@@ -16,7 +16,44 @@ import {
   AlertCircle,
   Package,
   Download,
+  Plus,
+  Upload,
+  X,
+  CheckCircle2,
+  Loader2,
 } from "lucide-react";
+
+// ────────────────────────────────────────────────
+// Adjust / Batch-upload types
+// ────────────────────────────────────────────────
+
+const CONDITIONS = [
+  { code: "NOR", label: "NOR - Normal" },
+  { code: "STD", label: "STD - Standard" },
+  { code: "DMG", label: "DMG - Damage" },
+  { code: "QUA", label: "QUA - Quarantine" },
+  { code: "HLD", label: "HLD - Hold" },
+];
+
+type AdjustForm = {
+  warehouseCode: string;
+  customerCode: string;
+  locationCode: string;
+  condition: string;
+  sku: string;
+  productName: string;
+  currentQty: number;
+  adjustQty: string;
+  lotNo: string;
+  expireDate: string;
+  remark: string;
+};
+
+type BatchRow = AdjustForm & { _status?: "pending" | "ok" | "error"; _msg?: string };
+
+function blankForm(warehouseCode = "", customerCode = ""): AdjustForm {
+  return { warehouseCode, customerCode, locationCode: "", condition: "NOR", sku: "", productName: "", currentQty: 0, adjustQty: "", lotNo: "", expireDate: "", remark: "" };
+}
 
 // ────────────────────────────────────────────────
 // Main page
@@ -46,6 +83,19 @@ export default function InventoryPage() {
     endpoint?: string;
     status?: number;
   }>({});
+
+  // ── Add Stock modal ──
+  const [adjustOpen, setAdjustOpen] = useState(false);
+  const [adjustForm, setAdjustForm] = useState<AdjustForm>(() => blankForm());
+  const [adjustSubmitting, setAdjustSubmitting] = useState(false);
+  const [adjustResult, setAdjustResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [qtyFetching, setQtyFetching] = useState(false);
+
+  // ── Batch upload modal ──
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [batchRows, setBatchRows] = useState<BatchRow[]>([]);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchDone, setBatchDone] = useState(false);
 
   const headers = useMemo(
     () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
@@ -331,29 +381,167 @@ export default function InventoryPage() {
     [filteredItems]
   );
 
+  // ── Fetch current qty for a given location + sku ──
+  async function fetchCurrentQty(form: AdjustForm) {
+    if (!form.warehouseCode || !form.locationCode || !form.sku) return;
+    setQtyFetching(true);
+    try {
+      const res = await fetch("/api/wms/inventory/detail", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ warehouseCode: form.warehouseCode, customerCode: form.customerCode, locationCode: form.locationCode, sku: form.sku }),
+      });
+      const json = await res.json();
+      const arr: Record<string, unknown>[] = Array.isArray(json?.data) ? json.data : Array.isArray(json?.data?.list) ? json.data.list : Array.isArray(json) ? json : [];
+      const match = arr.find((r) =>
+        String(r.sku ?? r.productSku ?? "").toUpperCase() === form.sku.toUpperCase() &&
+        String(r.locationCode ?? r.location ?? "").toUpperCase() === form.locationCode.toUpperCase()
+      );
+      const qty = Number(match?.qty ?? match?.quantity ?? 0);
+      setAdjustForm((f) => ({ ...f, currentQty: qty }));
+    } catch { /* ignore */ }
+    setQtyFetching(false);
+  }
+
+  // ── Submit single adjustment ──
+  async function submitAdjust(form: AdjustForm): Promise<{ ok: boolean; msg: string }> {
+    const adjustQtyNum = Number(form.adjustQty);
+    if (!form.warehouseCode || !form.customerCode || !form.locationCode || !form.condition) {
+      return { ok: false, msg: "Warehouse, Customer, Location, Condition are required." };
+    }
+    if (!form.adjustQty || isNaN(adjustQtyNum) || adjustQtyNum === 0) {
+      return { ok: false, msg: "Adjust Qty must be a non-zero number." };
+    }
+    const payload: Record<string, unknown> = {
+      warehouseCode: form.warehouseCode,
+      customerCode: form.customerCode,
+      locationCode: form.locationCode,
+      condition: form.condition,
+      sku: form.sku || undefined,
+      productName: form.productName || undefined,
+      adjustQty: adjustQtyNum,
+      lotNo: form.lotNo || undefined,
+      expireDate: form.expireDate ? form.expireDate.replace(/-/g, "") : undefined,
+      remark: form.remark || undefined,
+    };
+    // strip undefined
+    Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
+    try {
+      const res = await fetch("/api/wms/inventory/adjust", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) return { ok: false, msg: json?.message ?? json?.error ?? `HTTP ${res.status}` };
+      return { ok: true, msg: json?.message ?? "Adjustment saved." };
+    } catch (e) {
+      return { ok: false, msg: String(e) };
+    }
+  }
+
+  // ── Handle single modal submit ──
+  async function handleAdjustSubmit() {
+    setAdjustSubmitting(true);
+    setAdjustResult(null);
+    const result = await submitAdjust(adjustForm);
+    setAdjustResult(result);
+    setAdjustSubmitting(false);
+    if (result.ok) {
+      // refresh inventory after short delay
+      setTimeout(() => loadInventory(), 800);
+    }
+  }
+
+  // ── Parse Excel for batch upload ──
+  async function handleBatchFile(file: File) {
+    const { read, utils } = await import("xlsx");
+    const buf = await file.arrayBuffer();
+    const wb = read(buf, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const raw: Record<string, unknown>[] = utils.sheet_to_json(ws, { defval: "" });
+    const rows: BatchRow[] = raw.map((r) => {
+      const get = (...keys: string[]) => String(keys.map((k) => r[k] ?? r[k.toLowerCase()] ?? r[k.toUpperCase()] ?? "").find((v) => v !== "") ?? "");
+      const rawDate = get("Expire Date", "ExpireDate", "expireDate", "expire_date");
+      // Convert MM/DD/YYYY → YYYY-MM-DD
+      let expDate = rawDate;
+      if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(rawDate)) {
+        const [m, d, y] = rawDate.split("/");
+        expDate = `${y}-${m.padStart(2,"0")}-${d.padStart(2,"0")}`;
+      } else if (/^\d{8}$/.test(rawDate)) {
+        expDate = `${rawDate.slice(0,4)}-${rawDate.slice(4,6)}-${rawDate.slice(6,8)}`;
+      }
+      return {
+        warehouseCode: get("Warehouse", "warehouseCode", "warehouse_code") || warehouseCode,
+        customerCode:  get("Customer", "customerCode", "customer_code"),
+        locationCode:  get("Location", "locationCode", "location_code"),
+        condition:     get("Condition", "condition") || "NOR",
+        sku:           get("SKU", "sku", "Product SKU"),
+        productName:   get("Product Name", "productName", "product_name"),
+        currentQty:    0,
+        adjustQty:     get("Adjust Qty", "adjustQty", "adjust_qty", "Qty"),
+        lotNo:         get("Lot No", "lotNo", "lot_no", "LOT"),
+        expireDate:    expDate,
+        remark:        get("Remark", "remark", "Reason"),
+        _status: "pending" as const,
+      };
+    }).filter((r) => r.locationCode && r.adjustQty);
+    setBatchRows(rows);
+    setBatchDone(false);
+  }
+
+  // ── Run batch submit ──
+  async function runBatch() {
+    setBatchRunning(true);
+    const updated = [...batchRows];
+    for (let i = 0; i < updated.length; i++) {
+      if (updated[i]._status === "ok") continue;
+      const result = await submitAdjust(updated[i]);
+      updated[i] = { ...updated[i], _status: result.ok ? "ok" : "error", _msg: result.msg };
+      setBatchRows([...updated]);
+    }
+    setBatchRunning(false);
+    setBatchDone(true);
+    loadInventory();
+  }
+
   return (
     <div className="p-8">
       {/* Header */}
-      <div className="flex items-start justify-between mb-6">
-        <div>
-          <h1 className="text-xl font-bold text-slate-900">Inventory</h1>
+      <div className="flex items-center justify-between mb-6 gap-2 flex-wrap">
+        <h1 className="text-xl font-bold text-slate-900">Inventory</h1>
+        <div className="flex items-center gap-2 ml-auto">
+          <button
+            onClick={() => { setAdjustForm(blankForm(warehouseCode, customerCode === "ALL" ? "" : customerCode)); setAdjustResult(null); setAdjustOpen(true); }}
+            className="flex items-center gap-1.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg px-3 py-2 transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            Add Stock
+          </button>
+          <button
+            onClick={() => { setBatchRows([]); setBatchDone(false); setBatchOpen(true); }}
+            className="flex items-center gap-1.5 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg px-3 py-2 transition-colors"
+          >
+            <Upload className="w-4 h-4" />
+            Bulk Upload
+          </button>
+          <button
+            onClick={loadInventory}
+            disabled={loading}
+            className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+            Refresh
+          </button>
+          <button
+            onClick={downloadExcel}
+            disabled={loading || sortedItems.length === 0}
+            className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Download className="w-4 h-4" />
+            Export
+          </button>
         </div>
-        <button
-          onClick={loadInventory}
-          disabled={loading}
-          className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors"
-        >
-          <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-          Refresh
-        </button>
-        <button
-          onClick={downloadExcel}
-          disabled={loading || sortedItems.length === 0}
-          className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <Download className="w-4 h-4" />
-          Export
-        </button>
       </div>
 
       {/* Controls — row 1: warehouse / customer / search */}
@@ -469,6 +657,333 @@ export default function InventoryPage() {
               ? `Called: ${debugInfo.endpoint} (HTTP ${debugInfo.status})`
               : "Select a warehouse or check your search terms"}
           </p>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════
+          Add Stock Modal
+          ══════════════════════════════════════════ */}
+      {adjustOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
+            {/* Modal header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <Plus className="w-5 h-5 text-blue-600" />
+                <h2 className="text-base font-bold text-slate-900">New Stock Adjustment</h2>
+              </div>
+              <button onClick={() => setAdjustOpen(false)} className="text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
+            </div>
+
+            <div className="px-6 py-5 space-y-5 max-h-[75vh] overflow-y-auto">
+              {/* ── Stock Information ── */}
+              <div>
+                <p className="text-xs font-semibold text-blue-600 uppercase tracking-wide mb-3">Stock Information</p>
+                <div className="grid grid-cols-2 gap-4">
+                  {/* Warehouse */}
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">
+                      Warehouse <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={adjustForm.warehouseCode}
+                      onChange={(e) => setAdjustForm((f) => ({ ...f, warehouseCode: e.target.value, customerCode: "" }))}
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">-- Select --</option>
+                      {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name || w.id}</option>)}
+                    </select>
+                  </div>
+                  {/* Customer */}
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">
+                      Customer <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={adjustForm.customerCode}
+                      onChange={(e) => setAdjustForm((f) => ({ ...f, customerCode: e.target.value }))}
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">-- Select --</option>
+                      {customers.map((c) => <option key={c.code} value={c.code}>{c.name || c.code}</option>)}
+                    </select>
+                  </div>
+                  {/* Location */}
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">
+                      Location <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. A-01-01-01"
+                      value={adjustForm.locationCode}
+                      onChange={(e) => setAdjustForm((f) => ({ ...f, locationCode: e.target.value }))}
+                      onBlur={() => fetchCurrentQty(adjustForm)}
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  {/* Condition */}
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">
+                      Condition <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={adjustForm.condition}
+                      onChange={(e) => setAdjustForm((f) => ({ ...f, condition: e.target.value }))}
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      {CONDITIONS.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
+                    </select>
+                  </div>
+                  {/* SKU */}
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Product SKU</label>
+                    <input
+                      type="text"
+                      placeholder="SKU"
+                      value={adjustForm.sku}
+                      onChange={(e) => setAdjustForm((f) => ({ ...f, sku: e.target.value }))}
+                      onBlur={() => fetchCurrentQty(adjustForm)}
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  {/* Product Name */}
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Product Name</label>
+                    <input
+                      type="text"
+                      placeholder="Product name"
+                      value={adjustForm.productName}
+                      onChange={(e) => setAdjustForm((f) => ({ ...f, productName: e.target.value }))}
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* ── Quantity & Detail ── */}
+              <div>
+                <p className="text-xs font-semibold text-blue-600 uppercase tracking-wide mb-3">Quantity &amp; Detail</p>
+                <div className="grid grid-cols-3 gap-4">
+                  {/* Current Qty */}
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Current Qty</label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        readOnly
+                        value={qtyFetching ? "..." : adjustForm.currentQty.toLocaleString()}
+                        className="w-full border border-slate-100 rounded-lg px-3 py-2 text-sm bg-slate-50 text-slate-400 font-mono cursor-not-allowed"
+                      />
+                      {qtyFetching && <Loader2 className="absolute right-2.5 top-2.5 w-4 h-4 animate-spin text-slate-400" />}
+                    </div>
+                  </div>
+                  {/* Adjust Qty */}
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Adjust Qty</label>
+                    <input
+                      type="number"
+                      placeholder="+/- qty"
+                      value={adjustForm.adjustQty}
+                      onChange={(e) => setAdjustForm((f) => ({ ...f, adjustQty: e.target.value }))}
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  {/* After Qty */}
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">After Qty</label>
+                    <input
+                      type="text"
+                      readOnly
+                      value={
+                        adjustForm.adjustQty !== "" && !isNaN(Number(adjustForm.adjustQty))
+                          ? (adjustForm.currentQty + Number(adjustForm.adjustQty)).toLocaleString()
+                          : adjustForm.currentQty.toLocaleString()
+                      }
+                      className={`w-full border rounded-lg px-3 py-2 text-sm font-mono font-semibold cursor-not-allowed ${
+                        adjustForm.adjustQty !== "" && !isNaN(Number(adjustForm.adjustQty))
+                          ? Number(adjustForm.adjustQty) > 0
+                            ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+                            : "bg-red-50 border-red-200 text-red-700"
+                          : "bg-slate-50 border-slate-100 text-slate-400"
+                      }`}
+                    />
+                  </div>
+                  {/* Lot No */}
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Lot No</label>
+                    <input
+                      type="text"
+                      placeholder="Lot number"
+                      value={adjustForm.lotNo}
+                      onChange={(e) => setAdjustForm((f) => ({ ...f, lotNo: e.target.value }))}
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  {/* Expire Date */}
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Expire Date</label>
+                    <input
+                      type="date"
+                      value={adjustForm.expireDate}
+                      onChange={(e) => setAdjustForm((f) => ({ ...f, expireDate: e.target.value }))}
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  {/* Remark */}
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Remark</label>
+                    <input
+                      type="text"
+                      placeholder="Reason for adjustment"
+                      value={adjustForm.remark}
+                      onChange={(e) => setAdjustForm((f) => ({ ...f, remark: e.target.value }))}
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Result banner */}
+              {adjustResult && (
+                <div className={`flex items-center gap-2 rounded-lg px-4 py-3 text-sm ${adjustResult.ok ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"}`}>
+                  {adjustResult.ok ? <CheckCircle2 className="w-4 h-4 flex-shrink-0" /> : <AlertCircle className="w-4 h-4 flex-shrink-0" />}
+                  {adjustResult.msg}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-100 bg-slate-50/60">
+              <button onClick={() => setAdjustOpen(false)} className="px-4 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors">Cancel</button>
+              <button
+                onClick={handleAdjustSubmit}
+                disabled={adjustSubmitting || !adjustForm.warehouseCode || !adjustForm.customerCode || !adjustForm.locationCode || !adjustForm.condition}
+                className="flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {adjustSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════
+          Bulk Upload Modal
+          ══════════════════════════════════════════ */}
+      {batchOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <Upload className="w-5 h-5 text-emerald-600" />
+                <h2 className="text-base font-bold text-slate-900">Bulk Stock Upload (Excel)</h2>
+              </div>
+              <button onClick={() => !batchRunning && setBatchOpen(false)} className="text-slate-400 hover:text-slate-700 disabled:opacity-40"><X className="w-5 h-5" /></button>
+            </div>
+
+            <div className="px-6 py-5 space-y-4 max-h-[75vh] overflow-y-auto">
+              {/* Template hint */}
+              <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-xs text-blue-700 space-y-1">
+                <p className="font-semibold mb-1">Required Excel columns:</p>
+                <p className="font-mono">Customer · Warehouse · Location · Condition · SKU · Product Name · Adjust Qty · Lot No · Expire Date · Remark</p>
+                <p className="text-blue-500 mt-1">• Warehouse defaults to current selection if omitted &nbsp;• Condition defaults to NOR &nbsp;• Expire Date: MM/DD/YYYY or YYYYMMDD</p>
+              </div>
+
+              {/* File input */}
+              {batchRows.length === 0 && (
+                <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 rounded-xl p-10 cursor-pointer hover:border-emerald-400 hover:bg-emerald-50/30 transition-colors">
+                  <Upload className="w-8 h-8 text-slate-300 mb-3" />
+                  <span className="text-sm font-medium text-slate-500">Click to select .xlsx file</span>
+                  <span className="text-xs text-slate-400 mt-1">Excel 2007+ (.xlsx)</span>
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls"
+                    className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handleBatchFile(f); }}
+                  />
+                </label>
+              )}
+
+              {/* Preview table */}
+              {batchRows.length > 0 && (
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-sm font-semibold text-slate-700">{batchRows.length} rows parsed</p>
+                    {!batchRunning && !batchDone && (
+                      <button onClick={() => setBatchRows([])} className="text-xs text-slate-400 hover:text-slate-600 underline">Clear &amp; re-upload</button>
+                    )}
+                  </div>
+                  <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                    <table className="w-full text-xs min-w-max">
+                      <thead className="bg-slate-50">
+                        <tr>
+                          <th className="px-3 py-2 text-left text-slate-500">Status</th>
+                          <th className="px-3 py-2 text-left text-slate-500">Customer</th>
+                          <th className="px-3 py-2 text-left text-slate-500">Warehouse</th>
+                          <th className="px-3 py-2 text-left text-slate-500">Location</th>
+                          <th className="px-3 py-2 text-left text-slate-500">Condition</th>
+                          <th className="px-3 py-2 text-left text-slate-500">SKU</th>
+                          <th className="px-3 py-2 text-right text-slate-500">Adj Qty</th>
+                          <th className="px-3 py-2 text-left text-slate-500">Lot</th>
+                          <th className="px-3 py-2 text-left text-slate-500">Expire</th>
+                          <th className="px-3 py-2 text-left text-slate-500">Remark</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {batchRows.map((row, i) => (
+                          <tr key={i} className={`border-t border-slate-100 ${row._status === "ok" ? "bg-emerald-50" : row._status === "error" ? "bg-red-50" : ""}`}>
+                            <td className="px-3 py-1.5 whitespace-nowrap">
+                              {row._status === "ok"    && <span className="text-emerald-600 font-semibold">✓ OK</span>}
+                              {row._status === "error" && <span className="text-red-600 font-semibold" title={row._msg}>✗ Err</span>}
+                              {row._status === "pending" && <span className="text-slate-400">—</span>}
+                            </td>
+                            <td className="px-3 py-1.5 font-mono">{row.customerCode}</td>
+                            <td className="px-3 py-1.5 font-mono">{row.warehouseCode}</td>
+                            <td className="px-3 py-1.5 font-mono">{row.locationCode}</td>
+                            <td className="px-3 py-1.5">{row.condition}</td>
+                            <td className="px-3 py-1.5 font-mono">{row.sku}</td>
+                            <td className={`px-3 py-1.5 text-right font-semibold ${Number(row.adjustQty) > 0 ? "text-emerald-600" : "text-red-600"}`}>{row.adjustQty}</td>
+                            <td className="px-3 py-1.5 font-mono text-slate-400">{row.lotNo || "—"}</td>
+                            <td className="px-3 py-1.5 font-mono text-slate-400">{row.expireDate || "—"}</td>
+                            <td className="px-3 py-1.5 text-slate-500 max-w-xs truncate">{row.remark || "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Batch result summary */}
+                  {batchDone && (
+                    <div className="flex items-center gap-3 mt-3 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                      <span className="text-emerald-700 font-semibold">{batchRows.filter((r) => r._status === "ok").length} succeeded</span>
+                      {batchRows.filter((r) => r._status === "error").length > 0 && (
+                        <span className="text-red-600 font-semibold">{batchRows.filter((r) => r._status === "error").length} failed</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-100 bg-slate-50/60">
+              <button onClick={() => !batchRunning && setBatchOpen(false)} disabled={batchRunning} className="px-4 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors disabled:opacity-40">Close</button>
+              {batchRows.length > 0 && !batchDone && (
+                <button
+                  onClick={runBatch}
+                  disabled={batchRunning}
+                  className="flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {batchRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                  {batchRunning ? `Processing...` : `Submit ${batchRows.length} rows`}
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
