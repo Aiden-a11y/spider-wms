@@ -555,7 +555,7 @@ export default function InventoryPage() {
       return {
         warehouseCode: whCode,
         warehouseCd:   wh?.cd ?? "",
-        customerCode:  get("Customer", "customerCode", "customer_code"),
+        customerCode:  get("Customer Code", "Customer", "customerCode", "customer_code"),
         locationCode:  get("Location", "locationCode", "location_code"),
         condition:     get("Condition", "itemCondition", "condition") || "NOR",
         sku:           get("SKU", "productSku", "sku", "Product SKU"),
@@ -1007,11 +1007,34 @@ export default function InventoryPage() {
                   <button
                     onClick={async () => {
                       const { utils, writeFile } = await import("xlsx");
-                      const headers = ["Customer", "Warehouse", "Location", "Condition", "SKU", "Product Name", "Adjust Qty", "Lot No", "Expire Date", "Remark"];
-                      const sample  = [
-                        customers[0]?.code ?? "CUSTCODE",
+                      const headers = [
+                        "Customer Code",
+                        "Warehouse",
+                        "Location",
+                        "Condition",
+                        "SKU",
+                        "Product Name",
+                        "Adjust Qty",
+                        "Lot No",
+                        "Expire Date",
+                        "Remark",
+                      ];
+                      const formatHints = [
+                        "e.g. FCOKR (code, not name)",
+                        "e.g. STOO1 (optional)",
+                        "Zone-Aisle-Bay-Level-Pos  e.g. 01-31-23-01-01",
+                        "NOR / STD / DMG / QUA / HLD",
+                        "Product SKU",
+                        "Optional",
+                        "+N to add, -N to remove",
+                        "Optional",
+                        "MM/DD/YYYY or YYYYMMDD",
+                        "Optional reason",
+                      ];
+                      const sample = [
+                        customers[0]?.code ?? "FCOKR",
                         warehouseCode || "STOO1",
-                        "31-23-01-01",
+                        "01-31-23-01-01",
                         "NOR",
                         "SKU-001",
                         "Sample Product",
@@ -1020,18 +1043,46 @@ export default function InventoryPage() {
                         "12/31/2027",
                         "Manual adjustment",
                       ];
-                      const ws = utils.aoa_to_sheet([headers, sample]);
-                      // Column widths
-                      ws["!cols"] = [16,12,16,10,18,28,10,12,14,24].map((w) => ({ wch: w }));
-                      // Header style (bold yellow background)
+                      const ws = utils.aoa_to_sheet([headers, formatHints, sample]);
+                      ws["!cols"] = [16, 12, 28, 10, 18, 22, 12, 12, 16, 24].map((w) => ({ wch: w }));
+                      // Row 1: header — yellow bold centered
                       headers.forEach((_, i) => {
                         const cell = utils.encode_cell({ r: 0, c: i });
                         if (!ws[cell]) return;
-                        ws[cell].s = { font: { bold: true }, fill: { fgColor: { rgb: "FFF3CD" } }, alignment: { horizontal: "center" } };
+                        ws[cell].s = { font: { bold: true, sz: 11 }, fill: { fgColor: { rgb: "FFF3CD" } }, alignment: { horizontal: "center", wrapText: true } };
                       });
-                      const wb = utils.book_new();
-                      utils.book_append_sheet(wb, ws, "Bulk Stock Upload");
-                      writeFile(wb, "bulk_stock_upload_template.xlsx");
+                      // Row 2: format hints — light blue italic
+                      formatHints.forEach((_, i) => {
+                        const cell = utils.encode_cell({ r: 1, c: i });
+                        if (!ws[cell]) return;
+                        ws[cell].s = { font: { italic: true, sz: 9, color: { rgb: "5B8DEF" } }, fill: { fgColor: { rgb: "EEF4FF" } } };
+                      });
+                      // Row 3: sample — normal
+                      sample.forEach((_, i) => {
+                        const cell = utils.encode_cell({ r: 2, c: i });
+                        if (!ws[cell]) return;
+                        ws[cell].s = { fill: { fgColor: { rgb: "F9FFF9" } } };
+                      });
+                      // Customers reference sheet
+                      if (customers.length > 0) {
+                        const custHeaders = [["Customer Code", "Customer Name"]];
+                        const custRows = customers.map((c) => [c.code, c.name]);
+                        const ws2 = utils.aoa_to_sheet([...custHeaders, ...custRows]);
+                        ws2["!cols"] = [{ wch: 16 }, { wch: 28 }];
+                        [0].forEach((r) => ["A","B"].forEach((col) => {
+                          const cell = `${col}${r+1}`;
+                          if (!ws2[cell]) return;
+                          ws2[cell].s = { font: { bold: true }, fill: { fgColor: { rgb: "FFF3CD" } } };
+                        }));
+                        const wb = utils.book_new();
+                        utils.book_append_sheet(wb, ws, "Bulk Stock Upload");
+                        utils.book_append_sheet(wb, ws2, "Customer List");
+                        writeFile(wb, "bulk_stock_upload_template.xlsx");
+                      } else {
+                        const wb = utils.book_new();
+                        utils.book_append_sheet(wb, ws, "Bulk Stock Upload");
+                        writeFile(wb, "bulk_stock_upload_template.xlsx");
+                      }
                     }}
                     className="flex items-center gap-1 px-2.5 py-1 bg-blue-600 text-white rounded-lg text-[11px] font-semibold hover:bg-blue-700 transition-colors"
                   >
@@ -1039,8 +1090,8 @@ export default function InventoryPage() {
                     Download Template
                   </button>
                 </div>
-                <p className="font-mono">Customer · Warehouse · Location · Condition · SKU · Product Name · Adjust Qty · Lot No · Expire Date · Remark</p>
-                <p className="text-blue-500 mt-1">• Warehouse defaults to current selection if omitted &nbsp;• Condition defaults to NOR &nbsp;• Expire Date: MM/DD/YYYY or YYYYMMDD</p>
+                <p className="font-mono">Customer Code · Warehouse · Location · Condition · SKU · Product Name · Adjust Qty · Lot No · Expire Date · Remark</p>
+                <p className="text-blue-500 mt-1">• <b>Customer</b>: code (e.g. FCOKR), not name &nbsp;• <b>Location</b>: Zone-Aisle-Bay-Level-Pos (e.g. 01-31-23-01-01) &nbsp;• Warehouse optional &nbsp;• Expire Date: MM/DD/YYYY</p>
               </div>
 
               {/* File input */}
