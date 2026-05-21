@@ -457,6 +457,27 @@ export default function InventoryPage() {
   }, []);
 
   // ── Fetch current qty for a given location + sku ──
+  // ── Auto-fetch product name from SKU ──
+  async function fetchProductName(form: AdjustForm) {
+    if (!form.sku || !form.warehouseCode || !form.customerCode) return;
+    try {
+      const res = await fetch("/api/wms/product/list", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ warehouseCode: form.warehouseCode, customerCode: form.customerCode, search: form.sku, pageNum: 1, pageSize: 10 }),
+      });
+      const json = await res.json();
+      const list: Record<string, unknown>[] = json?.data?.list ?? json?.data ?? [];
+      const match = list.find((p) =>
+        String(p.productSku ?? p.sku ?? "").toUpperCase() === form.sku.toUpperCase()
+      );
+      if (match) {
+        const name = String(match.productName ?? match.itemName ?? match.name ?? "");
+        if (name) setAdjustForm((f) => ({ ...f, productName: name }));
+      }
+    } catch { /* ignore */ }
+  }
+
   async function fetchCurrentQty(form: AdjustForm) {
     if (!form.warehouseCode || !form.locationCode || !form.sku) return;
     setQtyFetching(true);
@@ -855,17 +876,19 @@ export default function InventoryPage() {
                       type="text"
                       placeholder="SKU"
                       value={adjustForm.sku}
-                      onChange={(e) => setAdjustForm((f) => ({ ...f, sku: e.target.value }))}
-                      onBlur={() => fetchCurrentQty(adjustForm)}
+                      onChange={(e) => setAdjustForm((f) => ({ ...f, sku: e.target.value, productName: "" }))}
+                      onBlur={(e) => { const f = { ...adjustForm, sku: e.target.value }; fetchCurrentQty(f); fetchProductName(f); }}
                       className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                   </div>
                   {/* Product Name */}
                   <div>
-                    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Product Name</label>
+                    <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">
+                      Product Name <span className="text-slate-300 font-normal normal-case">(auto-filled)</span>
+                    </label>
                     <input
                       type="text"
-                      placeholder="Product name"
+                      placeholder="Auto-filled from SKU..."
                       value={adjustForm.productName}
                       onChange={(e) => setAdjustForm((f) => ({ ...f, productName: e.target.value }))}
                       className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
