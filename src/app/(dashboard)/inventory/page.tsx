@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/auth-context";
 import {
@@ -98,6 +98,15 @@ export default function InventoryPage() {
   const [batchRows, setBatchRows] = useState<BatchRow[]>([]);
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchDone, setBatchDone] = useState(false);
+
+  // ── Location search (for modal) ──
+  type LocResult = { locationCode: string; zone?: string; aisle?: string; bay?: string; level?: string; position?: string; [k: string]: unknown };
+  const [locSearch, setLocSearch] = useState("");
+  const [locResults, setLocResults] = useState<LocResult[]>([]);
+  const [locLoading, setLocLoading] = useState(false);
+  const [locDropOpen, setLocDropOpen] = useState(false);
+  const locDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const locWrapRef = useRef<HTMLDivElement>(null);
 
   const headers = useMemo(
     () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
@@ -384,6 +393,52 @@ export default function InventoryPage() {
     [filteredItems]
   );
 
+  // ── Location search ──
+  const searchLocations = useCallback(async (term: string, whCode: string) => {
+    if (!term || term.length < 1 || !whCode) { setLocResults([]); setLocDropOpen(false); return; }
+    setLocLoading(true);
+    try {
+      const res = await fetch("/api/wms/warehouse/location-search", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ warehouseCode: whCode, search: term }),
+      });
+      const json = await res.json();
+      const arr: LocResult[] = Array.isArray(json?.data) ? json.data
+        : Array.isArray(json?.data?.list) ? json.data.list
+        : Array.isArray(json?.list) ? json.list
+        : Array.isArray(json) ? json : [];
+      setLocResults(arr.slice(0, 50));
+      setLocDropOpen(arr.length > 0);
+    } catch { setLocResults([]); setLocDropOpen(false); }
+    setLocLoading(false);
+  }, [headers]);
+
+  function handleLocInput(val: string) {
+    setLocSearch(val);
+    setAdjustForm((f) => ({ ...f, locationCode: val }));
+    if (locDebounce.current) clearTimeout(locDebounce.current);
+    locDebounce.current = setTimeout(() => searchLocations(val, adjustForm.warehouseCode), 300);
+  }
+
+  function selectLocation(loc: LocResult) {
+    const code = String(loc.locationCode ?? loc.code ?? loc.location ?? "");
+    setLocSearch(code);
+    setAdjustForm((f) => ({ ...f, locationCode: code }));
+    setLocDropOpen(false);
+    // fetch current qty after location is set
+    setTimeout(() => fetchCurrentQty({ ...adjustForm, locationCode: code }), 50);
+  }
+
+  // close dropdown on outside click
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (locWrapRef.current && !locWrapRef.current.contains(e.target as Node)) setLocDropOpen(false);
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
   // ── Fetch current qty for a given location + sku ──
   async function fetchCurrentQty(form: AdjustForm) {
     if (!form.warehouseCode || !form.locationCode || !form.sku) return;
@@ -521,7 +576,7 @@ export default function InventoryPage() {
         <h1 className="text-xl font-bold text-slate-900">Inventory</h1>
         <div className="flex items-center gap-2 ml-auto">
           <button
-            onClick={() => { const wh = warehouses.find((w) => w.id === warehouseCode); setAdjustForm(blankForm(warehouseCode, wh?.cd ?? "", customerCode === "ALL" ? "" : customerCode)); setAdjustResult(null); setAdjustOpen(true); }}
+            onClick={() => { const wh = warehouses.find((w) => w.id === warehouseCode); setAdjustForm(blankForm(warehouseCode, wh?.cd ?? "", customerCode === "ALL" ? "" : customerCode)); setAdjustResult(null); setLocSearch(""); setLocResults([]); setLocDropOpen(false); setAdjustOpen(true); }}
             className="flex items-center gap-1.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg px-3 py-2 transition-colors"
           >
             <Plus className="w-4 h-4" />
@@ -717,19 +772,45 @@ export default function InventoryPage() {
                       {customers.map((c) => <option key={c.code} value={c.code}>{c.name || c.code}</option>)}
                     </select>
                   </div>
-                  {/* Location */}
-                  <div>
+                  {/* Location — searchable */}
+                  <div ref={locWrapRef} className="relative">
                     <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">
                       Location <span className="text-red-500">*</span>
                     </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. A-01-01-01"
-                      value={adjustForm.locationCode}
-                      onChange={(e) => setAdjustForm((f) => ({ ...f, locationCode: e.target.value }))}
-                      onBlur={() => fetchCurrentQty(adjustForm)}
-                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
+                    <div className="relative">
+                      <input
+                        type="text"
+                        placeholder="Type to search location..."
+                        value={locSearch}
+                        onChange={(e) => handleLocInput(e.target.value)}
+                        onFocus={() => { if (locResults.length > 0) setLocDropOpen(true); }}
+                        className="w-full border border-slate-200 rounded-lg px-3 py-2 pr-8 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        autoComplete="off"
+                      />
+                      {locLoading && <Loader2 className="absolute right-2.5 top-2.5 w-4 h-4 animate-spin text-slate-400" />}
+                      {!locLoading && locSearch && (
+                        <button onClick={() => { setLocSearch(""); setAdjustForm((f) => ({ ...f, locationCode: "" })); setLocDropOpen(false); }}
+                          className="absolute right-2.5 top-2.5 text-slate-300 hover:text-slate-600"><X className="w-4 h-4" /></button>
+                      )}
+                    </div>
+                    {locDropOpen && locResults.length > 0 && (
+                      <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-52 overflow-y-auto">
+                        {locResults.map((loc, i) => {
+                          const code = String(loc.locationCode ?? loc.code ?? loc.location ?? "");
+                          const parts = [loc.zone, loc.aisle, loc.bay, loc.level, loc.position].filter(Boolean).join("-");
+                          return (
+                            <button
+                              key={i}
+                              onMouseDown={(e) => { e.preventDefault(); selectLocation(loc); }}
+                              className="w-full text-left px-3 py-2 text-sm font-mono hover:bg-blue-50 hover:text-blue-700 border-b border-slate-50 last:border-0 flex items-center justify-between"
+                            >
+                              <span className="font-semibold">{code}</span>
+                              {parts && parts !== code && <span className="text-slate-400 text-xs">{parts}</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                   {/* Condition */}
                   <div>
