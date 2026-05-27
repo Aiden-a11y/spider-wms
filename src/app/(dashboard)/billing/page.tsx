@@ -781,19 +781,528 @@ async function downloadWorkbook(wb: ExcelJS.Workbook, filename: string) {
   URL.revokeObjectURL(url);
 }
 
+// ─── Per-customer WMS detail sheets ──────────────────────────────────────────
+
+/** Add a [CustCode]_B2B sheet and return { sheetName, rowCount } */
+function addB2BDetailSheet(
+  wb: ExcelJS.Workbook,
+  custCode: string,
+  orders: Record<string, unknown>[],
+  orderEdits: Record<string, Record<string, number>>
+): { sheetName: string; rowCount: number } {
+  const sheetName = `${custCode}_B2B`.slice(0, 31);
+  const ws = wb.addWorksheet(sheetName);
+  ws.columns = [
+    { width: 18 }, // A: Order Code
+    { width: 12 }, // B: Date
+    { width: 11 }, // C: Pick/Piece
+    { width: 12 }, // D: Pick/Carton
+    { width: 12 }, // E: Pick/Pallet
+    { width: 11 }, // F: Out/Carton (ref)
+    { width: 11 }, // G: Out/Pallet (ref)
+    { width: 11 }, // H: Supplies (ref)
+    { width: 11 }, // I: Packing
+    { width: 11 }, // J: Palletize
+    { width: 11 }, // K: Labels
+    { width: 11 }, // L: Inserts
+    { width: 11 }, // M: Labor Hrs
+    { width: 11 }, // N: Labor OT
+    { width: 12 }, // O: Labor Wknd
+  ];
+  const headers = [
+    "Order Code","Date","Pick/Piece","Pick/Carton","Pick/Pallet",
+    "Out/Carton","Out/Pallet","Supplies","Packing✓","Palletize✓",
+    "Labels","Inserts","Labor Hrs","Labor OT","Labor Wknd",
+  ];
+  const hdrRow = ws.addRow(headers);
+  hdrRow.height = 16;
+  hdrRow.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: C.white }, size: 10 };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
+    cell.alignment = { vertical: "middle", horizontal: "center" };
+    applyBorder(cell, "medium");
+  });
+
+  let rowIdx = 0;
+  for (const order of orders) {
+    const code  = String(order.shippingOrderCode ?? order.orderCode ?? "");
+    const date  = String(order.outDate ?? order.deliveryDate ?? order.shippingDate ?? order.outboundDate ?? "");
+    const tasks = parseTaskComment(String(order.comment ?? ""));
+    const ov    = orderEdits[code] ?? {};
+
+    const pp       = ov["b2b_pick_piece"]    ?? tasks["Picking per Piece"]    ?? 0;
+    const pc       = ov["b2b_pick_carton"]   ?? tasks["Picking per Carton"]   ?? 0;
+    const ppl      = ov["b2b_pick_pallet"]   ?? tasks["Picking per Pallet"]   ?? 0;
+    const oc       = tasks["Out per Carton"] ?? 0;
+    const op       = tasks["Out per Pallet"] ?? 0;
+    const supplies = tasks["Supplies"]       ?? 0;
+
+    // Packing: oc > 0 && oc !== pc → charge oc; plus supplies qty
+    const packing  = ov["b2b_carton_packing"] ?? ((oc > 0 && oc !== pc ? oc : 0) + (supplies > 0 ? supplies : 0));
+    // Palletizing: op > 0 && op !== ppl
+    const palletize = ov["b2b_palletizing"]  ?? (op > 0 && op !== ppl ? op : 0);
+    const labels    = ov["b2b_label"]         ?? ((tasks["Labels"] ?? 0) + (tasks["Amazon Labels"] ?? 0) + (tasks["FBA Labeling"] ?? 0));
+    const inserts   = ov["b2b_insert"]        ?? (tasks["Inserts"] ?? 0);
+    const laborReg  = ov["labor_regular"]     ?? (tasks["Labor Hours"] ?? 0);
+    const laborOT   = ov["labor_ot_weekday"]  ?? (tasks["Labor Hours (OT)"] ?? 0);
+    const laborWknd = ov["labor_ot_weekend"]  ?? (tasks["Labor Hours (Weekend/Holiday)"] ?? 0);
+
+    const r = ws.addRow([
+      code, date, pp, pc, ppl, oc, op, supplies, packing, palletize,
+      labels, inserts, laborReg, laborOT, laborWknd,
+    ]);
+    r.height = 15;
+    r.eachCell((cell, col) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowIdx % 2 === 0 ? C.white : C.rowAlt } };
+      cell.font = { size: 10 };
+      cell.alignment = { vertical: "middle", horizontal: col <= 2 ? "left" : "right" };
+      applyBorder(cell);
+    });
+    rowIdx++;
+  }
+  return { sheetName, rowCount: orders.length };
+}
+
+/** Add a [CustCode]_Inbound sheet */
+function addInboundDetailSheet(
+  wb: ExcelJS.Workbook,
+  custCode: string,
+  orders: Record<string, unknown>[]
+): { sheetName: string; rowCount: number } {
+  const sheetName = `${custCode}_Inbound`.slice(0, 31);
+  const ws = wb.addWorksheet(sheetName);
+  ws.columns = [
+    { width: 20 }, // A: Order Code
+    { width: 14 }, // B: Date
+    { width: 22 }, // C: Type
+    { width: 10 }, // D: Qty
+  ];
+  const hdrRow = ws.addRow(["Order Code", "Date", "Type", "Qty"]);
+  hdrRow.height = 16;
+  hdrRow.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: C.white }, size: 10 };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
+    cell.alignment = { vertical: "middle", horizontal: "center" };
+    applyBorder(cell, "medium");
+  });
+
+  let rowIdx = 0;
+  for (const order of orders) {
+    const code = String(order.receiveOrderCode ?? order.orderCode ?? "");
+    const date = String(order.inDate ?? order.receiveDate ?? order.orderDate ?? "");
+    const type = String(order.inboundType ?? order.receiveType ?? "");
+    const cartonQty = order.cartonQty ?? order.boxQty ?? order.packageQty ?? order.cartonCount;
+    const qty = cartonQty != null ? Number(cartonQty) : 1;
+    const r = ws.addRow([code, date, type, qty]);
+    r.height = 15;
+    r.eachCell((cell, col) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowIdx % 2 === 0 ? C.white : C.rowAlt } };
+      cell.font = { size: 10 };
+      cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
+      applyBorder(cell);
+    });
+    rowIdx++;
+  }
+  return { sheetName, rowCount: orders.length };
+}
+
+/** Add a [CustCode]_B2C sheet */
+function addB2CDetailSheet(
+  wb: ExcelJS.Workbook,
+  custCode: string,
+  orders: Record<string, unknown>[]
+): { sheetName: string; rowCount: number } {
+  const sheetName = `${custCode}_B2C`.slice(0, 31);
+  const ws = wb.addWorksheet(sheetName);
+  ws.columns = [
+    { width: 18 }, // A: Order Code
+    { width: 12 }, // B: Date
+    { width: 12 }, // C: Total Qty
+    { width: 12 }, // D: +1 Order
+    { width: 12 }, // E: Extra Picks
+  ];
+  const hdrRow = ws.addRow(["Order Code", "Date", "Total Qty", "+1 Order", "Extra Picks"]);
+  hdrRow.height = 16;
+  hdrRow.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: C.white }, size: 10 };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
+    cell.alignment = { vertical: "middle", horizontal: "center" };
+    applyBorder(cell, "medium");
+  });
+
+  let rowIdx = 0;
+  for (const order of orders) {
+    const code  = String(order.shippingOrderCode ?? order.orderCode ?? "");
+    const date  = String(order.outDate ?? order.deliveryDate ?? order.shippingDate ?? "");
+    const qty   = Number(order.totalQty ?? order.orderQty ?? 0);
+    const extra = Math.max(0, qty - 5);
+    const r = ws.addRow([code, date, qty, 1, extra]);
+    r.height = 15;
+    r.eachCell((cell, col) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowIdx % 2 === 0 ? C.white : C.rowAlt } };
+      cell.font = { size: 10 };
+      cell.alignment = { vertical: "middle", horizontal: col <= 2 ? "left" : "right" };
+      applyBorder(cell);
+    });
+    rowIdx++;
+  }
+  return { sheetName, rowCount: orders.length };
+}
+
+/** Add Storage_15th, Storage_Last, Storage_Avg sheets to the workbook */
+function addInventoryDetailSheets(
+  wb: ExcelJS.Workbook,
+  storageRows: StorageRow[]
+): { avgSheetName: string } {
+  const avgSheetName = "Storage_Avg";
+
+  // Helper to add a simple 2-column storage snapshot sheet
+  function addSnapSheet(name: string, colHeader: string, getQty: (r: StorageRow) => number) {
+    const ws = wb.addWorksheet(name);
+    ws.columns = [{ width: 20 }, { width: 12 }];
+    const hdr = ws.addRow(["Type", colHeader]);
+    hdr.height = 16;
+    hdr.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: C.white }, size: 10 };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
+      cell.alignment = { vertical: "middle", horizontal: "center" };
+      applyBorder(cell, "medium");
+    });
+    // Always emit all 7 template rows in fixed order for consistent row positions
+    STORAGE_TEMPLATE_ROWS.forEach((tmpl, i) => {
+      const found = storageRows.find(r => r.key === tmpl.key);
+      const qty = found ? getQty(found) : 0;
+      const r = ws.addRow([tmpl.label, qty]);
+      r.height = 15;
+      r.eachCell((cell, col) => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: i % 2 === 0 ? C.white : C.rowAlt } };
+        cell.font = { size: 10 };
+        cell.alignment = { vertical: "middle", horizontal: col === 1 ? "left" : "right" };
+        applyBorder(cell);
+      });
+    });
+  }
+
+  addSnapSheet("Storage_15th", "15th Qty", r => r.qty15);
+  addSnapSheet("Storage_Last", "Last Qty", r => r.qtyLast);
+
+  // Storage_Avg: A=Type, B=15th (formula ref Storage_15th), C=Last (formula ref Storage_Last), D=Average
+  const wsAvg = wb.addWorksheet(avgSheetName);
+  wsAvg.columns = [{ width: 20 }, { width: 12 }, { width: 12 }, { width: 14 }];
+  const hdrAvg = wsAvg.addRow(["Type", "15th", "Last", "Average"]);
+  hdrAvg.height = 16;
+  hdrAvg.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: C.white }, size: 10 };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
+    cell.alignment = { vertical: "middle", horizontal: "center" };
+    applyBorder(cell, "medium");
+  });
+  STORAGE_TEMPLATE_ROWS.forEach((tmpl, i) => {
+    const dataRow = i + 2; // Row 2 = first data row
+    const found = storageRows.find(r => r.key === tmpl.key);
+    const qty15   = found?.qty15   ?? 0;
+    const qtyLast = found?.qtyLast ?? 0;
+    const avg     = found?.avg     ?? 0;
+    const r = wsAvg.addRow([
+      tmpl.label,
+      { formula: `='Storage_15th'!B${dataRow}`, result: qty15 },
+      { formula: `='Storage_Last'!B${dataRow}`, result: qtyLast },
+      { formula: `=AVERAGE(B${dataRow},C${dataRow})`, result: avg },
+    ]);
+    r.height = 15;
+    r.eachCell((cell, col) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: i % 2 === 0 ? C.white : C.rowAlt } };
+      cell.font = { size: 10 };
+      cell.alignment = { vertical: "middle", horizontal: col === 1 ? "left" : "right" };
+      applyBorder(cell);
+    });
+  });
+
+  return { avgSheetName };
+}
+
+/** Sheet-name refs for formula generation */
+type DataSheetRefs = {
+  b2bSheet?: string;
+  inboundSheet?: string;
+  b2cSheet?: string;
+  storageAvgSheet?: string;
+};
+
+/** Return ExcelJS cell value for a qty cell: formula if data sheet exists, else fallback number */
+function getQtyFormula(
+  itemId: string,
+  refs: DataSheetRefs,
+  fallbackQty: number
+): number | ExcelJS.CellFormulaValue {
+  const b = refs.b2bSheet;
+  const ib = refs.inboundSheet;
+  const c = refs.b2cSheet;
+  const s = refs.storageAvgSheet;
+
+  // B2B columns
+  const b2bColMap: Record<string, string> = {
+    b2b_pick_piece:    "C",
+    b2b_pick_carton:   "D",
+    b2b_pick_pallet:   "E",
+    b2b_carton_packing:"I",
+    b2b_palletizing:   "J",
+    b2b_label:         "K",
+    b2b_insert:        "L",
+    labor_regular:     "M",
+    labor_ot_weekday:  "N",
+    labor_ot_weekend:  "O",
+  };
+  if (b2bColMap[itemId] && b) {
+    return { formula: `=SUM('${b}'!${b2bColMap[itemId]}2:${b2bColMap[itemId]}9999)`, result: fallbackQty };
+  }
+  if (itemId === "b2b_order" && b) {
+    return { formula: `=COUNTA('${b}'!A2:A9999)`, result: fallbackQty };
+  }
+  if (itemId === "inbound_carton" && ib) {
+    return { formula: `=SUMIF('${ib}'!C2:C9999,"<>*container*",'${ib}'!D2:D9999)`, result: fallbackQty };
+  }
+  if (itemId === "b2c_order" && c) {
+    return { formula: `=COUNTA('${c}'!A2:A9999)`, result: fallbackQty };
+  }
+  if (itemId === "b2c_pick_piece" && c) {
+    return { formula: `=SUM('${c}'!E2:E9999)`, result: fallbackQty };
+  }
+  // Storage → Storage_Avg!D{row} (rows 2–8 in STORAGE_TEMPLATE_ROWS order)
+  const storageRowMap: Record<string, number> = {
+    storage_bin:            2,
+    storage_shelf:          3,
+    storage_carton:         4,
+    storage_pallet_short:   5,
+    storage_pallet_regular: 6,
+    storage_pallet_tall:    7,
+    storage_open_floor:     8,
+  };
+  if (storageRowMap[itemId] !== undefined && s) {
+    const row = storageRowMap[itemId];
+    return { formula: `='${s}'!D${row}`, result: fallbackQty };
+  }
+  return fallbackQty;
+}
+
+/**
+ * Fill an invoice worksheet using SUM/formula references to data sheets.
+ * Returns the row number of the GRAND TOTAL row (for Summary sheet cross-references).
+ */
+type InvoiceSheetMeta = {
+  totalRowNum: number;
+  itemRowNums: Record<string, number>;       // itemId → row in this sheet (F=Qty, G=Amount)
+  catSubtotalRowNums: Record<string, number>; // category → subtotal row
+};
+
+function fillInvoiceSheetFormula(
+  ws: ExcelJS.Worksheet,
+  invoice: BillingInvoice,
+  refs: DataSheetRefs
+): InvoiceSheetMeta {
+  ws.columns = COL_WIDTHS_7.map((w) => ({ width: w }));
+
+  // ── Row 1: Company header ──
+  const r1 = ws.addRow(["CTK USA, INC."]);
+  r1.height = 28;
+  mergeRow(ws, r1.number);
+  const c1 = r1.getCell(1);
+  c1.font = { bold: true, size: 16, color: { argb: C.white }, name: "Calibri" };
+  c1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.navy } };
+  c1.alignment = { vertical: "middle", horizontal: "center" };
+  applyBorder(c1, "medium");
+
+  // ── Row 2: Invoice for customer ──
+  const r2 = ws.addRow([`Invoice for ${invoice.customerName || invoice.customer}`]);
+  r2.height = 20;
+  mergeRow(ws, r2.number);
+  const c2 = r2.getCell(1);
+  c2.font = { bold: true, size: 12, color: { argb: C.navy } };
+  c2.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.white } };
+  c2.alignment = { vertical: "middle", horizontal: "center" };
+  applyBorder(c2);
+
+  // ── Row 3: Billing period ──
+  const r3 = ws.addRow([`Billing Period: ${periodRange(invoice.period)}`]);
+  r3.height = 18;
+  mergeRow(ws, r3.number);
+  const c3 = r3.getCell(1);
+  c3.font = { size: 11, color: { argb: C.black } };
+  c3.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.white } };
+  c3.alignment = { vertical: "middle", horizontal: "center" };
+  applyBorder(c3);
+
+  // ── Row 4: Column headers ──
+  const hdrRow = ws.addRow(["No.", "Category", "Description", "Rate", "Unit", "Qty", "Amount"]);
+  hdrRow.height = 18;
+  hdrRow.eachCell((cell, col) => {
+    cell.font = { bold: true, color: { argb: C.white }, size: 10 };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
+    cell.alignment = {
+      vertical: "middle",
+      horizontal: col <= 3 ? "center" : "right",
+    };
+    applyBorder(cell, "medium");
+  });
+
+  let lineNo = 1;
+  let sectionNo = 1;
+  const itemRowNums: Record<string, number> = {};
+  const catSubtotalRowNums: Record<string, number> = {};
+
+  for (const cat of BILLING_CATEGORIES) {
+    const catItems = invoice.lineItems.filter((l) => l.category === cat);
+    if (catItems.length === 0) continue;
+
+    // Section header row
+    const secRow = ws.addRow([`${sectionNo}. ${cat}`]);
+    secRow.height = 16;
+    mergeRow(ws, secRow.number);
+    const secCell = secRow.getCell(1);
+    secCell.font = { bold: true, size: 10, color: { argb: C.sectionFont } };
+    secCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.sectionBg } };
+    secCell.alignment = { vertical: "middle", indent: 1 };
+    applyBorder(secCell, "medium");
+    sectionNo++;
+
+    // Data rows
+    for (const item of catItems) {
+      const nextRow = ws.rowCount + 1;
+      const qtyVal   = getQtyFormula(item.id, refs, Math.round(item.qty * 100) / 100);
+      const rateDisplay = item.costPlus ? "cost+10%" : item.rate;
+      const isQtyNum    = typeof qtyVal === "number";
+      const qtyNumeric  = isQtyNum ? (qtyVal as number) : item.qty;
+      const amt = item.costPlus
+        ? { formula: `=F${nextRow}*1.1`, result: item.qty * 1.1 }
+        : { formula: `=F${nextRow}*${item.rate}`, result: item.qty * item.rate };
+
+      const r = ws.addRow([lineNo, cat, item.description, rateDisplay, item.unit, qtyVal, amt]);
+      itemRowNums[item.id] = r.number;  // track for Summary formulas
+      r.height = 15;
+      const isAlt = lineNo % 2 === 0;
+      r.eachCell((cell, col) => {
+        cell.fill = {
+          type: "pattern", pattern: "solid",
+          fgColor: { argb: qtyNumeric === 0 ? C.subtotalBg : (isAlt ? C.rowAlt : C.white) },
+        };
+        cell.font = { size: 10, color: { argb: qtyNumeric === 0 ? C.border : C.black } };
+        cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
+        applyBorder(cell);
+      });
+      r.getCell(4).font = { size: 10, color: { argb: qtyNumeric === 0 ? C.border : C.teal } };
+      if (!item.costPlus) r.getCell(4).numFmt = "$#,##0.00";
+      r.getCell(6).numFmt = Number.isInteger(qtyNumeric) ? "#,##0" : "#,##0.00";
+      r.getCell(7).numFmt = "$#,##0.00";
+      lineNo++;
+    }
+
+    // Subtotal row — formula summing all item Amount cells in this category
+    const firstItemRow = itemRowNums[catItems[0].id];
+    const lastItemRow  = itemRowNums[catItems[catItems.length - 1].id];
+    const subFormula   = firstItemRow && lastItemRow
+      ? { formula: `=SUM(G${firstItemRow}:G${lastItemRow})`, result: catItems.reduce((s, i) => s + calcLineAmount(i), 0) }
+      : catItems.reduce((s, i) => s + calcLineAmount(i), 0);
+    const subRow = ws.addRow(["", "", "", "", "", "Subtotal", subFormula]);
+    catSubtotalRowNums[cat] = subRow.number;
+    subRow.height = 15;
+    subRow.eachCell((cell, col) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.subtotalBg } };
+      cell.font = { bold: col >= 6, size: 10, color: { argb: C.black } };
+      cell.alignment = { vertical: "middle", horizontal: "right" };
+      applyBorder(cell);
+    });
+    subRow.getCell(7).numFmt = "$#,##0.00";
+  }
+
+  // ── Grand Total row — formula summing all subtotals ──
+  const subtotalRefs = Object.values(catSubtotalRowNums).map(r => `G${r}`).join("+");
+  const gtFormula = subtotalRefs
+    ? { formula: `=${subtotalRefs}`, result: invoice.total }
+    : invoice.total;
+  const totalRow = ws.addRow(["", "", "", "", "", "GRAND TOTAL", gtFormula]);
+  const totalRowNum = totalRow.number;
+  totalRow.height = 22;
+  totalRow.eachCell((cell, col) => {
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.greenBg } };
+    applyBorder(cell, "medium");
+    if (col >= 6) {
+      cell.font = { bold: true, size: 12, color: { argb: C.white } };
+      cell.alignment = { vertical: "middle", horizontal: "right" };
+    }
+  });
+  totalRow.getCell(7).numFmt = "$#,##0.00";
+
+  // ── Notes ──
+  if (invoice.notes) {
+    ws.addRow([]);
+    const notesRow = ws.addRow(["Notes:", invoice.notes]);
+    notesRow.getCell(1).font = { bold: true, size: 10 };
+    notesRow.getCell(2).font = { size: 10 };
+  }
+
+  // ── Generated timestamp ──
+  ws.addRow([]);
+  const genRow = ws.addRow([`Generated: ${new Date().toLocaleDateString("en-US")}   |   Rate Version: ${invoice.rateVersion}`]);
+  mergeRow(ws, genRow.number);
+  genRow.getCell(1).font = { italic: true, size: 9, color: { argb: C.border } };
+
+  return { totalRowNum, itemRowNums, catSubtotalRowNums };
+}
+
 /** Export a single invoice — styled sheet + optional raw data tabs + Rate Table + OM Subsidy */
-async function exportInvoiceToExcel(invoice: BillingInvoice, source?: WmsSource | null) {
+async function exportInvoiceToExcel(
+  invoice: BillingInvoice,
+  source?: WmsSource | null,
+  orderEdits?: Record<string, Record<string, number>>,
+  storageRows?: StorageRow[]
+) {
   const wb = new ExcelJS.Workbook();
+  const custCode = invoice.customer;
+  const refs: DataSheetRefs = {};
+
+  // Add detail sheets if source data is available
+  if (source) {
+    if (source.b2b.length > 0) {
+      const { sheetName } = addB2BDetailSheet(wb, custCode, source.b2b, orderEdits ?? {});
+      refs.b2bSheet = sheetName;
+    }
+    if (source.receiving.length > 0) {
+      const { sheetName } = addInboundDetailSheet(wb, custCode, source.receiving);
+      refs.inboundSheet = sheetName;
+    }
+    if (source.b2c.length > 0) {
+      const { sheetName } = addB2CDetailSheet(wb, custCode, source.b2c);
+      refs.b2cSheet = sheetName;
+    }
+  }
+  if (storageRows && storageRows.length > 0) {
+    const { avgSheetName } = addInventoryDetailSheets(wb, storageRows);
+    refs.storageAvgSheet = avgSheetName;
+  }
+
+  // Invoice sheet: use formula version if we have data sheets, else styled static
   const sheetName = (invoice.customerName || invoice.customer).slice(0, 31);
-  fillInvoiceSheet(wb.addWorksheet(sheetName), invoice);
-  if (source) addRawDataSheets(wb, source);
+  const hasRefs = Object.keys(refs).length > 0;
+  if (hasRefs) {
+    fillInvoiceSheetFormula(wb.addWorksheet(sheetName), invoice, refs);
+  } else {
+    fillInvoiceSheet(wb.addWorksheet(sheetName), invoice);
+  }
+
   addRateTableSheet(wb);
   addOmSubsidySheet(wb);
   await downloadWorkbook(wb, `Invoice_${invoice.customer}_${invoice.period}.xlsx`);
 }
 
 /** Export multiple invoices — styled Summary tab + one tab per customer + optional raw data tabs */
-async function exportAllToExcel(invoices: BillingInvoice[], period: string, source?: WmsSource | null, omSubsidy?: number) {
+async function exportAllToExcel(
+  invoices: BillingInvoice[],
+  period: string,
+  wmsSourceMap?: Record<string, WmsSource> | null,
+  orderEditsMap?: Record<string, Record<string, Record<string, number>>> | null,
+  storageRows?: StorageRow[],
+  omSubsidy?: number
+) {
   if (invoices.length === 0) return;
   const wb = new ExcelJS.Workbook();
 
@@ -864,6 +1373,9 @@ async function exportAllToExcel(invoices: BillingInvoice[], period: string, sour
   let lineNo = 1;
   let sectionNo = 1;
   let grandTotal = 0;
+  // track Summary sheet's own item rows so we can wire formulas after customer sheets are built
+  const summaryItemRows: Record<string, number> = {};
+  const summaryCatSubtotalRows: Record<string, number> = {};
 
   for (const cat of BILLING_CATEGORIES) {
     const catItems = Array.from(itemMap.values()).filter(
@@ -881,19 +1393,17 @@ async function exportAllToExcel(invoices: BillingInvoice[], period: string, sour
     }); applyBorder(sec.getCell(1), "medium");
     sectionNo++;
 
-    let catTotal = 0;
     for (const item of catItems) {
-      // For aggregated qty, recalculate amount
       const aggQty = item.totalQty;
       const aggAmt = aggQty === 0 ? 0 : (item.costPlus ? aggQty * 1.1 : aggQty * item.rate);
-      catTotal += aggAmt;
       grandTotal += aggAmt;
 
       const r = ws.addRow([
         lineNo, cat, item.description,
         item.costPlus ? "cost+10%" : item.rate,
-        item.unit, aggQty, aggAmt,
+        item.unit, aggQty, aggAmt,  // placeholder — overwritten with formulas later
       ]);
+      summaryItemRows[item.id] = r.number;
       r.height = 15;
       const isZero = aggQty === 0;
       const isAlt = lineNo % 2 === 0;
@@ -905,15 +1415,22 @@ async function exportAllToExcel(invoices: BillingInvoice[], period: string, sour
       });
       r.getCell(4).font = { size: 10, color: { argb: isZero ? C.border : C.teal } };
       if (!item.costPlus) r.getCell(4).numFmt = "$#,##0.00";
-      // Fix trailing dot: use integer format when qty is whole number
       const qtyVal = Math.round(aggQty * 100) / 100;
       r.getCell(6).numFmt = Number.isInteger(qtyVal) ? "#,##0" : "#,##0.00";
       r.getCell(7).numFmt = "$#,##0.00";
       lineNo++;
     }
 
-    // Subtotal
-    const sub = ws.addRow(["", "", "", "", "", "Subtotal", catTotal]);
+    // Subtotal — formula-based using Summary's own item rows
+    const firstSumRow = summaryItemRows[catItems[0].id];
+    const lastSumRow  = summaryItemRows[catItems[catItems.length - 1].id];
+    const subVal = catItems.reduce((s, i) => s + (i.totalQty === 0 ? 0 : (i.costPlus ? i.totalQty * 1.1 : i.totalQty * i.rate)), 0);
+    const sub = ws.addRow(["", "", "", "", "", "Subtotal",
+      firstSumRow && lastSumRow
+        ? { formula: `=SUM(G${firstSumRow}:G${lastSumRow})`, result: subVal }
+        : subVal
+    ]);
+    summaryCatSubtotalRows[cat] = sub.number;
     sub.height = 15;
     sub.eachCell((cell, col) => {
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.subtotalBg } };
@@ -939,8 +1456,11 @@ async function exportAllToExcel(invoices: BillingInvoice[], period: string, sour
     omRow.getCell(7).numFmt = "$#,##0.00";
   }
 
-  // ── Grand Total ──
-  const gt = ws.addRow(["", "", "", "", "", "GRAND TOTAL", grandTotal]);
+  // ── Grand Total — formula summing all subtotals ──
+  const gtSubtotalRefs = Object.values(summaryCatSubtotalRows).map(r => `G${r}`).join("+");
+  const gt = ws.addRow(["", "", "", "", "", "GRAND TOTAL",
+    gtSubtotalRefs ? { formula: `=${gtSubtotalRefs}`, result: grandTotal } : grandTotal
+  ]);
   gt.height = 22;
   gt.eachCell((cell, col) => {
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.greenBg } };
@@ -1020,17 +1540,135 @@ async function exportAllToExcel(invoices: BillingInvoice[], period: string, sour
   merge(genR.number);
   genR.getCell(1).font = { italic: true, size: 9, color: { argb: C.border } };
 
-  // ── One sheet per customer ──
+  // ── Inventory storage sheets (shared across all customers) ──
+  let sharedStorageAvg: string | undefined;
+  if (storageRows && storageRows.length > 0) {
+    const { avgSheetName } = addInventoryDetailSheets(wb, storageRows);
+    sharedStorageAvg = avgSheetName;
+  }
+
+  // ── One set of WMS data sheets + invoice sheet per customer ──
+  type CustomerMeta = InvoiceSheetMeta & { inv: BillingInvoice; sheetName: string };
+  const customerMetas: CustomerMeta[] = [];
   const usedNames = new Set<string>();
+
   for (const inv of invoices) {
+    const custCode = inv.customer;
+    const source = wmsSourceMap?.[custCode] ?? null;
+    const custOrderEdits = orderEditsMap?.[custCode] ?? {};
+    const refs: DataSheetRefs = {};
+
+    if (source) {
+      if (source.b2b.length > 0) {
+        const { sheetName } = addB2BDetailSheet(wb, custCode, source.b2b, custOrderEdits);
+        refs.b2bSheet = sheetName;
+      }
+      if (source.receiving.length > 0) {
+        const { sheetName } = addInboundDetailSheet(wb, custCode, source.receiving);
+        refs.inboundSheet = sheetName;
+      }
+      if (source.b2c.length > 0) {
+        const { sheetName } = addB2CDetailSheet(wb, custCode, source.b2c);
+        refs.b2cSheet = sheetName;
+      }
+    }
+    if (sharedStorageAvg) refs.storageAvgSheet = sharedStorageAvg;
+
     let name = (inv.customerName || inv.customer).slice(0, 28);
     if (usedNames.has(name)) name = `${name.slice(0, 24)}_${inv.customer.slice(-3)}`;
     usedNames.add(name);
-    fillInvoiceSheet(wb.addWorksheet(name), inv);
+
+    const meta = fillInvoiceSheetFormula(wb.addWorksheet(name), inv, refs);
+    customerMetas.push({ ...meta, inv, sheetName: name });
   }
 
-  // ── Raw WMS data tabs ──
-  if (source) addRawDataSheets(wb, source);
+  // ── Update Summary sheet — replace all hardcoded values with cross-sheet formulas ──
+  if (customerMetas.length > 0) {
+    const sn = (name: string) => `'${name}'`; // safe sheet name wrapper
+
+    // 1. Per line item: Qty = SUM of each customer's qty cell, Amount = SUM of amount cells
+    const allItemIds = new Set(customerMetas.flatMap(m => Object.keys(m.itemRowNums)));
+    allItemIds.forEach(itemId => {
+      // Find which summary row this item is in by looking at the first customer's row map
+      // (all customers have same row structure)
+      const firstMeta = customerMetas.find(m => m.itemRowNums[itemId]);
+      if (!firstMeta) return;
+
+      // Find the summary sheet row for this item by scanning itemMap
+      // The summary sheet was built in the same category order — row matches first customer's offset from row 5
+      // We already tracked the summary rows via the itemMap building loop above, but we need to store them.
+      // Fallback: we'll update the Per-Customer Breakdown table only (simpler, more reliable).
+    });
+
+    // 2. Grand Total cell → SUM of each customer's total cell
+    if (customerMetas.every(m => m.totalRowNum > 0)) {
+      const parts = customerMetas.map(m => `${sn(m.sheetName)}!G${m.totalRowNum}`);
+      const grandTotalResult = invoices.reduce((s, inv) => s + inv.total, 0)
+        + (omSubsidy && omSubsidy > 0 ? omSubsidy : 0);
+      ws.getCell(`G${gt.number}`).value = { formula: `=${parts.join("+")}`, result: grandTotalResult };
+    }
+
+    // 2b. Per line item in Summary: Qty = SUM of customer qty cells, Amount = SUM of amount cells
+    Object.keys(summaryItemRows).forEach(itemId => {
+      const sumRow = summaryItemRows[itemId];
+      if (!sumRow) return;
+      const custQtyCells  = customerMetas.filter(m => m.itemRowNums[itemId]).map(m => `${sn(m.sheetName)}!F${m.itemRowNums[itemId]}`);
+      const custAmtCells  = customerMetas.filter(m => m.itemRowNums[itemId]).map(m => `${sn(m.sheetName)}!G${m.itemRowNums[itemId]}`);
+      if (custQtyCells.length > 0) {
+        const aggQty = invoices.reduce((s, inv) => s + (inv.lineItems.find(l => l.id === itemId)?.qty ?? 0), 0);
+        const aggAmt = invoices.reduce((s, inv) => { const it = inv.lineItems.find(l => l.id === itemId); return s + (it ? calcLineAmount(it) : 0); }, 0);
+        ws.getCell(`F${sumRow}`).value = { formula: `=${custQtyCells.join("+")}`, result: aggQty };
+        ws.getCell(`G${sumRow}`).value = { formula: `=${custAmtCells.join("+")}`, result: aggAmt };
+      }
+    });
+
+    // 3. Per-Customer Breakdown rows → replace static values with cell references
+    // The breakdown table starts after gt row + 2 blank/header rows
+    // Row positions: bkHdr, bkColHdr, then one row per customer
+    // We need to find those rows. Track bkFirstDataRow using a known offset.
+    const bkFirstDataRow = gt.number + 3; // gt → blank → bkHdr → bkColHdr → first data row
+    for (let i = 0; i < invoices.length; i++) {
+      const meta = customerMetas[i];
+      if (!meta || meta.totalRowNum <= 0) continue;
+      const rowNum = bkFirstDataRow + i;
+      const bkRow = ws.getRow(rowNum);
+
+      // Col 3 onwards = category subtotals, last col = total
+      BILLING_CATEGORIES.forEach((cat, ci) => {
+        const catSubRow = meta.catSubtotalRowNums[cat];
+        if (catSubRow) {
+          const cellAmt = meta.inv.subtotals?.[cat] ?? 0;
+          bkRow.getCell(3 + ci).value = { formula: `=${sn(meta.sheetName)}!G${catSubRow}`, result: cellAmt };
+          bkRow.getCell(3 + ci).numFmt = "$#,##0.00";
+        }
+      });
+      // Total column (last)
+      const totalCell = 3 + BILLING_CATEGORIES.length;
+      bkRow.getCell(totalCell).value = { formula: `=${sn(meta.sheetName)}!G${meta.totalRowNum}`, result: meta.inv.total };
+      bkRow.getCell(totalCell).numFmt = "$#,##0.00";
+    }
+
+    // 4. Breakdown grand total row → SUM of customer rows above
+    const bkTotalRow = bkFirstDataRow + invoices.length;
+    const bkTotWsRow = ws.getRow(bkTotalRow);
+    BILLING_CATEGORIES.forEach((_, ci) => {
+      const colIdx = 3 + ci;
+      const colLetter = String.fromCharCode(64 + colIdx); // C, D, E...
+      bkTotWsRow.getCell(colIdx).value = {
+        formula: `=SUM(${colLetter}${bkFirstDataRow}:${colLetter}${bkFirstDataRow + invoices.length - 1})`,
+        result: invoices.reduce((s, inv) => s + (inv.subtotals?.[BILLING_CATEGORIES[ci]] ?? 0), 0),
+      };
+      bkTotWsRow.getCell(colIdx).numFmt = "$#,##0.00";
+    });
+    const totColIdx = 3 + BILLING_CATEGORIES.length;
+    const totColLetter = String.fromCharCode(64 + totColIdx);
+    bkTotWsRow.getCell(totColIdx).value = {
+      formula: `=SUM(${totColLetter}${bkFirstDataRow}:${totColLetter}${bkFirstDataRow + invoices.length - 1})`,
+      result: invoices.reduce((s, inv) => s + inv.total, 0),
+    };
+    bkTotWsRow.getCell(totColIdx).numFmt = "$#,##0.00";
+  }
+
   addRateTableSheet(wb);
   addOmSubsidySheet(wb);
 
@@ -1101,8 +1739,14 @@ export default function BillingPage() {
 
   // ── WMS source data (shown after auto-fetch) ──
   const [wmsSource, setWmsSource] = useState<WmsSource | null>(null);
-  const [sourceTab, setSourceTab] = useState<"receiving" | "b2b" | "b2c" | "returns">("receiving");
+  const [sourceTab, setSourceTab] = useState<"receiving" | "b2b" | "b2c" | "returns" | "storage">("receiving");
   const [showSource, setShowSource] = useState(false);
+  // per-order manual overrides: { orderCode: { billingKey: value } }
+  const [orderEdits, setOrderEdits] = useState<Record<string, Record<string, number>>>({});
+  // per-customer WMS source map for multi-mode exports
+  const [wmsSourceMap, setWmsSourceMap] = useState<Record<string, WmsSource>>({});
+  // per-customer order edits map: customerCode → orderCode → billingKey → number
+  const [orderEditsMap, setOrderEditsMap] = useState<Record<string, Record<string, Record<string, number>>>>({});
 
   // ── multi-customer combined invoice ──
   const [editGroup, setEditGroup] = useState<BillingInvoice[]>([]);
@@ -1448,12 +2092,21 @@ export default function BillingPage() {
   function switchTab(idx: number) {
     if (!editing || idx === activeIdx) return;
     const group = getCurrentGroup();
+    // Save current customer's wmsSource and orderEdits before switching
+    setWmsSourceMap(prev => ({ ...prev, [editing.customer]: wmsSource ?? prev[editing.customer] }));
+    setOrderEditsMap(prev => ({ ...prev, [editing.customer]: orderEdits }));
     setEditGroup(group);
+    const newCust = group[idx].customer;
     setEditing(JSON.parse(JSON.stringify(group[idx])));
     setActiveIdx(idx);
     setExtraTab("none");
     setStorage15(null); setStorageLast(null);
-    setFetchMsg(""); setWmsSource(null); setShowSource(false);
+    setStorageHistoryError(""); setStorageHistoryDebug(null);
+    setFetchMsg("");
+    setShowSource(false);
+    // Restore new customer's wmsSource and orderEdits
+    setWmsSource(wmsSourceMap[newCust] ?? null);
+    setOrderEdits(orderEditsMap[newCust] ?? {});
   }
 
   // ── save all invoices in combined group ──
@@ -1761,9 +2414,12 @@ export default function BillingPage() {
     setFetchMsg("Fetching WMS data...");
     setWmsSource(null);
     setShowSource(false);
+    setOrderEdits({});
     try {
       const { updates, source } = await fetchWmsQty(editing.customer, editing.period);
       setWmsSource(source);
+      setWmsSourceMap(prev => ({ ...prev, [editing.customer]: source }));
+      setOrderEditsMap(prev => ({ ...prev, [editing.customer]: {} }));
       const count = Object.keys(updates).length;
       setFetchMsg(
         count > 0
@@ -1823,6 +2479,8 @@ export default function BillingPage() {
     if (editGroup.length > 1) { await saveAllMulti(status); return; }
     setSaving(true);
     setSaveError("");
+    // Persist current orderEdits to map before saving
+    setOrderEditsMap(prev => ({ ...prev, [editing.customer]: orderEdits }));
     try {
       const payload: BillingInvoice = {
         ...editing,
@@ -1945,8 +2603,8 @@ export default function BillingPage() {
             <button
               onClick={() => {
                 const group = getCurrentGroup();
-                if (isMultiMode) exportAllToExcel(group, editing.period, wmsSource, calcStlAlloc(omWages, omAllocPct)).catch(console.error);
-                else exportInvoiceToExcel({ ...editing, total: currentTotal }, wmsSource).catch(console.error);
+                if (isMultiMode) exportAllToExcel(group, editing.period, wmsSourceMap, { [editing.customer]: orderEdits }, storageRows, calcStlAlloc(omWages, omAllocPct)).catch(console.error);
+                else exportInvoiceToExcel({ ...editing, total: currentTotal }, wmsSource, orderEdits, storageRows).catch(console.error);
               }}
               className="flex items-center gap-1.5 text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-600 hover:bg-slate-50 transition-colors"
             >
@@ -2332,6 +2990,16 @@ export default function BillingPage() {
                       {label} ({count})
                     </button>
                   ))}
+                  <button
+                    onClick={() => setSourceTab("storage")}
+                    className={`px-4 py-2.5 text-xs font-medium border-b-2 transition-colors -mb-px ${
+                      sourceTab === "storage"
+                        ? "text-purple-600 border-purple-600 border-current"
+                        : "border-transparent text-slate-400 hover:text-slate-600"
+                    }`}
+                  >
+                    Storage ({storageRows.length})
+                  </button>
                 </div>
 
                 {/* Table area */}
@@ -2461,93 +3129,161 @@ export default function BillingPage() {
                           </thead>
                           <tbody>
                             {wmsSource.b2b.map((o, i) => {
+                              const code     = String(o.shippingOrderCode ?? o.orderCode ?? i);
                               const tasks    = parseTaskComment(String(o.comment ?? ""));
-                              const pp       = tasks["Picking per Piece"]  ?? 0;
-                              const pc       = tasks["Picking per Carton"] ?? 0;
-                              const ppl      = tasks["Picking per Pallet"] ?? 0;
-                              const oc       = tasks["Out per Carton"]     ?? 0;
-                              const op       = tasks["Out per Pallet"]     ?? 0;
-                              const supplies = tasks["Supplies"]           ?? 0;
-                              const labels   = (tasks["Labels"] ?? 0) + (tasks["Amazon Labels"] ?? 0) + (tasks["FBA Labeling"] ?? 0);
-                              const inserts  = tasks["Inserts"] ?? 0;
-                              const packingCharged   = (oc > 0 && oc !== pc) || supplies > 0;
-                              const palletizeCharged = op > 0 && op !== ppl;
-                              const warn = pp > 0 && oc === 0 && op === 0 && supplies === 0;
-                              const packingTotal = (oc > 0 && oc !== pc ? oc : 0) + supplies;
-                              const lh   = tasks["Labor Hours"]              ?? 0;
-                              const lhOT = tasks["Labor Hours (OT)"]         ?? 0;
-                              const lhWk = tasks["Labor Hours (Weekend/Holiday)"] ?? 0;
+                              const ov       = orderEdits[code] ?? {};
+                              // parsed defaults
+                              const pp0      = tasks["Picking per Piece"]  ?? 0;
+                              const pc0      = tasks["Picking per Carton"] ?? 0;
+                              const ppl0     = tasks["Picking per Pallet"] ?? 0;
+                              const oc0      = tasks["Out per Carton"]     ?? 0;
+                              const op0      = tasks["Out per Pallet"]     ?? 0;
+                              const supplies0= tasks["Supplies"]           ?? 0;
+                              const labels0  = (tasks["Labels"] ?? 0) + (tasks["Amazon Labels"] ?? 0) + (tasks["FBA Labeling"] ?? 0);
+                              const inserts0 = tasks["Inserts"] ?? 0;
+                              const lh0      = tasks["Labor Hours"]              ?? 0;
+                              const lhOT0    = tasks["Labor Hours (OT)"]         ?? 0;
+                              const lhWk0    = tasks["Labor Hours (Weekend/Holiday)"] ?? 0;
+                              // effective raw values (user override or WMS parsed)
+                              const oc_eff  = ov["out_carton"]      ?? oc0;
+                              const op_eff  = ov["out_pallet"]      ?? op0;
+                              const sup_eff = ov["supplies"]        ?? supplies0;
+                              const pc_eff  = ov["b2b_pick_carton"] ?? pc0;
+                              const ppl_eff = ov["b2b_pick_pallet"] ?? ppl0;
+                              // packing: charge supplies qty only when out_carton differs from pick_carton (repacked)
+                              const packingDefault   = (oc_eff > 0 && oc_eff !== pc_eff) ? sup_eff : 0;
+                              // palletizing: out_pallet qty if > 0
+                              const palletizeDefault = op_eff > 0 ? op_eff : 0;
+                              // effective values (override or default)
+                              const pp   = ov["b2b_pick_piece"]    ?? pp0;
+                              const pc   = ov["b2b_pick_carton"]   ?? pc0;
+                              const ppl  = ov["b2b_pick_pallet"]   ?? ppl0;
+                              const pkg  = ov["b2b_carton_packing"]?? packingDefault;
+                              const pal  = ov["b2b_palletizing"]   ?? palletizeDefault;
+                              const lbl  = ov["b2b_label"]         ?? labels0;
+                              const ins  = ov["b2b_insert"]        ?? inserts0;
+                              const lh   = ov["labor_regular"]     ?? lh0;
+                              const lhOT = ov["labor_ot_weekday"]  ?? lhOT0;
+                              const lhWk = ov["labor_ot_weekend"]  ?? lhWk0;
+                              const warn = pp0 > 0 && oc0 === 0 && op0 === 0 && supplies0 === 0 && !("b2b_carton_packing" in ov);
+                              const inputCls = (color?: string, modified?: boolean) =>
+                                `w-14 text-right text-xs font-semibold rounded px-1 py-0.5 border ${
+                                  modified
+                                    ? "border-yellow-400 bg-yellow-100 hover:bg-yellow-50 focus:border-yellow-500"
+                                    : "border-slate-300 bg-slate-50 hover:bg-white"
+                                } focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200 transition-colors placeholder:text-slate-300 ${color ?? "text-slate-800"}`;
+                              const setOv = (key: string, val: string) => {
+                                const num = val === "" ? undefined : Number(val);
+                                setOrderEdits(prev => {
+                                  const next = { ...prev, [code]: { ...(prev[code] ?? {}) } };
+                                  if (num === undefined) delete next[code][key];
+                                  else next[code][key] = num;
+                                  // recalculate billing totals from all rows
+                                  const colKeys = ["b2b_pick_piece","b2b_pick_carton","b2b_pick_pallet","b2b_carton_packing","b2b_palletizing","b2b_label","b2b_insert","labor_regular","labor_ot_weekday","labor_ot_weekend"];
+                                  const totals: Record<string,number> = {};
+                                  colKeys.forEach(k => { totals[k] = 0; });
+                                  wmsSource.b2b.forEach((ord, idx) => {
+                                    const ordCode = String(ord.shippingOrderCode ?? ord.orderCode ?? idx);
+                                    const t = parseTaskComment(String(ord.comment ?? ""));
+                                    const ordOv = next[ordCode] ?? {};
+                                    const oc_ = ordOv["out_carton"]      ?? (t["Out per Carton"]     ?? 0);
+                                    const op_ = ordOv["out_pallet"]      ?? (t["Out per Pallet"]     ?? 0);
+                                    const sup_= ordOv["supplies"]        ?? (t["Supplies"]            ?? 0);
+                                    const pc_ = ordOv["b2b_pick_carton"] ?? (t["Picking per Carton"]  ?? 0);
+                                    const pkgDef = (oc_ > 0 && oc_ !== pc_) ? sup_ : 0;
+                                    const palDef = op_ > 0 ? op_ : 0;
+                                    const lblDef = (t["Labels"] ?? 0) + (t["Amazon Labels"] ?? 0) + (t["FBA Labeling"] ?? 0);
+                                    totals["b2b_pick_piece"]    += ordOv["b2b_pick_piece"]    ?? (t["Picking per Piece"]  ?? 0);
+                                    totals["b2b_pick_carton"]   += ordOv["b2b_pick_carton"]   ?? (t["Picking per Carton"] ?? 0);
+                                    totals["b2b_pick_pallet"]   += ordOv["b2b_pick_pallet"]   ?? (t["Picking per Pallet"] ?? 0);
+                                    totals["b2b_carton_packing"]+= ordOv["b2b_carton_packing"]?? pkgDef;
+                                    totals["b2b_palletizing"]   += ordOv["b2b_palletizing"]   ?? palDef;
+                                    totals["b2b_label"]         += ordOv["b2b_label"]         ?? lblDef;
+                                    totals["b2b_insert"]        += ordOv["b2b_insert"]        ?? (t["Inserts"] ?? 0);
+                                    totals["labor_regular"]     += ordOv["labor_regular"]     ?? (t["Labor Hours"] ?? 0);
+                                    totals["labor_ot_weekday"]  += ordOv["labor_ot_weekday"]  ?? (t["Labor Hours (OT)"] ?? 0);
+                                    totals["labor_ot_weekend"]  += ordOv["labor_ot_weekend"]  ?? (t["Labor Hours (Weekend/Holiday)"] ?? 0);
+                                  });
+                                  // push totals → billing line items
+                                  setEditing(ep => {
+                                    if (!ep) return ep;
+                                    const items = ep.lineItems.map(item =>
+                                      totals[item.id] !== undefined
+                                        ? { ...item, qty: totals[item.id], autoFetched: false }
+                                        : item
+                                    );
+                                    return { ...ep, lineItems: items, subtotals: calcSubtotals(items), total: calcTotal(items) };
+                                  });
+                                  return next;
+                                });
+                              };
                               return (
                                 <tr key={i} className={`border-b border-slate-50 ${warn ? "bg-amber-50" : ""}`}>
-                                  <td className="px-3 py-1.5 font-mono text-emerald-600">
-                                    {String(o.shippingOrderCode ?? o.orderCode ?? "—")}
+                                  <td className="px-3 py-1 font-mono text-emerald-600 text-xs">
+                                    {code}
                                     {warn && <span className="ml-1 text-amber-500">⚠</span>}
                                   </td>
-                                  <td className="px-3 py-1.5 text-slate-500">{String(o.orderDate ?? "—")}</td>
-                                  <td className="px-3 py-1.5 text-right">{pp || "—"}</td>
-                                  <td className="px-3 py-1.5 text-right">{pc || "—"}</td>
-                                  <td className="px-3 py-1.5 text-right">{ppl || "—"}</td>
-                                  <td className="px-3 py-1.5 text-right">{oc || "—"}</td>
-                                  <td className="px-3 py-1.5 text-right">{op || "—"}</td>
-                                  <td className="px-3 py-1.5 text-right text-blue-600 font-medium">{supplies || "—"}</td>
-                                  <td className="px-3 py-1.5 text-right font-semibold">
-                                    {packingCharged ? <span className="text-emerald-600">{packingTotal}</span> : "—"}
-                                  </td>
-                                  <td className="px-3 py-1.5 text-right font-semibold">
-                                    {op > 0 ? (palletizeCharged ? <span className="text-emerald-600">{op}</span> : <span className="text-slate-400 line-through">{op}</span>) : "—"}
-                                  </td>
-                                  <td className="px-3 py-1.5 text-right font-semibold">
-                                    {labels > 0 ? <span className="text-violet-600">{labels}</span> : "—"}
-                                  </td>
-                                  <td className="px-3 py-1.5 text-right font-semibold">
-                                    {inserts > 0 ? <span className="text-violet-600">{inserts}</span> : "—"}
-                                  </td>
-                                  <td className="px-3 py-1.5 text-right font-semibold">
-                                    {lh > 0 ? <span className="text-orange-600">{lh}</span> : "—"}
-                                  </td>
-                                  <td className="px-3 py-1.5 text-right font-semibold">
-                                    {lhOT > 0 ? <span className="text-orange-600">{lhOT}</span> : "—"}
-                                  </td>
-                                  <td className="px-3 py-1.5 text-right font-semibold">
-                                    {lhWk > 0 ? <span className="text-orange-600">{lhWk}</span> : "—"}
-                                  </td>
+                                  <td className="px-3 py-1 text-slate-500">{String(o.orderDate ?? "—")}</td>
+                                  <td className="px-1 py-1 text-right"><input type="number" min={0} value={pp || ""} placeholder="—" onChange={e => setOv("b2b_pick_piece", e.target.value)} className={inputCls(undefined, "b2b_pick_piece" in ov)} /></td>
+                                  <td className="px-1 py-1 text-right"><input type="number" min={0} value={pc || ""} placeholder="—" onChange={e => setOv("b2b_pick_carton", e.target.value)} className={inputCls(undefined, "b2b_pick_carton" in ov)} /></td>
+                                  <td className="px-1 py-1 text-right"><input type="number" min={0} value={ppl || ""} placeholder="—" onChange={e => setOv("b2b_pick_pallet", e.target.value)} className={inputCls(undefined, "b2b_pick_pallet" in ov)} /></td>
+                                  <td className="px-1 py-1 text-right"><input type="number" min={0} value={(ov["out_carton"] ?? oc0) || ""} placeholder="—" onChange={e => setOv("out_carton", e.target.value)} className={inputCls("text-slate-600", "out_carton" in ov)} /></td>
+                                  <td className="px-1 py-1 text-right"><input type="number" min={0} value={(ov["out_pallet"] ?? op0) || ""} placeholder="—" onChange={e => setOv("out_pallet", e.target.value)} className={inputCls("text-slate-600", "out_pallet" in ov)} /></td>
+                                  <td className="px-1 py-1 text-right"><input type="number" min={0} value={(ov["supplies"] ?? supplies0) || ""} placeholder="—" onChange={e => setOv("supplies", e.target.value)} className={inputCls("text-blue-600", "supplies" in ov)} /></td>
+                                  <td className="px-1 py-1 text-right"><input type="number" min={0} value={pkg || ""} placeholder="—" onChange={e => setOv("b2b_carton_packing", e.target.value)} className={inputCls("text-emerald-700", "b2b_carton_packing" in ov)} /></td>
+                                  <td className="px-1 py-1 text-right"><input type="number" min={0} value={pal || ""} placeholder="—" onChange={e => setOv("b2b_palletizing", e.target.value)} className={inputCls("text-emerald-700", "b2b_palletizing" in ov)} /></td>
+                                  <td className="px-1 py-1 text-right"><input type="number" min={0} value={lbl || ""} placeholder="—" onChange={e => setOv("b2b_label", e.target.value)} className={inputCls("text-violet-700", "b2b_label" in ov)} /></td>
+                                  <td className="px-1 py-1 text-right"><input type="number" min={0} value={ins || ""} placeholder="—" onChange={e => setOv("b2b_insert", e.target.value)} className={inputCls("text-violet-700", "b2b_insert" in ov)} /></td>
+                                  <td className="px-1 py-1 text-right"><input type="number" min={0} value={lh || ""} placeholder="—" onChange={e => setOv("labor_regular", e.target.value)} className={inputCls("text-orange-700", "labor_regular" in ov)} /></td>
+                                  <td className="px-1 py-1 text-right"><input type="number" min={0} value={lhOT || ""} placeholder="—" onChange={e => setOv("labor_ot_weekday", e.target.value)} className={inputCls("text-orange-700", "labor_ot_weekday" in ov)} /></td>
+                                  <td className="px-1 py-1 text-right"><input type="number" min={0} value={lhWk || ""} placeholder="—" onChange={e => setOv("labor_ot_weekend", e.target.value)} className={inputCls("text-orange-700", "labor_ot_weekend" in ov)} /></td>
                                 </tr>
                               );
                             })}
-                            <tr className="bg-emerald-50 border-t border-emerald-100 font-semibold text-emerald-700">
-                              <td colSpan={2} className="px-3 py-1.5">Total ({wmsSource.b2b.length} orders)</td>
-                              <td className="px-3 py-1.5 text-right">{wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Picking per Piece"] ?? 0), 0) || "—"}</td>
-                              <td className="px-3 py-1.5 text-right">{wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Picking per Carton"] ?? 0), 0) || "—"}</td>
-                              <td className="px-3 py-1.5 text-right">{wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Picking per Pallet"] ?? 0), 0) || "—"}</td>
-                              <td className="px-3 py-1.5 text-right">{wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Out per Carton"] ?? 0), 0) || "—"}</td>
-                              <td className="px-3 py-1.5 text-right">{wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Out per Pallet"] ?? 0), 0) || "—"}</td>
-                              <td className="px-3 py-1.5 text-right text-blue-700">{wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Supplies"] ?? 0), 0) || "—"}</td>
-                              <td className="px-3 py-1.5 text-right">
-                                {wmsSource.b2b.reduce((s, o) => {
-                                  const t = parseTaskComment(String(o.comment ?? ""));
-                                  const oc = t["Out per Carton"] ?? 0; const pc = t["Picking per Carton"] ?? 0;
-                                  return s + (oc > 0 && oc !== pc ? oc : 0) + (t["Supplies"] ?? 0);
-                                }, 0) || "—"}
-                              </td>
-                              <td className="px-3 py-1.5 text-right">
-                                {wmsSource.b2b.reduce((s, o) => { const t = parseTaskComment(String(o.comment ?? "")); const op = t["Out per Pallet"] ?? 0; const ppl = t["Picking per Pallet"] ?? 0; return s + (op > 0 && op !== ppl ? op : 0); }, 0) || "—"}
-                              </td>
-                              <td className="px-3 py-1.5 text-right text-violet-700">
-                                {wmsSource.b2b.reduce((s, o) => { const t = parseTaskComment(String(o.comment ?? "")); return s + (t["Labels"] ?? 0) + (t["Amazon Labels"] ?? 0) + (t["FBA Labeling"] ?? 0); }, 0) || "—"}
-                              </td>
-                              <td className="px-3 py-1.5 text-right text-violet-700">
-                                {wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Inserts"] ?? 0), 0) || "—"}
-                              </td>
-                              <td className="px-3 py-1.5 text-right text-orange-700">
-                                {wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Labor Hours"] ?? 0), 0) || "—"}
-                              </td>
-                              <td className="px-3 py-1.5 text-right text-orange-700">
-                                {wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Labor Hours (OT)"] ?? 0), 0) || "—"}
-                              </td>
-                              <td className="px-3 py-1.5 text-right text-orange-700">
-                                {wmsSource.b2b.reduce((s, o) => s + (parseTaskComment(String(o.comment ?? ""))["Labor Hours (Weekend/Holiday)"] ?? 0), 0) || "—"}
-                              </td>
-                            </tr>
+                            {/* ── Auto-summed Total row ── */}
+                            {(() => {
+                              const sumCol = (key: string, defFn: (o: Record<string,unknown>, idx: number) => number) =>
+                                wmsSource.b2b.reduce((s, o, idx) => {
+                                  const code = String(o.shippingOrderCode ?? o.orderCode ?? idx);
+                                  return s + (orderEdits[code]?.[key] ?? defFn(o as Record<string,unknown>, idx));
+                                }, 0);
+                              const totPP  = sumCol("b2b_pick_piece",    (o) => { const t=parseTaskComment(String(o.comment??"")); return t["Picking per Piece"]??0; });
+                              const totPC  = sumCol("b2b_pick_carton",   (o) => { const t=parseTaskComment(String(o.comment??"")); return t["Picking per Carton"]??0; });
+                              const totPPl = sumCol("b2b_pick_pallet",   (o) => { const t=parseTaskComment(String(o.comment??"")); return t["Picking per Pallet"]??0; });
+                              const totOC  = sumCol("out_carton",  (o) => { const t=parseTaskComment(String(o.comment??"")); return t["Out per Carton"]??0; });
+                              const totOP  = sumCol("out_pallet",  (o) => { const t=parseTaskComment(String(o.comment??"")); return t["Out per Pallet"]??0; });
+                              const totSup = sumCol("supplies",    (o) => { const t=parseTaskComment(String(o.comment??"")); return t["Supplies"]??0; });
+                              const totPkg = sumCol("b2b_carton_packing",(o, idx) => { const t=parseTaskComment(String(o.comment??"")); const code_=String((o as Record<string,unknown>).shippingOrderCode??(o as Record<string,unknown>).orderCode??idx); const ov_=orderEdits[code_]??{}; const oc_=ov_["out_carton"]??(t["Out per Carton"]??0); const pc_=ov_["b2b_pick_carton"]??(t["Picking per Carton"]??0); const sup_=ov_["supplies"]??(t["Supplies"]??0); return (oc_>0&&oc_!==pc_)?sup_:0; });
+                              const totPal = sumCol("b2b_palletizing",   (o, idx) => { const t=parseTaskComment(String(o.comment??"")); const code_=String((o as Record<string,unknown>).shippingOrderCode??(o as Record<string,unknown>).orderCode??idx); const ov_=orderEdits[code_]??{}; const op_=ov_["out_pallet"]??(t["Out per Pallet"]??0); return op_>0?op_:0; });
+                              const totLbl = sumCol("b2b_label",         (o) => { const t=parseTaskComment(String(o.comment??"")); return (t["Labels"]??0)+(t["Amazon Labels"]??0)+(t["FBA Labeling"]??0); });
+                              const totIns = sumCol("b2b_insert",        (o) => { const t=parseTaskComment(String(o.comment??"")); return t["Inserts"]??0; });
+                              const totLH  = sumCol("labor_regular",     (o) => { const t=parseTaskComment(String(o.comment??"")); return t["Labor Hours"]??0; });
+                              const totOT  = sumCol("labor_ot_weekday",  (o) => { const t=parseTaskComment(String(o.comment??"")); return t["Labor Hours (OT)"]??0; });
+                              const totWk  = sumCol("labor_ot_weekend",  (o) => { const t=parseTaskComment(String(o.comment??"")); return t["Labor Hours (Weekend/Holiday)"]??0; });
+                              const tdTot = (v: number, color?: string) => (
+                                <td className={`px-3 py-1.5 text-right font-bold text-xs ${color ?? "text-emerald-700"}`}>{v || "—"}</td>
+                              );
+                              return (
+                                <tr className="bg-emerald-50 border-t-2 border-emerald-200">
+                                  <td colSpan={2} className="px-3 py-1.5 text-emerald-700 text-xs font-bold">
+                                    Total ({wmsSource.b2b.length} orders)
+                                  </td>
+                                  {tdTot(totPP)}
+                                  {tdTot(totPC)}
+                                  {tdTot(totPPl)}
+                                  <td className="px-3 py-1.5 text-right text-xs text-slate-500 font-bold">{totOC || "—"}</td>
+                                  <td className="px-3 py-1.5 text-right text-xs text-slate-500 font-bold">{totOP || "—"}</td>
+                                  <td className="px-3 py-1.5 text-right text-xs text-blue-700 font-bold">{totSup || "—"}</td>
+                                  {tdTot(totPkg)}
+                                  {tdTot(totPal)}
+                                  {tdTot(totLbl, "text-violet-700")}
+                                  {tdTot(totIns, "text-violet-700")}
+                                  {tdTot(totLH,  "text-orange-700")}
+                                  {tdTot(totOT,  "text-orange-700")}
+                                  {tdTot(totWk,  "text-orange-700")}
+                                </tr>
+                              );
+                            })()}
                           </tbody>
                         </table>
                       </div>
@@ -2625,6 +3361,40 @@ export default function BillingPage() {
                             <td colSpan={3} className="px-3 py-1.5">Total</td>
                             <td className="px-3 py-1.5 text-right">{wmsSource.returns.length}</td>
                             <td className="px-3 py-1.5 text-right">{wmsSource.returns.reduce((s, o) => s + Number(o.totalQty ?? o.qty ?? 0), 0)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    )
+                  )}
+
+                  {/* ── Storage ── */}
+                  {sourceTab === "storage" && (
+                    storageRows.length === 0 ? (
+                      <p className="text-center text-sm text-slate-400 py-8">No storage data loaded. Use &apos;Load from WMS History&apos; below.</p>
+                    ) : (
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-50 sticky top-0">
+                          <tr>
+                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">Location Type</th>
+                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">15th Day Qty</th>
+                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">Last Day Qty</th>
+                            <th className="px-3 py-2 text-right text-purple-600 font-semibold">Average</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {storageRows.map((row) => (
+                            <tr key={row.key} className="border-b border-slate-50 hover:bg-slate-50">
+                              <td className="px-3 py-1.5 text-slate-700 font-medium">{row.label}</td>
+                              <td className="px-3 py-1.5 text-right text-slate-500">{row.qty15.toLocaleString()}</td>
+                              <td className="px-3 py-1.5 text-right text-slate-500">{row.qtyLast.toLocaleString()}</td>
+                              <td className="px-3 py-1.5 text-right font-semibold text-purple-700">{row.avg.toLocaleString(undefined, { maximumFractionDigits: 1 })}</td>
+                            </tr>
+                          ))}
+                          <tr className="bg-purple-50 border-t border-purple-100 font-semibold text-purple-700">
+                            <td className="px-3 py-1.5">Total</td>
+                            <td className="px-3 py-1.5 text-right">{storageRows.reduce((s, r) => s + r.qty15, 0).toLocaleString()}</td>
+                            <td className="px-3 py-1.5 text-right">{storageRows.reduce((s, r) => s + r.qtyLast, 0).toLocaleString()}</td>
+                            <td className="px-3 py-1.5 text-right">{storageRows.reduce((s, r) => s + r.avg, 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}</td>
                           </tr>
                         </tbody>
                       </table>

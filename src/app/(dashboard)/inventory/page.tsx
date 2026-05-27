@@ -37,7 +37,13 @@ type AdjustForm = {
   warehouseCode: string;
   warehouseCd: string;      // internal warehouse ID e.g. "W2026032400000002"
   customerCode: string;
-  locationCode: string;
+  locationCode: string;     // display code with dashes e.g. "01-31-11-04-01"
+  // Individual location parts from location-search response
+  zoneName: string;
+  aisleName: string;
+  bayName: string;
+  levelName: string;
+  positionName: string;
   condition: string;        // → itemCondition in payload
   sku: string;              // → productSku in payload
   productName: string;
@@ -52,7 +58,7 @@ type AdjustForm = {
 type BatchRow = AdjustForm & { _status?: "pending" | "ok" | "error"; _msg?: string };
 
 function blankForm(warehouseCode = "", warehouseCd = "", customerCode = ""): AdjustForm {
-  return { warehouseCode, warehouseCd, customerCode, locationCode: "", condition: "GOOD", sku: "", productName: "", currentQty: 0, adjustQty: "", lotNo: "", expireDate: "", serialNo: "", remark: "" };
+  return { warehouseCode, warehouseCd, customerCode, locationCode: "", zoneName: "", aisleName: "", bayName: "", levelName: "", positionName: "", condition: "GOOD", sku: "", productName: "", currentQty: 0, adjustQty: "", lotNo: "", expireDate: "", serialNo: "", remark: "" };
 }
 
 // ────────────────────────────────────────────────
@@ -90,6 +96,8 @@ export default function InventoryPage() {
   const [adjustSubmitting, setAdjustSubmitting] = useState(false);
   const [adjustResult, setAdjustResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [qtyFetching, setQtyFetching] = useState(false);
+  // ── Success confirmation modal ──
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   // ── Batch upload modal ──
   const [batchOpen, setBatchOpen] = useState(false);
@@ -396,10 +404,12 @@ export default function InventoryPage() {
     if (!term || term.length < 1 || !whCode) { setLocResults([]); setLocDropOpen(false); return; }
     setLocLoading(true);
     try {
+      // Real WMS app searches without dashes: "0131010101" not "01-31-01-01-01"
+      const searchTerm = term.replace(/-/g, "");
       const res = await fetch("/api/wms/warehouse/location-search", {
         method: "POST",
         headers,
-        body: JSON.stringify({ warehouseCode: whCode, search: term }),
+        body: JSON.stringify({ warehouseCode: whCode, search: searchTerm }),
       });
       const json = await res.json();
       const arr: LocResult[] = Array.isArray(json?.data) ? json.data
@@ -440,8 +450,23 @@ export default function InventoryPage() {
 
   function selectLocation(loc: LocResult) {
     const code = getLocCode(loc);
+    // Extract individual parts from the location-search response
+    const zn = String(loc.zoneName     ?? loc.zone     ?? loc.zoneNo     ?? "");
+    const an = String(loc.aisleName    ?? loc.aisle    ?? loc.aisleNo    ?? "");
+    const bn = String(loc.bayName      ?? loc.bay      ?? loc.bayNo      ?? "");
+    const ln = String(loc.levelName    ?? loc.level    ?? loc.levelNo    ?? "");
+    const pn = String(loc.positionName ?? loc.position ?? loc.positionNo ?? "");
+    console.log("[selectLocation] parts:", { zn, an, bn, ln, pn, code, raw: loc });
     setLocSearch(code);
-    setAdjustForm((f) => ({ ...f, locationCode: code }));
+    setAdjustForm((f) => ({
+      ...f,
+      locationCode: code,
+      zoneName:     zn,
+      aisleName:    an,
+      bayName:      bn,
+      levelName:    ln,
+      positionName: pn,
+    }));
     setLocDropOpen(false);
     // fetch current qty after location is set
     setTimeout(() => fetchCurrentQty({ ...adjustForm, locationCode: code }), 50);
@@ -508,20 +533,52 @@ export default function InventoryPage() {
     if (!form.adjustQty || isNaN(adjustQtyNum) || adjustQtyNum === 0) {
       return { ok: false, msg: "Adjust Qty must be a non-zero number." };
     }
+
+    // ── Step 1: Register the location on the WMS server ──────────────────
+    // The real WMS app calls location-search before adjust — server stores the
+    // selected location in the user's JWT session. We replicate this.
+    // Also capture warehouseCd from the location-search response (the real WMS
+    // app uses warehouseCd from this response in the adjust payload).
+    let warehouseCdFromLoc = form.warehouseCd;
+    try {
+      const locCodeNoDash = form.locationCode.replace(/-/g, "");
+      const locRes = await fetch("/api/wms/warehouse/location-search", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ warehouseCode: form.warehouseCode, search: locCodeNoDash }),
+      });
+      if (locRes.ok) {
+        const locJson = await locRes.json();
+        const arr: Record<string, unknown>[] =
+          Array.isArray(locJson?.data) ? locJson.data
+          : Array.isArray(locJson?.data?.list) ? locJson.data.list
+          : Array.isArray(locJson?.list) ? locJson.list
+          : Array.isArray(locJson) ? locJson : [];
+        // Grab warehouseCd from the first result (matches real WMS behavior)
+        if (arr.length > 0 && arr[0].warehouseCd) {
+          warehouseCdFromLoc = String(arr[0].warehouseCd);
+        }
+        console.log("[pre-adjust] location-search done, warehouseCd:", warehouseCdFromLoc, "results:", arr.length);
+      }
+    } catch (e) {
+      console.warn("[pre-adjust] location-search failed (non-fatal):", e);
+    }
+
+    // ── Step 2: Call inventory/adjust ────────────────────────────────────
+    // Payload matches the real WMS app EXACTLY — no location fields.
+    // Location is supplied via server-side session set by location-search above.
     const payload: Record<string, unknown> = {
-      warehouseCode: form.warehouseCode,
-      warehouseCd:   form.warehouseCd || undefined,
       customerCode:  form.customerCode,
-      locationCode:  form.locationCode || undefined,  // some API versions use this
-      location:      form.locationCode || undefined,  // others use this
-      itemCondition: form.condition,
-      productSku:    form.sku || undefined,
+      warehouseCode: form.warehouseCode,
+      warehouseCd:   warehouseCdFromLoc || undefined,
       adjustQty:     adjustQtyNum,
       adjustType:    "N",
-      lotNo:         form.lotNo || "",
       expireDate:    form.expireDate ? form.expireDate.replace(/-/g, "") : "",
-      serialNo:      form.serialNo || "",
+      itemCondition: form.condition,
+      lotNo:         form.lotNo || "",
+      productSku:    form.sku || undefined,
       remark:        form.remark || "",
+      serialNo:      form.serialNo || "",
     };
     // strip undefined (but keep empty strings — API expects them)
     Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
@@ -554,11 +611,13 @@ export default function InventoryPage() {
     setAdjustSubmitting(true);
     setAdjustResult(null);
     const result = await submitAdjust(adjustForm);
-    setAdjustResult(result);
     setAdjustSubmitting(false);
     if (result.ok) {
-      // refresh inventory after short delay
+      setAdjustResult(null);
+      setSuccessMsg(result.msg);   // open success modal
       setTimeout(() => loadInventory(), 800);
+    } else {
+      setAdjustResult(result);
     }
   }
 
@@ -582,11 +641,19 @@ export default function InventoryPage() {
       }
       const whCode = get("Warehouse", "warehouseCode", "warehouse_code") || warehouseCode;
       const wh = warehouses.find((w) => w.id === whCode);
+      const locCode = get("Location", "locationCode", "location_code");
+      const locParts = locCode.split("-");
       return {
         warehouseCode: whCode,
         warehouseCd:   wh?.cd ?? "",
         customerCode:  get("Customer Code", "Customer", "customerCode", "customer_code"),
-        locationCode:  get("Location", "locationCode", "location_code"),
+        locationCode:  locCode,
+        // Individual parts parsed from dashed location code (batch rows don't go through selectLocation)
+        zoneName:     locParts[0] ?? "",
+        aisleName:    locParts[1] ?? "",
+        bayName:      locParts[2] ?? "",
+        levelName:    locParts[3] ?? "",
+        positionName: locParts[4] ?? "",
         condition:     get("Condition", "itemCondition", "condition") || "GOOD",
         sku:           get("SKU", "productSku", "sku", "Product SKU"),
         productName:   get("Product Name", "productName", "product_name"),
@@ -991,10 +1058,10 @@ export default function InventoryPage() {
                 </div>
               </div>
 
-              {/* Result banner */}
-              {adjustResult && (
-                <div className={`flex items-center gap-2 rounded-lg px-4 py-3 text-sm ${adjustResult.ok ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"}`}>
-                  {adjustResult.ok ? <CheckCircle2 className="w-4 h-4 flex-shrink-0" /> : <AlertCircle className="w-4 h-4 flex-shrink-0" />}
+              {/* Error banner (success handled by separate modal) */}
+              {adjustResult && !adjustResult.ok && (
+                <div className="flex items-center gap-2 rounded-lg px-4 py-3 text-sm bg-red-50 text-red-700 border border-red-200">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
                   {adjustResult.msg}
                 </div>
               )}
@@ -1010,6 +1077,42 @@ export default function InventoryPage() {
               >
                 {adjustSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
                 Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════
+          Success Modal
+          ══════════════════════════════════════════ */}
+      {successMsg && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden">
+            <div className="flex flex-col items-center gap-4 px-8 py-10 text-center">
+              <div className="w-16 h-16 rounded-full bg-emerald-100 flex items-center justify-center">
+                <CheckCircle2 className="w-9 h-9 text-emerald-500" />
+              </div>
+              <div>
+                <p className="text-lg font-semibold text-slate-800 mb-1">Adjustment Complete</p>
+                <p className="text-sm text-slate-500">{successMsg}</p>
+              </div>
+            </div>
+            <div className="px-8 pb-8">
+              <button
+                onClick={() => {
+                  setSuccessMsg(null);
+                  // Reset form but keep warehouse / customer selection
+                  const wh = warehouses.find((w) => w.id === adjustForm.warehouseCode);
+                  setAdjustForm(blankForm(adjustForm.warehouseCode, wh?.cd ?? "", adjustForm.customerCode));
+                  setLocSearch("");
+                  setLocResults([]);
+                  setLocDropOpen(false);
+                  setAdjustResult(null);
+                }}
+                className="w-full py-3 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition-colors"
+              >
+                확인
               </button>
             </div>
           </div>

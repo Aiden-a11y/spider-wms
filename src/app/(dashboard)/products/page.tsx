@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useState, useMemo, useCallback } from "react";
-import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/contexts/auth-context";
 import {
   Search, RefreshCw, Package, Download, X, BoxIcon, Check,
-  AlertCircle, RefreshCcw, Clock, ChevronDown, ChevronUp,
+  AlertCircle,
 } from "lucide-react";
 
 /* ── Types ── */
@@ -22,13 +22,6 @@ interface ProductMaster {
   status:             string;
   item_store_comment: string;
   description:        string;
-  synced_at:          string;
-}
-
-interface SyncInfo {
-  synced_at:   string;
-  total_count: number;
-  elapsed_sec: number;
 }
 
 export interface UomRow {
@@ -53,21 +46,18 @@ function fmtRelative(iso: string) {
 
 /* ══════════════════════════════════════════════════════════════════════════ */
 export default function ProductsPage() {
+  const { user } = useAuth();
+  const headers = useMemo(
+    () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
+    [user]
+  );
+
   /* ── core state ── */
   const [allProducts,  setAllProducts]  = useState<ProductMaster[]>([]);
-  const [loading,      setLoading]      = useState(true);
+  const [loading,      setLoading]      = useState(false);
   const [customerCode, setCustomerCode] = useState("ALL");
   const [search,       setSearch]       = useState("");
   const [error,        setError]        = useState("");
-
-  /* ── sync state ── */
-  const [syncInfo,    setSyncInfo]    = useState<SyncInfo | null>(null);
-  const [syncing,     setSyncing]     = useState(false);
-  const [syncModal,   setSyncModal]   = useState(false);
-  const [syncResult,  setSyncResult]  = useState<{
-    ok: boolean; total?: number; elapsedSec?: number; log?: string[];
-  } | null>(null);
-  const [logExpanded, setLogExpanded] = useState(false);
 
   /* ── UOM state ── */
   const [uomData,   setUomData]   = useState<Record<string, UomRow>>({});
@@ -97,55 +87,114 @@ export default function ProductsPage() {
     return list;
   }, [allProducts, customerCode, search]);
 
-  /* ── load from Supabase ── */
-  const loadFromSupabase = useCallback(async () => {
-    if (!supabase) { setLoading(false); return; }
+  /* ── Load products directly from WMS API ── */
+  const loadProducts = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const [prodRes, logRes] = await Promise.all([
-        supabase.from("product_master").select("*").order("sku"),
-        supabase.from("product_sync_log").select("synced_at,total_count,elapsed_sec").eq("id", 1).maybeSingle(),
-      ]);
-      if (prodRes.error) throw prodRes.error;
-      setAllProducts((prodRes.data as ProductMaster[]) ?? []);
-      if (logRes.data) setSyncInfo(logRes.data as SyncInfo);
-      /* load UOM */
-      if (prodRes.data && prodRes.data.length > 0) {
-        const skuSet: Record<string, boolean> = {};
-        (prodRes.data as ProductMaster[]).forEach((p) => { if (p.sku) skuSet[p.sku] = true; });
-        const skus = Object.keys(skuSet);
-        const uomRes = await supabase.from("product_uom").select("*").in("sku", skus);
-        if (uomRes.data) {
-          const map: Record<string, UomRow> = {};
-          uomRes.data.forEach((r: UomRow) => { map[`${r.sku}__${r.customer_code}`] = r; });
-          setUomData(map);
+      // 1. Get all warehouses
+      const whRes = await fetch("/api/wms/combo/warehouse", { headers });
+      const whJson = await whRes.json();
+      const warehouses: { id: string }[] = (Array.isArray(whJson?.data) ? whJson.data : Array.isArray(whJson) ? whJson : [])
+        .map((w: Record<string, unknown>) => ({ id: String(w.code ?? w.id ?? "") }))
+        .filter((w: { id: string }) => w.id);
+      if (warehouses.length === 0) throw new Error("No warehouses found");
+
+      // 2. Collect customers from ALL endpoints (same as previous sync logic)
+      const custMap: Record<string, { code: string; name: string }> = {};
+      const parseCustomers = (json: unknown) => {
+        const arr = Array.isArray((json as Record<string,unknown>)?.data)
+          ? ((json as Record<string,unknown>).data as Record<string,unknown>[])
+          : Array.isArray(json) ? (json as Record<string,unknown>[]) : [];
+        arr.forEach((c) => {
+          const code = String(c.code ?? c.customerCode ?? "");
+          const name = String(c.name ?? c.customerName ?? code);
+          if (code && !custMap[code]) custMap[code] = { code, name };
+        });
+      };
+
+      const custEndpoints: string[] = [];
+      for (const wh of warehouses) {
+        custEndpoints.push(
+          `/api/wms/combo/customer-by-warehouse/${wh.id}`,
+          `/api/wms/combo/customer-by-ordertype/B2B?warehouseCode=${wh.id}`,
+          `/api/wms/combo/customer-by-ordertype/B2C?warehouseCode=${wh.id}`,
+        );
+      }
+      custEndpoints.push("/api/wms/combo/customer");
+
+      await Promise.all(custEndpoints.map(ep =>
+        fetch(ep, { headers }).then(r => r.json()).then(parseCustomers).catch(() => {})
+      ));
+
+      const customers = Object.values(custMap);
+      if (customers.length === 0) throw new Error("No customers found");
+
+      // 3. Fetch products per customer across all warehouses (paginated)
+      const all: ProductMaster[] = [];
+      const whCode = warehouses[0].id;   // product list only needs one warehouse code
+
+      for (const cust of customers) {
+        let page = 1;
+        while (true) {
+          const res = await fetch("/api/wms/product/list", {
+            method: "POST", headers,
+            body: JSON.stringify({ warehouseCode: whCode, customerCode: cust.code, page, pageNum: page, pageSize: 500, size: 500 }),
+          });
+          const json = await res.json() as Record<string, unknown>;
+          const data = (json?.data as Record<string, unknown>) ?? {};
+          const items: Record<string, unknown>[] =
+            Array.isArray(data?.list)  ? (data.list  as Record<string, unknown>[]) :
+            Array.isArray(data?.items) ? (data.items as Record<string, unknown>[]) :
+            Array.isArray(json?.data)  ? (json.data  as Record<string, unknown>[]) : [];
+          if (items.length === 0) break;
+          items.forEach((p) => all.push({
+            sku:                String(p.productSku ?? p.sku ?? ""),
+            customer_code:      cust.code,
+            customer_name:      cust.name,
+            product_name:       String(p.productName      ?? ""),
+            product_short_name: String(p.productShortName ?? ""),
+            barcode:            String(p.barcode ?? p.upcCode ?? ""),
+            category_first:     String(p.categoryFirst  ?? p.category ?? ""),
+            category_second:    String(p.categorySecond ?? ""),
+            unit_type:          String(p.unitType ?? p.uom ?? ""),
+            weight:             Number(p.weight  ?? 0) || null,
+            status:             String(p.status  ?? p.useYn ?? "Active"),
+            item_store_comment: String(p.itemStoreComment ?? ""),
+            description:        String(p.description ?? ""),
+          }));
+          const total = Number(data?.total ?? data?.totalCount ?? 0);
+          if (items.length < 500 || (total > 0 && all.filter(x => x.customer_code === cust.code).length >= total)) break;
+          page++;
+          if (page > 20) break;
         }
       }
+      setAllProducts(all.filter(p => p.sku));
+
+      // 4. Load UOM from Supabase (only dashboard-specific data)
+      const skus = all.map(p => p.sku).filter(Boolean);
+      if (skus.length > 0) {
+        try {
+          const uomRes = await fetch("/api/products/uom-list", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ skus }),
+          });
+          if (uomRes.ok) {
+            const uomJson = await uomRes.json();
+            const map: Record<string, UomRow> = {};
+            (uomJson.data as UomRow[] ?? []).forEach((r) => { map[`${r.sku}__${r.customer_code}`] = r; });
+            setUomData(map);
+          }
+        } catch { /* UOM is optional */ }
+      }
     } catch (e) {
-      setError(String(e instanceof Error ? e.message : e));
+      setError(e instanceof Error ? e.message : String(e));
     }
     setLoading(false);
-  }, []);
+  }, [headers]);
 
-  useEffect(() => { loadFromSupabase(); }, [loadFromSupabase]);
-
-  /* ── Sync Now ── */
-  async function runSync() {
-    setSyncing(true);
-    setSyncResult(null);
-    setSyncModal(true);
-    setLogExpanded(false);
-    try {
-      const res  = await fetch("/api/batch/products", { method: "POST" });
-      const json = await res.json();
-      setSyncResult({ ok: json.ok, total: json.total, elapsedSec: json.elapsedSec, log: json.log });
-      if (json.ok) await loadFromSupabase();
-    } catch (e) {
-      setSyncResult({ ok: false, log: [`Error: ${String(e)}`] });
-    }
-    setSyncing(false);
-  }
+  useEffect(() => { loadProducts(); }, [loadProducts]);
 
   /* ── UOM ── */
   function openUomModal(product: ProductMaster, e: React.MouseEvent) {
@@ -163,22 +212,24 @@ export default function ProductsPage() {
   }
 
   async function saveUom() {
-    if (!supabase || !uomModal) return;
+    if (!uomModal) return;
     setUomSaving(true);
     setUomMsg(null);
     try {
-      const { error: dbErr } = await supabase.from("product_uom").upsert(
-        {
+      const res = await fetch("/api/products/uom", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           sku:              uomModal.sku,
           customer_code:    uomModal.customer_code,
           units_per_carton: uomEdit.units_per_carton || null,
           inner_pack_qty:   uomEdit.inner_pack_qty   || null,
           pallet_qty:       uomEdit.pallet_qty        || null,
           notes:            uomEdit.notes             || null,
-        },
-        { onConflict: "sku,customer_code" }
-      );
-      if (dbErr) throw dbErr;
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
       const key = `${uomModal.sku}__${uomModal.customer_code}`;
       setUomData((prev) => ({
         ...prev,
@@ -193,7 +244,7 @@ export default function ProductsPage() {
       }));
       setUomMsg({ text: "Saved!", ok: true });
     } catch (e) {
-      setUomMsg({ text: `Failed: ${String(e)}`, ok: false });
+      setUomMsg({ text: `Failed: ${e instanceof Error ? e.message : String(e)}`, ok: false });
     }
     setUomSaving(false);
   }
@@ -231,36 +282,15 @@ export default function ProductsPage() {
     <div className="p-8">
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-xl font-bold text-slate-900">Products</h1>
-          {syncInfo && (
-            <p className="text-xs text-slate-400 mt-0.5 flex items-center gap-1.5">
-              <Clock className="w-3 h-3" />
-              Last synced {fmtRelative(syncInfo.synced_at)} — {syncInfo.total_count.toLocaleString()} products
-            </p>
-          )}
-          {!syncInfo && !loading && (
-            <p className="text-xs text-amber-500 mt-0.5">No sync data yet — click Sync Now</p>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={runSync}
-            disabled={syncing}
-            className="flex items-center gap-2 text-sm bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-lg px-4 py-2 font-medium transition-colors"
-          >
-            <RefreshCcw className={`w-4 h-4 ${syncing ? "animate-spin" : ""}`} />
-            {syncing ? "Syncing…" : "Sync Now"}
-          </button>
-          <button
-            onClick={downloadExcel}
-            disabled={filtered.length === 0}
-            className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <Download className="w-4 h-4" />
-            Export
-          </button>
-        </div>
+        <h1 className="text-xl font-bold text-slate-900">Products</h1>
+        <button
+          onClick={downloadExcel}
+          disabled={filtered.length === 0}
+          className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <Download className="w-4 h-4" />
+          Export
+        </button>
       </div>
 
       {/* Controls */}
@@ -277,7 +307,7 @@ export default function ProductsPage() {
         )}
 
         <button
-          onClick={loadFromSupabase}
+          onClick={loadProducts}
           disabled={loading}
           className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors disabled:opacity-50"
         >
@@ -313,12 +343,10 @@ export default function ProductsPage() {
               <span className="text-slate-400"> of {allProducts.length.toLocaleString()}</span>
             )}
           </span>
-          {supabase && (
-            <span className="ml-auto text-xs text-slate-400 flex items-center gap-1.5">
-              <BoxIcon className="w-3.5 h-3.5" />
-              Click any row to set UOM (carton qty)
-            </span>
-          )}
+          <span className="ml-auto text-xs text-slate-400 flex items-center gap-1.5">
+            <BoxIcon className="w-3.5 h-3.5" />
+            Click any row to set UOM (carton qty)
+          </span>
         </div>
       )}
 
@@ -334,8 +362,8 @@ export default function ProductsPage() {
       {!loading && !error && allProducts.length === 0 && (
         <div className="text-center py-20 text-slate-400">
           <Package className="w-10 h-10 mx-auto mb-3 opacity-40" />
-          <p className="font-medium mb-2">No products in database</p>
-          <p className="text-sm">Click <b>Sync Now</b> to fetch products from WMS</p>
+          <p className="font-medium mb-2">No products found</p>
+          <p className="text-sm">Click <b>Refresh</b> to load products from WMS</p>
         </div>
       )}
 
@@ -422,95 +450,6 @@ export default function ProductsPage() {
                 })}
               </tbody>
             </table>
-          </div>
-        </div>
-      )}
-
-      {/* ── Sync Result Modal ── */}
-      {syncModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
-          <div className="absolute inset-0 bg-black/40" onClick={() => { if (!syncing) setSyncModal(false); }} />
-          <div className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden">
-            {/* Header */}
-            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 bg-slate-50">
-              <div className="flex items-center gap-2">
-                <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${syncing ? "bg-blue-500" : syncResult?.ok ? "bg-emerald-600" : "bg-red-500"}`}>
-                  <RefreshCcw className={`w-3.5 h-3.5 text-white ${syncing ? "animate-spin" : ""}`} />
-                </div>
-                <p className="text-sm font-bold text-slate-800">
-                  {syncing ? "Syncing Products…" : syncResult?.ok ? "Sync Complete" : "Sync Failed"}
-                </p>
-              </div>
-              {!syncing && (
-                <button onClick={() => setSyncModal(false)} className="text-slate-400 hover:text-slate-700">
-                  <X className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-
-            <div className="px-5 py-5 space-y-4">
-              {syncing && (
-                <div className="flex flex-col items-center gap-3 py-4">
-                  <div className="w-12 h-12 border-4 border-blue-100 border-t-blue-500 rounded-full animate-spin" />
-                  <p className="text-sm text-slate-500">Fetching products from WMS…</p>
-                  <p className="text-xs text-slate-400">This may take up to a minute</p>
-                </div>
-              )}
-
-              {!syncing && syncResult && (
-                <>
-                  {syncResult.ok ? (
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3 text-center">
-                        <p className="text-2xl font-bold text-emerald-700">{syncResult.total?.toLocaleString() ?? "—"}</p>
-                        <p className="text-xs text-emerald-600 mt-0.5">Products synced</p>
-                      </div>
-                      <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 text-center">
-                        <p className="text-2xl font-bold text-slate-700">{syncResult.elapsedSec ?? "—"}s</p>
-                        <p className="text-xs text-slate-500 mt-0.5">Elapsed time</p>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-start gap-2">
-                      <AlertCircle className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
-                      <p className="text-sm text-red-700">Sync failed — check the log below</p>
-                    </div>
-                  )}
-
-                  {/* Log accordion */}
-                  {syncResult.log && syncResult.log.length > 0 && (
-                    <div className="border border-slate-200 rounded-xl overflow-hidden">
-                      <button
-                        onClick={() => setLogExpanded(!logExpanded)}
-                        className="w-full flex items-center justify-between px-4 py-2.5 bg-slate-50 hover:bg-slate-100 transition-colors text-sm font-medium text-slate-600"
-                      >
-                        <span>Sync Log ({syncResult.log.length} lines)</span>
-                        {logExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                      </button>
-                      {logExpanded && (
-                        <div className="bg-slate-900 px-4 py-3 max-h-60 overflow-y-auto">
-                          {syncResult.log.map((line, i) => (
-                            <p key={i} className={`text-xs font-mono leading-5 ${
-                              line.startsWith("✗") ? "text-red-400" :
-                              line.startsWith("⚠") ? "text-amber-400" :
-                              line.startsWith("✓") ? "text-emerald-400" :
-                              "text-slate-400"
-                            }`}>{line}</p>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  <button
-                    onClick={() => setSyncModal(false)}
-                    className="w-full text-sm bg-slate-900 hover:bg-slate-700 text-white rounded-xl py-2.5 font-semibold transition-colors"
-                  >
-                    Done
-                  </button>
-                </>
-              )}
-            </div>
           </div>
         </div>
       )}

@@ -1,11 +1,26 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { useAuth } from "@/contexts/auth-context";
-import { Search, RefreshCw, MapPin, Download } from "lucide-react";
+import { Search, RefreshCw, MapPin, Download, Upload, ChevronDown, ChevronUp, CheckCircle, XCircle, Loader2 } from "lucide-react";
 
 interface Warehouse { id: string; name: string; }
 type Row = Record<string, unknown>;
+
+interface UploadRow {
+  zoneNm: string;
+  aisleNm: string;
+  levelNm: string;
+  bayNm: string;
+  positionNm: string;
+  maxCbm: number | string;
+  maxCbf: number | string;
+  occupancyInfo: string;
+  remark: string;
+}
+
+type UploadStatus = "pending" | "ok" | "error";
+interface UploadResult { row: UploadRow; status: UploadStatus; message?: string; }
 
 export default function LocationMasterPage() {
   const { user } = useAuth();
@@ -15,6 +30,14 @@ export default function LocationMasterPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
+
+  // Upload state
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadRows, setUploadRows] = useState<UploadRow[]>([]);
+  const [uploadResults, setUploadResults] = useState<UploadResult[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const headers = useMemo(
     () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
@@ -90,6 +113,98 @@ export default function LocationMasterPage() {
     writeFile(wb, `locations_master_${warehouseCode}_${new Date().toISOString().slice(0, 10)}.xlsx`);
   }
 
+  // ── Upload: parse Excel ───────────────────────────────────────────────────
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const { read, utils } = await import("xlsx");
+    const buf = await file.arrayBuffer();
+    const wb = read(buf, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const raw: Record<string, unknown>[] = utils.sheet_to_json(ws, { defval: "" });
+
+    // Normalize headers (trim, uppercase) and map columns
+    const normalizeKey = (k: string) => k.trim().toUpperCase().replace(/\s+/g, "_");
+    const rows: UploadRow[] = raw.map((r) => {
+      const n: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(r)) n[normalizeKey(k)] = v;
+      return {
+        zoneNm:        String(n["ZONE"] ?? n["ZONE_NM"] ?? ""),
+        aisleNm:       String(n["AISLE"] ?? n["AISLE_NM"] ?? ""),
+        levelNm:       String(n["LEVEL"] ?? n["LEVEL_NM"] ?? ""),
+        bayNm:         String(n["BAY"] ?? n["BAY_NM"] ?? ""),
+        positionNm:    String(n["POSITION"] ?? n["POSITION_NM"] ?? ""),
+        maxCbm:        n["MAX_CBM"] !== "" ? Number(n["MAX_CBM"] ?? 0) : "",
+        maxCbf:        n["MAX_CBF"] !== "" ? Number(n["MAX_CBF"] ?? 0) : "",
+        occupancyInfo: String(n["OCCUPANCY_INFO"] ?? n["OCCUPANCY"] ?? ""),
+        remark:        String(n["REMARK"] ?? ""),
+      };
+    }).filter((r) => r.zoneNm || r.aisleNm || r.bayNm || r.positionNm);
+
+    setUploadRows(rows);
+    setUploadResults([]);
+    // Reset file input so same file can be re-selected
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  // ── Upload: POST rows ─────────────────────────────────────────────────────
+  async function startUpload() {
+    if (!warehouseCode || uploadRows.length === 0) return;
+    setUploading(true);
+    setUploadProgress(0);
+    const results: UploadResult[] = [];
+
+    for (let i = 0; i < uploadRows.length; i++) {
+      const row = uploadRows[i];
+      const payload = {
+        warehouseCode,
+        warehouseCd: warehouseCode,
+        zoneNm:       row.zoneNm,
+        aisleNm:      row.aisleNm,
+        levelNm:      row.levelNm,
+        bayNm:        row.bayNm,
+        positionNm:   row.positionNm,
+        maxCbm:       row.maxCbm === "" ? null : Number(row.maxCbm),
+        maxCbf:       row.maxCbf === "" ? null : Number(row.maxCbf),
+        occupancyInfo: row.occupancyInfo,
+        remark:       row.remark,
+        isNew:        true,
+      };
+      try {
+        const res = await fetch("/api/wms/warehouse/location/save", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const txt = await res.text().catch(() => `HTTP ${res.status}`);
+          results.push({ row, status: "error", message: txt });
+        } else {
+          const json = await res.json().catch(() => ({})) as Record<string, unknown>;
+          const code = json?.code ?? json?.resultCode ?? json?.status;
+          if (code !== undefined && code !== 200 && code !== "200" && code !== "OK" && code !== 0 && code !== "0") {
+            results.push({ row, status: "error", message: String(json?.message ?? json?.msg ?? code) });
+          } else {
+            results.push({ row, status: "ok" });
+          }
+        }
+      } catch (e) {
+        results.push({ row, status: "error", message: String(e) });
+      }
+      setUploadProgress(i + 1);
+      // Small delay to avoid overwhelming the API
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    setUploadResults(results);
+    setUploading(false);
+    // Refresh location list after upload
+    await fetchLocations(warehouseCode);
+  }
+
+  const successCount = uploadResults.filter((r) => r.status === "ok").length;
+  const errorCount   = uploadResults.filter((r) => r.status === "error").length;
+
   return (
     <div className="p-8">
       <div className="flex items-center justify-between mb-6">
@@ -97,15 +212,163 @@ export default function LocationMasterPage() {
           <h1 className="text-xl font-bold text-slate-900">Location Master</h1>
           <p className="text-slate-500 text-sm mt-0.5">All warehouse locations</p>
         </div>
-        <button
-          onClick={downloadExcel}
-          disabled={filtered.length === 0}
-          className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <Download className="w-4 h-4" />
-          Export
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => { setUploadOpen((v) => !v); setUploadRows([]); setUploadResults([]); }}
+            className="flex items-center gap-2 text-sm text-white bg-blue-600 hover:bg-blue-700 border border-blue-600 rounded-lg px-3 py-2 transition-colors"
+          >
+            <Upload className="w-4 h-4" />
+            Bulk Upload
+            {uploadOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          </button>
+          <button
+            onClick={downloadExcel}
+            disabled={filtered.length === 0}
+            className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Download className="w-4 h-4" />
+            Export
+          </button>
+        </div>
       </div>
+
+      {/* ── Bulk Upload Panel ────────────────────────────────────────────── */}
+      {uploadOpen && (
+        <div className="mb-6 border border-blue-200 rounded-xl bg-blue-50/40 p-5">
+          <h2 className="text-sm font-semibold text-slate-800 mb-3">Bulk Upload Locations</h2>
+
+          {/* Instructions */}
+          <div className="text-xs text-slate-500 mb-4 bg-white border border-slate-100 rounded-lg px-4 py-3 leading-relaxed">
+            <span className="font-medium text-slate-700">Required columns: </span>
+            ZONE · AISLE · LEVEL · BAY · POSITION · MAX_CBM · MAX_CBF · OCCUPANCY_INFO · REMARK
+            <br />
+            Warehouse code is taken from the selector above. Each row will be registered via <code className="bg-slate-100 px-1 rounded">POST /warehouse/location/save</code>.
+          </div>
+
+          {/* File picker */}
+          <div className="flex flex-wrap items-center gap-3 mb-4">
+            <label className="cursor-pointer flex items-center gap-2 text-sm font-medium text-blue-700 bg-white border border-blue-300 rounded-lg px-4 py-2 hover:bg-blue-50 transition-colors">
+              <Upload className="w-4 h-4" />
+              Choose Excel File
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                className="hidden"
+                onChange={handleFileChange}
+              />
+            </label>
+            {uploadRows.length > 0 && (
+              <span className="text-sm text-slate-600">
+                <b className="text-slate-900">{uploadRows.length}</b> rows parsed
+              </span>
+            )}
+          </div>
+
+          {/* Preview table */}
+          {uploadRows.length > 0 && (
+            <>
+              <div className="bg-white border border-slate-200 rounded-lg overflow-hidden mb-4 max-h-60 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-slate-50 border-b border-slate-200">
+                    <tr>
+                      <th className="px-3 py-2 text-left text-slate-500 font-medium">#</th>
+                      {["ZONE","AISLE","LEVEL","BAY","POSITION","MAX_CBM","MAX_CBF","OCCUPANCY_INFO","REMARK"].map((h) => (
+                        <th key={h} className="px-3 py-2 text-left text-slate-500 font-medium whitespace-nowrap">{h}</th>
+                      ))}
+                      {uploadResults.length > 0 && <th className="px-3 py-2 text-left text-slate-500 font-medium">Status</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {uploadRows.map((row, i) => {
+                      const res = uploadResults[i];
+                      return (
+                        <tr key={i} className={`border-b border-slate-100 last:border-0 ${
+                          res?.status === "ok" ? "bg-green-50" :
+                          res?.status === "error" ? "bg-red-50" : "hover:bg-slate-50"
+                        }`}>
+                          <td className="px-3 py-1.5 text-slate-400">{i + 1}</td>
+                          <td className="px-3 py-1.5 text-slate-700">{row.zoneNm || "-"}</td>
+                          <td className="px-3 py-1.5 text-slate-700">{row.aisleNm || "-"}</td>
+                          <td className="px-3 py-1.5 text-slate-700">{row.levelNm || "-"}</td>
+                          <td className="px-3 py-1.5 text-slate-700">{row.bayNm || "-"}</td>
+                          <td className="px-3 py-1.5 text-slate-700">{row.positionNm || "-"}</td>
+                          <td className="px-3 py-1.5 text-slate-700 text-right">{row.maxCbm === "" ? "-" : String(row.maxCbm)}</td>
+                          <td className="px-3 py-1.5 text-slate-700 text-right">{row.maxCbf === "" ? "-" : String(row.maxCbf)}</td>
+                          <td className="px-3 py-1.5 text-slate-700">{row.occupancyInfo || "-"}</td>
+                          <td className="px-3 py-1.5 text-slate-700">{row.remark || "-"}</td>
+                          {uploadResults.length > 0 && (
+                            <td className="px-3 py-1.5">
+                              {res?.status === "ok"    && <span className="flex items-center gap-1 text-green-700"><CheckCircle className="w-3.5 h-3.5" />OK</span>}
+                              {res?.status === "error" && (
+                                <span className="flex items-center gap-1 text-red-600" title={res.message}>
+                                  <XCircle className="w-3.5 h-3.5" />
+                                  {res.message ? res.message.slice(0, 30) : "Error"}
+                                </span>
+                              )}
+                              {!res && uploading && i === uploadProgress && (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" />
+                              )}
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Progress */}
+              {uploading && (
+                <div className="mb-3">
+                  <div className="flex justify-between text-xs text-slate-500 mb-1">
+                    <span>Uploading…</span>
+                    <span>{uploadProgress} / {uploadRows.length}</span>
+                  </div>
+                  <div className="w-full bg-slate-200 rounded-full h-1.5">
+                    <div
+                      className="bg-blue-500 h-1.5 rounded-full transition-all duration-200"
+                      style={{ width: `${uploadRows.length > 0 ? (uploadProgress / uploadRows.length) * 100 : 0}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Results summary */}
+              {uploadResults.length > 0 && !uploading && (
+                <div className={`text-sm font-medium mb-3 flex items-center gap-2 ${errorCount > 0 ? "text-red-600" : "text-green-700"}`}>
+                  {errorCount === 0
+                    ? <><CheckCircle className="w-4 h-4" />All {successCount} rows uploaded successfully!</>
+                    : <><XCircle className="w-4 h-4" />{successCount} succeeded · {errorCount} failed</>
+                  }
+                </div>
+              )}
+
+              {/* Upload button */}
+              {uploadResults.length === 0 && (
+                <button
+                  onClick={startUpload}
+                  disabled={uploading || !warehouseCode}
+                  className="flex items-center gap-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg px-5 py-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {uploading
+                    ? <><Loader2 className="w-4 h-4 animate-spin" />Uploading…</>
+                    : <><Upload className="w-4 h-4" />Upload {uploadRows.length} rows to {warehouseCode}</>
+                  }
+                </button>
+              )}
+              {uploadResults.length > 0 && !uploading && (
+                <button
+                  onClick={() => { setUploadRows([]); setUploadResults([]); }}
+                  className="text-sm text-slate-500 hover:text-slate-700 underline"
+                >
+                  Clear & upload another file
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {/* Controls */}
       <div className="flex flex-wrap gap-3 mb-6">
