@@ -87,10 +87,13 @@ export default function LocationMasterPage() {
     fetch("/api/wms/combo/warehouse", { headers })
       .then((r) => r.json())
       .then((json) => {
-        const list: Warehouse[] = parseArr(json)
+        const raw = parseArr(json);
+        // Log raw combo response so we can identify the correct warehouseCd field
+        if (raw.length > 0) console.log("[combo/warehouse] first item:", JSON.stringify(raw[0]));
+        const list: Warehouse[] = raw
           .map((w) => ({
             id:   String(w.code ?? w.warehouseCode ?? w.id ?? ""),
-            cd:   String(w.cd ?? w.warehouseCd ?? w.code ?? w.id ?? ""),
+            cd:   String(w.cd ?? w.warehouseCd ?? w.warehouseId ?? w.idx ?? ""),
             name: String(w.name ?? w.warehouseName ?? w.code ?? ""),
           }))
           .filter((w) => w.id);
@@ -269,6 +272,14 @@ export default function LocationMasterPage() {
             ZONE · AISLE · LEVEL · BAY · POSITION · MAX_CBM · MAX_CBF · OCCUPANCY_INFO · REMARK
             <br />
             Warehouse code is taken from the selector above. Each row will be registered via <code className="bg-slate-100 px-1 rounded">POST /warehouse/location/save</code>.
+            <br />
+            <span className="font-medium text-slate-700">warehouseCode: </span>
+            <code className="bg-slate-100 px-1 rounded">{warehouseCode || "—"}</code>
+            &nbsp;·&nbsp;
+            <span className="font-medium text-slate-700">warehouseCd: </span>
+            <code className={`px-1 rounded ${warehouseCd && warehouseCd !== warehouseCode ? "bg-green-100 text-green-800" : "bg-red-100 text-red-700"}`}>
+              {warehouseCd || "NOT FOUND"}
+            </code>
           </div>
 
           {/* File picker */}
