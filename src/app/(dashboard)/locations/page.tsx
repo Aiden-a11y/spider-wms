@@ -178,11 +178,8 @@ export default function LocationMasterPage() {
 
     for (let i = 0; i < uploadRows.length; i++) {
       const row = uploadRows[i];
-      // warehouseCd: use stored cd from combo API, fall back to warehouseCode
-      const cdVal = warehouseCd || warehouseCode;
       const payload = {
         warehouseCode,
-        warehouseCd:  cdVal,
         zoneNm:       row.zoneNm,
         aisleNm:      row.aisleNm,
         levelNm:      row.levelNm,
