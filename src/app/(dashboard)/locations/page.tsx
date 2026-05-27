@@ -71,6 +71,12 @@ export default function LocationMasterPage() {
       const json = JSON.parse(text);
       const list = parseArr(json);
       setLocations(list);
+      // Extract actual warehouseCd (long internal ID) from first loaded location
+      if (list.length > 0) {
+        const firstRow = list[0] as Record<string, unknown>;
+        const cdFromList = String(firstRow.warehouseCd ?? firstRow.WarehouseCd ?? "");
+        if (cdFromList) setWarehouseCd(cdFromList);
+      }
     } catch (e) {
       setError(`Request failed: ${String(e)}`);
     }
