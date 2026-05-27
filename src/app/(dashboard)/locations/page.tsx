@@ -176,16 +176,21 @@ export default function LocationMasterPage() {
           headers,
           body: JSON.stringify(payload),
         });
+        const rawText = await res.text().catch(() => "");
+        let json: Record<string, unknown> = {};
+        try { json = JSON.parse(rawText); } catch { /* not json */ }
+
         if (!res.ok) {
-          const txt = await res.text().catch(() => `HTTP ${res.status}`);
-          results.push({ row, status: "error", message: txt });
+          results.push({ row, status: "error", message: `HTTP ${res.status}: ${rawText.slice(0, 120)}` });
         } else {
-          const json = await res.json().catch(() => ({})) as Record<string, unknown>;
-          const code = json?.code ?? json?.resultCode ?? json?.status;
-          if (code !== undefined && code !== 200 && code !== "200" && code !== "OK" && code !== 0 && code !== "0") {
-            results.push({ row, status: "error", message: String(json?.message ?? json?.msg ?? code) });
+          const code = json?.code ?? json?.resultCode ?? json?.result ?? json?.status;
+          const msg  = String(json?.message ?? json?.msg ?? json?.resultMessage ?? "");
+          // Show full raw response in message for debugging
+          const detail = rawText.slice(0, 200);
+          if (code !== undefined && code !== 200 && code !== "200" && code !== "OK" && code !== 0 && code !== "0" && code !== "SUCCESS" && code !== "success") {
+            results.push({ row, status: "error", message: msg || detail });
           } else {
-            results.push({ row, status: "ok" });
+            results.push({ row, status: "ok", message: detail });
           }
         }
       } catch (e) {
@@ -298,12 +303,16 @@ export default function LocationMasterPage() {
                           <td className="px-3 py-1.5 text-slate-700">{row.occupancyInfo || "-"}</td>
                           <td className="px-3 py-1.5 text-slate-700">{row.remark || "-"}</td>
                           {uploadResults.length > 0 && (
-                            <td className="px-3 py-1.5">
-                              {res?.status === "ok"    && <span className="flex items-center gap-1 text-green-700"><CheckCircle className="w-3.5 h-3.5" />OK</span>}
+                            <td className="px-3 py-1.5 max-w-xs">
+                              {res?.status === "ok"    && (
+                                <span className="flex items-center gap-1 text-green-700" title={res.message}>
+                                  <CheckCircle className="w-3.5 h-3.5 shrink-0" />OK
+                                </span>
+                              )}
                               {res?.status === "error" && (
-                                <span className="flex items-center gap-1 text-red-600" title={res.message}>
-                                  <XCircle className="w-3.5 h-3.5" />
-                                  {res.message ? res.message.slice(0, 30) : "Error"}
+                                <span className="flex items-start gap-1 text-red-600" title={res.message}>
+                                  <XCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                                  <span className="break-all">{res.message ? res.message.slice(0, 80) : "Error"}</span>
                                 </span>
                               )}
                               {!res && uploading && i === uploadProgress && (
