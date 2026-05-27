@@ -38,6 +38,7 @@ export default function LocationMasterPage() {
   const [uploadResults, setUploadResults] = useState<UploadResult[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [detectedCols, setDetectedCols] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const headers = useMemo(
@@ -129,8 +130,14 @@ export default function LocationMasterPage() {
     const ws = wb.Sheets[wb.SheetNames[0]];
     const raw: Record<string, unknown>[] = utils.sheet_to_json(ws, { defval: "" });
 
-    // Normalize headers (trim, uppercase) and map columns
-    const normalizeKey = (k: string) => k.trim().toUpperCase().replace(/\s+/g, "_");
+    if (raw.length === 0) { setDetectedCols([]); setUploadRows([]); return; }
+
+    // Show detected raw column names for debugging
+    const rawCols = Object.keys(raw[0]);
+    setDetectedCols(rawCols);
+
+    // Normalize headers (trim, uppercase, remove special chars) and map columns
+    const normalizeKey = (k: string) => k.trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_").replace(/_+/g, "_");
     const rows: UploadRow[] = raw.map((r) => {
       const n: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(r)) n[normalizeKey(k)] = v;
@@ -140,10 +147,10 @@ export default function LocationMasterPage() {
         levelNm:       String(n["LEVEL"] ?? n["LEVEL_NM"] ?? ""),
         bayNm:         String(n["BAY"] ?? n["BAY_NM"] ?? ""),
         positionNm:    String(n["POSITION"] ?? n["POSITION_NM"] ?? ""),
-        maxCbm:        n["MAX_CBM"] !== "" ? Number(n["MAX_CBM"] ?? 0) : "",
-        maxCbf:        n["MAX_CBF"] !== "" ? Number(n["MAX_CBF"] ?? 0) : "",
-        occupancyInfo: String(n["OCCUPANCY_INFO"] ?? n["OCCUPANCY"] ?? ""),
-        remark:        String(n["REMARK"] ?? ""),
+        maxCbm:        n["MAX_CBM"] !== "" && n["MAX_CBM"] !== undefined ? Number(n["MAX_CBM"]) : "",
+        maxCbf:        n["MAX_CBF"] !== "" && n["MAX_CBF"] !== undefined ? Number(n["MAX_CBF"]) : "",
+        occupancyInfo: String(n["OCCUPANCY_INFO"] ?? n["OCCUPANCY"] ?? n["OCCUPANCY_TYPE"] ?? ""),
+        remark:        String(n["REMARK"] ?? n["REMARKS"] ?? n["NOTE"] ?? ""),
       };
     }).filter((r) => r.zoneNm || r.aisleNm || r.bayNm || r.positionNm);
 
@@ -162,9 +169,8 @@ export default function LocationMasterPage() {
 
     for (let i = 0; i < uploadRows.length; i++) {
       const row = uploadRows[i];
-      // warehouseCd: numeric/internal CD from combo API (may differ from string code)
-      // fallback to warehouseCode if cd wasn't available in combo response
-      const cdVal = warehouseCd && warehouseCd !== warehouseCode ? warehouseCd : warehouseCode;
+      // warehouseCd: use stored cd from combo API, fall back to warehouseCode
+      const cdVal = warehouseCd || warehouseCode;
       const payload = {
         warehouseCode,
         warehouseCd:  cdVal,
@@ -278,6 +284,20 @@ export default function LocationMasterPage() {
               </span>
             )}
           </div>
+
+          {/* Detected columns debug */}
+          {detectedCols.length > 0 && (
+            <div className="mb-3 text-xs text-slate-500 bg-slate-100 rounded-lg px-3 py-2">
+              <span className="font-medium text-slate-700">Detected columns: </span>
+              {detectedCols.map((c) => (
+                <span key={c} className={`inline-block mr-1 px-1.5 py-0.5 rounded font-mono ${
+                  ["ZONE","AISLE","LEVEL","BAY","POSITION","MAX_CBM","MAX_CBF","OCCUPANCY","OCCUPANCY_INFO","REMARK"].includes(c.trim().toUpperCase())
+                    ? "bg-green-100 text-green-800"
+                    : "bg-slate-200 text-slate-600"
+                }`}>{c}</span>
+              ))}
+            </div>
+          )}
 
           {/* Preview table */}
           {uploadRows.length > 0 && (
