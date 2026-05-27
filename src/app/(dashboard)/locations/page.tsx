@@ -179,6 +179,7 @@ export default function LocationMasterPage() {
     for (let i = 0; i < uploadRows.length; i++) {
       const row = uploadRows[i];
       const payload = {
+        warehouseCd:  "",
         warehouseCode,
         zoneNm:       row.zoneNm,
         aisleNm:      row.aisleNm,
