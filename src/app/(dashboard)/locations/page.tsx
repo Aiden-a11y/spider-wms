@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import { Search, RefreshCw, MapPin, Download, Upload, ChevronDown, ChevronUp, CheckCircle, XCircle, Loader2 } from "lucide-react";
 
-interface Warehouse { id: string; name: string; }
+interface Warehouse { id: string; cd: string; name: string; }
 type Row = Record<string, unknown>;
 
 interface UploadRow {
@@ -26,6 +26,7 @@ export default function LocationMasterPage() {
   const { user } = useAuth();
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [warehouseCode, setWarehouseCode] = useState("");
+  const [warehouseCd, setWarehouseCd] = useState("");
   const [locations, setLocations] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -80,12 +81,17 @@ export default function LocationMasterPage() {
       .then((r) => r.json())
       .then((json) => {
         const list: Warehouse[] = parseArr(json)
-          .map((w) => ({ id: String(w.code ?? w.id ?? ""), name: String(w.name ?? w.code ?? "") }))
+          .map((w) => ({
+            id:   String(w.code ?? w.warehouseCode ?? w.id ?? ""),
+            cd:   String(w.cd ?? w.warehouseCd ?? w.code ?? w.id ?? ""),
+            name: String(w.name ?? w.warehouseName ?? w.code ?? ""),
+          }))
           .filter((w) => w.id);
         setWarehouses(list);
         if (list.length > 0) {
           const preferred = list.find((w) => w.id === "STOO1") ?? list[0];
           setWarehouseCode(preferred.id);
+          setWarehouseCd(preferred.cd);
           fetchLocations(preferred.id);
         }
       })
@@ -156,9 +162,12 @@ export default function LocationMasterPage() {
 
     for (let i = 0; i < uploadRows.length; i++) {
       const row = uploadRows[i];
+      // warehouseCd: numeric/internal CD from combo API (may differ from string code)
+      // fallback to warehouseCode if cd wasn't available in combo response
+      const cdVal = warehouseCd && warehouseCd !== warehouseCode ? warehouseCd : warehouseCode;
       const payload = {
         warehouseCode,
-        warehouseCd: warehouseCode,
+        warehouseCd:  cdVal,
         zoneNm:       row.zoneNm,
         aisleNm:      row.aisleNm,
         levelNm:      row.levelNm,
@@ -166,8 +175,8 @@ export default function LocationMasterPage() {
         positionNm:   row.positionNm,
         maxCbm:       row.maxCbm === "" ? null : Number(row.maxCbm),
         maxCbf:       row.maxCbf === "" ? null : Number(row.maxCbf),
-        occupancyInfo: row.occupancyInfo,
-        remark:       row.remark,
+        occupancyInfo: row.occupancyInfo || null,
+        remark:       row.remark || null,
         isNew:        true,
       };
       try {
@@ -383,7 +392,12 @@ export default function LocationMasterPage() {
       <div className="flex flex-wrap gap-3 mb-6">
         <select
           value={warehouseCode}
-          onChange={(e) => { setWarehouseCode(e.target.value); fetchLocations(e.target.value); }}
+          onChange={(e) => {
+            const wh = warehouses.find((w) => w.id === e.target.value);
+            setWarehouseCode(e.target.value);
+            setWarehouseCd(wh?.cd ?? e.target.value);
+            fetchLocations(e.target.value);
+          }}
           disabled={warehouses.length === 0}
           className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50"
         >
