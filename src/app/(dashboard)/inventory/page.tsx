@@ -423,9 +423,47 @@ export default function InventoryPage() {
     }),
   [filteredItems]);
 
+  // Group by location+SKU+LOT+expireDate+customer → condition columns
+  type GroupedRow = {
+    loc: string; zone: string; aisle: string; bay: string; level: string; position: string;
+    occupancyInfo: string; customerCode: string; sku: string; productName: string;
+    lot: string; expireDate: string;
+    good: number; hold: number; dmg: number; rtrn: number; other: number;
+    total: number; available: number;
+  };
+
+  const groupedRows = useMemo((): GroupedRow[] => {
+    const map = new Map<string, GroupedRow>();
+    for (const item of sortedItems) {
+      const loc = [item.zone, item.aisle, item.bay, item.level, item.position].join("-");
+      const key = `${loc}||${item.sku}||${item.lot}||${item.expireDate}||${item.customerCode}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          loc, zone: item.zone, aisle: item.aisle, bay: item.bay, level: item.level, position: item.position,
+          occupancyInfo: item.occupancyInfo ?? "",
+          customerCode: item.customerCode ?? "",
+          sku: item.sku, productName: item.productName,
+          lot: item.lot ?? "", expireDate: item.expireDate ?? "",
+          good: 0, hold: 0, dmg: 0, rtrn: 0, other: 0, total: 0, available: 0,
+        });
+      }
+      const row = map.get(key)!;
+      const cond = (item.condition ?? "").toUpperCase();
+      const qty = item.qty;
+      if      (cond === "GOOD" || cond === "NOR")  row.good  += qty;
+      else if (cond === "HOLD")                    row.hold  += qty;
+      else if (cond === "DMG"  || cond === "DAMAGE") row.dmg += qty;
+      else if (cond === "RTRN" || cond === "RETURN") row.rtrn += qty;
+      else                                          row.other += qty;
+      row.total += qty;
+      row.available += (item.availableQty ?? (cond === "GOOD" || cond === "NOR" ? qty : 0));
+    }
+    return Array.from(map.values());
+  }, [sortedItems]);
+
   const totalQty = useMemo(
-    () => filteredItems.reduce((s, i) => s + i.qty, 0),
-    [filteredItems]
+    () => groupedRows.reduce((s, r) => s + r.total, 0),
+    [groupedRows]
   );
 
   // ── Location search ──
@@ -810,16 +848,19 @@ export default function InventoryPage() {
       </div>
 
       {/* Summary bar */}
-      {!loading && filteredItems.length > 0 && (
-        <div className="flex items-center gap-4 mb-5 bg-white border border-slate-100 rounded-xl px-5 py-3 text-sm shadow-sm">
+      {!loading && groupedRows.length > 0 && (
+        <div className="flex items-center gap-4 mb-5 bg-white border border-slate-100 rounded-xl px-5 py-3 text-sm shadow-sm flex-wrap">
           <Package className="w-4 h-4 text-slate-400" />
-          <span className="text-slate-600">
-            <b className="text-slate-900">{filteredItems.length.toLocaleString()}</b> items
-          </span>
+          <span className="text-slate-600"><b className="text-slate-900">{groupedRows.length.toLocaleString()}</b> rows</span>
           <span className="text-slate-300">|</span>
-          <span className="text-slate-600">
-            Total qty <b className="text-slate-900">{totalQty.toLocaleString()}</b>
-          </span>
+          <span className="text-slate-600">Total <b className="text-slate-900">{totalQty.toLocaleString()}</b></span>
+          <span className="text-slate-300">|</span>
+          <span className="text-emerald-700">GOOD <b>{groupedRows.reduce((s,r)=>s+r.good,0).toLocaleString()}</b></span>
+          <span className="text-amber-600">HOLD <b>{groupedRows.reduce((s,r)=>s+r.hold,0).toLocaleString()}</b></span>
+          <span className="text-red-600">DMG <b>{groupedRows.reduce((s,r)=>s+r.dmg,0).toLocaleString()}</b></span>
+          {groupedRows.reduce((s,r)=>s+r.rtrn,0) > 0 && (
+            <span className="text-orange-600">RTRN <b>{groupedRows.reduce((s,r)=>s+r.rtrn,0).toLocaleString()}</b></span>
+          )}
         </div>
       )}
 
@@ -1355,59 +1396,56 @@ export default function InventoryPage() {
         </div>
       )}
 
-      {/* Flat table */}
-      {!loading && sortedItems.length > 0 && (
+      {/* Grouped table */}
+      {!loading && groupedRows.length > 0 && (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200">
-                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Location</th>
-                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Type</th>
-                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Condition</th>
-                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Customer</th>
-                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">SKU</th>
-                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Product Name</th>
-                <th className="px-4 py-2.5 text-right text-slate-500 font-medium">Qty</th>
-                <th className="px-4 py-2.5 text-right text-slate-500 font-medium">Available</th>
-                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">LOT</th>
-                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Expiry Date</th>
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium whitespace-nowrap">Location</th>
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium whitespace-nowrap">Type</th>
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium whitespace-nowrap">Customer</th>
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium whitespace-nowrap">SKU</th>
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium whitespace-nowrap">Product Name</th>
+                <th className="px-4 py-2.5 text-right text-slate-500 font-medium whitespace-nowrap">GOOD</th>
+                <th className="px-4 py-2.5 text-right text-slate-500 font-medium whitespace-nowrap">HOLD</th>
+                <th className="px-4 py-2.5 text-right text-slate-500 font-medium whitespace-nowrap">DMG</th>
+                <th className="px-4 py-2.5 text-right text-slate-500 font-medium whitespace-nowrap">RTRN</th>
+                <th className="px-4 py-2.5 text-right text-slate-800 font-semibold whitespace-nowrap">Total</th>
+                <th className="px-4 py-2.5 text-right text-slate-500 font-medium whitespace-nowrap">Available</th>
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium whitespace-nowrap">LOT</th>
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium whitespace-nowrap">Expiry Date</th>
               </tr>
             </thead>
             <tbody>
-              {sortedItems.map((item, idx) => {
-                const loc = [item.zone, item.aisle, item.bay, item.level, item.position].join("-");
+              {groupedRows.map((row, idx) => {
+                const exp = row.expireDate?.length === 8
+                  ? `${row.expireDate.slice(4,6)}-${row.expireDate.slice(6,8)}-${row.expireDate.slice(0,4)}`
+                  : row.expireDate || "-";
                 return (
-                  <tr key={`${item.locationId}-${item.sku}-${idx}`} className="hover:bg-slate-50 border-b border-slate-100 last:border-0">
-                    <td className="px-4 py-2.5 font-mono text-slate-600 whitespace-nowrap">{loc}</td>
-                    <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap">{item.occupancyInfo || "-"}</td>
+                  <tr key={idx} className="hover:bg-slate-50 border-b border-slate-100 last:border-0">
+                    <td className="px-4 py-2.5 font-mono text-slate-600 whitespace-nowrap">{row.loc}</td>
+                    <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap">{row.occupancyInfo || "-"}</td>
+                    <td className="px-4 py-2.5 text-slate-500 font-mono whitespace-nowrap">{row.customerCode || "-"}</td>
                     <td className="px-4 py-2.5 whitespace-nowrap">
-                      {item.condition ? (
-                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                          item.condition === "GOOD" || item.condition === "NOR" ? "bg-emerald-100 text-emerald-700" :
-                          item.condition === "DMG"  ? "bg-red-100 text-red-700" :
-                          item.condition === "RTRN" ? "bg-orange-100 text-orange-700" :
-                          "bg-slate-100 text-slate-600"
-                        }`}>{item.condition}</span>
-                      ) : "-"}
+                      <span className="font-mono font-medium text-slate-900 bg-slate-100 px-2 py-0.5 rounded">{row.sku || "-"}</span>
                     </td>
-                    <td className="px-4 py-2.5 text-slate-500 font-mono">{item.customerCode || "-"}</td>
-                    <td className="px-4 py-2.5">
-                      <span className="font-mono font-medium text-slate-900 bg-slate-100 px-2 py-0.5 rounded">{item.sku || "-"}</span>
-                    </td>
-                    <td className="px-4 py-2.5 text-slate-700 max-w-xs truncate">{item.productName || "-"}</td>
-                    <td className="px-4 py-2.5 text-right font-semibold text-slate-900">{item.qty.toLocaleString()}</td>
-                    <td className="px-4 py-2.5 text-right text-slate-500">{item.availableQty?.toLocaleString() ?? "-"}</td>
-                    <td className="px-4 py-2.5 text-slate-400 font-mono">{item.lot || "-"}</td>
-                    <td className="px-4 py-2.5 text-slate-400 font-mono">
-                      {item.expireDate?.length === 8
-                        ? `${item.expireDate.slice(4,6)}-${item.expireDate.slice(6,8)}-${item.expireDate.slice(0,4)}`
-                        : item.expireDate || "-"}
-                    </td>
+                    <td className="px-4 py-2.5 text-slate-700 max-w-xs truncate">{row.productName || "-"}</td>
+                    <td className="px-4 py-2.5 text-right font-semibold text-emerald-700">{row.good > 0 ? row.good.toLocaleString() : <span className="text-slate-300">—</span>}</td>
+                    <td className="px-4 py-2.5 text-right font-semibold text-amber-600">{row.hold > 0 ? row.hold.toLocaleString() : <span className="text-slate-300">—</span>}</td>
+                    <td className="px-4 py-2.5 text-right font-semibold text-red-600">{row.dmg  > 0 ? row.dmg.toLocaleString()  : <span className="text-slate-300">—</span>}</td>
+                    <td className="px-4 py-2.5 text-right font-semibold text-orange-600">{row.rtrn > 0 ? row.rtrn.toLocaleString() : <span className="text-slate-300">—</span>}</td>
+                    <td className="px-4 py-2.5 text-right font-bold text-slate-900">{row.total.toLocaleString()}</td>
+                    <td className="px-4 py-2.5 text-right text-slate-500">{row.available.toLocaleString()}</td>
+                    <td className="px-4 py-2.5 text-slate-400 font-mono whitespace-nowrap">{row.lot || "-"}</td>
+                    <td className="px-4 py-2.5 text-slate-400 font-mono whitespace-nowrap">{exp}</td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
