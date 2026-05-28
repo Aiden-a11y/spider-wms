@@ -233,101 +233,125 @@ export default function InventoryPage() {
 
     try {
       const custList = custCode === "ALL" || !custCode ? custSnapshot : custSnapshot.filter((c) => c.code === custCode);
-      if (custList.length === 0) {
-        setError("No customer data available.");
-        setLoading(false);
-        return;
+
+      // ── Strategy 1: /inventory/list (bulk, one call per customer) ──────────
+      // Try this first — much faster than per-SKU /inventory/detail calls.
+      let allItems: ReturnType<typeof normalizeInventory> = [];
+      let usedBulk = false;
+
+      const targetCusts = custList.length > 0 ? custList : [{ code: "", name: "" }];
+      for (const cust of targetCusts) {
+        let page = 1;
+        const pageSize = 500;
+        let gotAny = false;
+        while (true) {
+          const res = await fetch("/api/wms/inventory/list", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              warehouseCode: whCode,
+              customerCode: cust.code || undefined,
+              pageNum: page,
+              pageSize,
+            }),
+          });
+          if (!res.ok) break;
+          const json = await res.json();
+          // Accept various response shapes
+          const list: Record<string, unknown>[] =
+            Array.isArray(json?.data?.list) ? json.data.list :
+            Array.isArray(json?.data)       ? json.data :
+            Array.isArray(json?.list)       ? json.list :
+            Array.isArray(json)             ? json : [];
+          if (list.length === 0) break;
+          gotAny = true;
+          allItems.push(...normalizeInventory({ data: { list } }));
+          if (list.length < pageSize) break;
+          page++;
+        }
+        if (gotAny) usedBulk = true;
       }
 
-      // Step 1: collect all (customerCode, productSku) pairs — product list cached 10 min
-      const CACHE_TTL = 10 * 60 * 1000;
-      const pairs: { custCode: string; sku: string }[] = [];
+      // ── Strategy 2: per-SKU fallback (original approach) ──────────────────
+      if (!usedBulk) {
+        if (custList.length === 0) {
+          setError("No customer data available.");
+          setLoading(false);
+          return;
+        }
 
-      for (const cust of custList) {
-        const cacheKey = `sku_cache__${whCode}__${cust.code}`;
-        let skus: string[] | null = null;
-        try {
-          const cached = JSON.parse(sessionStorage.getItem(cacheKey) ?? "null");
-          if (cached && Date.now() - cached.ts < CACHE_TTL) skus = cached.skus;
-        } catch { /* ignore */ }
+        const CACHE_TTL = 10 * 60 * 1000;
+        const pairs: { custCode: string; sku: string }[] = [];
 
-        if (!skus) {
-          // Paginate through product list (pageSize=500) until all pages fetched
-          skus = [];
-          let page = 1;
-          const pageSize = 500;
-          while (true) {
-            const skuRes = await fetch(`/api/wms/product/list`, {
-              method: "POST",
-              headers,
-              body: JSON.stringify({
-                warehouseCode: whCode,
-                customerCode: cust.code,
-                pageNum: page,
-                pageSize,
-              }),
-            });
-            const skuJson = await skuRes.json();
-            const list = (skuJson.data?.list ?? []) as Record<string, unknown>[];
-            const pageSkus = list.map((p) => String(p.productSku ?? "")).filter(Boolean);
-            skus.push(...pageSkus);
+        for (const cust of custList) {
+          const cacheKey = `sku_cache__${whCode}__${cust.code}`;
+          let skus: string[] | null = null;
+          try {
+            const cached = JSON.parse(sessionStorage.getItem(cacheKey) ?? "null");
+            if (cached && Date.now() - cached.ts < CACHE_TTL) skus = cached.skus;
+          } catch { /* ignore */ }
 
-            // Stop if this page returned fewer than pageSize (last page) or empty
-            if (pageSkus.length < pageSize) break;
-            page += 1;
-            // Small delay between pages so we don't hammer the API
-            await new Promise((r) => setTimeout(r, 300));
+          if (!skus) {
+            skus = [];
+            let page = 1;
+            const pageSize = 500;
+            while (true) {
+              const skuRes = await fetch("/api/wms/product/list", {
+                method: "POST",
+                headers,
+                body: JSON.stringify({ warehouseCode: whCode, customerCode: cust.code, pageNum: page, pageSize }),
+              });
+              const skuJson = await skuRes.json();
+              const list = (skuJson.data?.list ?? []) as Record<string, unknown>[];
+              const pageSkus = list.map((p) => String(p.productSku ?? "")).filter(Boolean);
+              skus.push(...pageSkus);
+              if (pageSkus.length < pageSize) break;
+              page++;
+              await new Promise((r) => setTimeout(r, 300));
+            }
+            try { sessionStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), skus })); } catch { /* ignore */ }
           }
-          try { sessionStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), skus })); } catch { /* ignore */ }
+          skus.forEach((sku) => pairs.push({ custCode: cust.code, sku }));
         }
 
-        skus.forEach((sku) => pairs.push({ custCode: cust.code, sku }));
-      }
-
-      if (pairs.length === 0) {
-        setError("No products registered.");
-        setLoading(false);
-        return;
-      }
-
-      setProgress({ total: pairs.length, loaded: 0 });
-
-      // Step 2: fetch inventory detail in small batches (5 at a time) with delay between batches
-      // Mimics human browsing pace so the WMS API doesn't throttle us
-      const BATCH_SIZE = 5;
-      const BATCH_DELAY_MS = 400;
-      const allItems: ReturnType<typeof normalizeInventory> = [];
-      let loaded = 0;
-
-      for (let i = 0; i < pairs.length; i += BATCH_SIZE) {
-        const batch = pairs.slice(i, i + BATCH_SIZE);
-        const batchResults = await Promise.all(
-          batch.map(({ custCode: cc, sku }) =>
-            fetch(`/api/wms/inventory/detail`, {
-              method: "POST",
-              headers,
-              body: JSON.stringify({ warehouseCode: whCode, customerCode: cc, productSku: sku }),
-            })
-              .then((r) => r.json())
-              .then((j) => normalizeInventory(j))
-              .catch(() => [])
-          )
-        );
-        for (const rows of batchResults) {
-          allItems.push(...rows);
-          loaded += 1;
-          setProgress({ total: pairs.length, loaded });
+        if (pairs.length === 0) {
+          setError("No products registered.");
+          setLoading(false);
+          return;
         }
-        // Pause between batches unless this is the last one
-        if (i + BATCH_SIZE < pairs.length) {
-          await new Promise((r) => setTimeout(r, BATCH_DELAY_MS));
+
+        setProgress({ total: pairs.length, loaded: 0 });
+        const BATCH_SIZE = 5;
+        const BATCH_DELAY_MS = 400;
+        let loaded = 0;
+
+        for (let i = 0; i < pairs.length; i += BATCH_SIZE) {
+          const batch = pairs.slice(i, i + BATCH_SIZE);
+          const batchResults = await Promise.all(
+            batch.map(({ custCode: cc, sku }) =>
+              fetch("/api/wms/inventory/detail", {
+                method: "POST",
+                headers,
+                body: JSON.stringify({ warehouseCode: whCode, customerCode: cc, productSku: sku }),
+              })
+                .then((r) => r.json())
+                .then((j) => normalizeInventory(j))
+                .catch(() => [])
+            )
+          );
+          for (const rows of batchResults) {
+            allItems.push(...rows);
+            loaded++;
+            setProgress({ total: pairs.length, loaded });
+          }
+          if (i + BATCH_SIZE < pairs.length) await new Promise((r) => setTimeout(r, BATCH_DELAY_MS));
         }
       }
 
       setDebugInfo((d) => ({
         ...d,
-        inventoryRaw: { totalSkus: pairs.length, totalItems: allItems.length },
-        endpoint: `POST /product/list → POST /inventory/detail ×${pairs.length}`,
+        inventoryRaw: { totalItems: allItems.length, method: usedBulk ? "bulk /inventory/list" : "per-SKU /inventory/detail" },
+        endpoint: usedBulk ? "POST /inventory/list" : `POST /product/list → POST /inventory/detail`,
         status: 200,
       }));
 
