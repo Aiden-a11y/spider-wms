@@ -331,42 +331,25 @@ export default function InventoryPage() {
         }
 
         setProgress({ total: pairs.length, loaded: 0 });
-        const BATCH_SIZE = 8;
-        const BATCH_DELAY_MS = 150;
         let loaded = 0;
 
-        const fetchWithRetry = async (cc: string, sku: string, retries = 2): Promise<ReturnType<typeof normalizeInventory>> => {
-          for (let attempt = 0; attempt <= retries; attempt++) {
+        // Sequential with retry — no concurrent requests = no silent drops
+        for (const { custCode: cc, sku } of pairs) {
+          let rows: ReturnType<typeof normalizeInventory> = [];
+          for (let attempt = 0; attempt < 3; attempt++) {
             try {
               const res = await fetch("/api/wms/inventory/detail", {
                 method: "POST",
                 headers,
                 body: JSON.stringify({ warehouseCode: whCode, customerCode: cc, productSku: sku }),
               });
-              if (!res.ok) {
-                if (attempt < retries) { await new Promise((r) => setTimeout(r, 300 * (attempt + 1))); continue; }
-                return [];
-              }
-              const j = await res.json();
-              return normalizeInventory(j);
-            } catch {
-              if (attempt < retries) await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
-            }
+              if (res.ok) { rows = normalizeInventory(await res.json()); break; }
+            } catch { /* retry */ }
+            await new Promise((r) => setTimeout(r, 200));
           }
-          return [];
-        }
-
-        for (let i = 0; i < pairs.length; i += BATCH_SIZE) {
-          const batch = pairs.slice(i, i + BATCH_SIZE);
-          const batchResults = await Promise.all(
-            batch.map(({ custCode: cc, sku }) => fetchWithRetry(cc, sku))
-          );
-          for (const rows of batchResults) {
-            allItems.push(...rows);
-            loaded++;
-            setProgress({ total: pairs.length, loaded });
-          }
-          if (i + BATCH_SIZE < pairs.length) await new Promise((r) => setTimeout(r, BATCH_DELAY_MS));
+          allItems.push(...rows);
+          loaded++;
+          setProgress({ total: pairs.length, loaded });
         }
       }
 
