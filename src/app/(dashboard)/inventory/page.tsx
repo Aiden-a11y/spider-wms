@@ -331,24 +331,35 @@ export default function InventoryPage() {
         }
 
         setProgress({ total: pairs.length, loaded: 0 });
-        // Larger batch + shorter delay = faster without breaking the API
-        const BATCH_SIZE = 15;
-        const BATCH_DELAY_MS = 100;
+        const BATCH_SIZE = 8;
+        const BATCH_DELAY_MS = 150;
         let loaded = 0;
+
+        const fetchWithRetry = async (cc: string, sku: string, retries = 2): Promise<ReturnType<typeof normalizeInventory>> => {
+          for (let attempt = 0; attempt <= retries; attempt++) {
+            try {
+              const res = await fetch("/api/wms/inventory/detail", {
+                method: "POST",
+                headers,
+                body: JSON.stringify({ warehouseCode: whCode, customerCode: cc, productSku: sku }),
+              });
+              if (!res.ok) {
+                if (attempt < retries) { await new Promise((r) => setTimeout(r, 300 * (attempt + 1))); continue; }
+                return [];
+              }
+              const j = await res.json();
+              return normalizeInventory(j);
+            } catch {
+              if (attempt < retries) await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+            }
+          }
+          return [];
+        }
 
         for (let i = 0; i < pairs.length; i += BATCH_SIZE) {
           const batch = pairs.slice(i, i + BATCH_SIZE);
           const batchResults = await Promise.all(
-            batch.map(({ custCode: cc, sku }) =>
-              fetch("/api/wms/inventory/detail", {
-                method: "POST",
-                headers,
-                body: JSON.stringify({ warehouseCode: whCode, customerCode: cc, productSku: sku }),
-              })
-                .then((r) => r.json())
-                .then((j) => normalizeInventory(j))
-                .catch(() => [])
-            )
+            batch.map(({ custCode: cc, sku }) => fetchWithRetry(cc, sku))
           );
           for (const rows of batchResults) {
             allItems.push(...rows);
