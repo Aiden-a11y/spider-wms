@@ -1362,7 +1362,8 @@ export default function InventoryPage() {
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200">
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Location</th>
-                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">occupancyInfo</th>
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Type</th>
+                <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Condition</th>
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Customer</th>
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">SKU</th>
                 <th className="px-4 py-2.5 text-left text-slate-500 font-medium">Product Name</th>
@@ -1379,6 +1380,16 @@ export default function InventoryPage() {
                   <tr key={`${item.locationId}-${item.sku}-${idx}`} className="hover:bg-slate-50 border-b border-slate-100 last:border-0">
                     <td className="px-4 py-2.5 font-mono text-slate-600 whitespace-nowrap">{loc}</td>
                     <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap">{item.occupancyInfo || "-"}</td>
+                    <td className="px-4 py-2.5 whitespace-nowrap">
+                      {item.condition ? (
+                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                          item.condition === "GOOD" || item.condition === "NOR" ? "bg-emerald-100 text-emerald-700" :
+                          item.condition === "DMG"  ? "bg-red-100 text-red-700" :
+                          item.condition === "RTRN" ? "bg-orange-100 text-orange-700" :
+                          "bg-slate-100 text-slate-600"
+                        }`}>{item.condition}</span>
+                      ) : "-"}
+                    </td>
                     <td className="px-4 py-2.5 text-slate-500 font-mono">{item.customerCode || "-"}</td>
                     <td className="px-4 py-2.5">
                       <span className="font-mono font-medium text-slate-900 bg-slate-100 px-2 py-0.5 rounded">{item.sku || "-"}</span>

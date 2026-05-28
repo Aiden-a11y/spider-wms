@@ -18,6 +18,7 @@ export interface InventoryItem {
   expireDate?: string;
   uom?: string;
   customerCode?: string;
+  condition?: string;   // GOOD / DMG / RTRN etc.
 }
 
 type LocationLike = Record<string, unknown>;
@@ -177,6 +178,7 @@ export function normalizeInventory(raw: unknown): InventoryItem[] {
       expireDate: String(row.expireDate ?? row.expiryDate ?? ""),
       uom: String(row.uom ?? row.unit ?? ""),
       customerCode: String(row.customerCode ?? ""),
+      condition: String(row.itemCondition ?? row.condition ?? row.conditionCode ?? row.status ?? ""),
     };
   });
 }
