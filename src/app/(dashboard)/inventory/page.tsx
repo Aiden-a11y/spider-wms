@@ -234,45 +234,57 @@ export default function InventoryPage() {
     try {
       const custList = custCode === "ALL" || !custCode ? custSnapshot : custSnapshot.filter((c) => c.code === custCode);
 
-      // ── Strategy 1: /inventory/list (bulk, one call per customer) ──────────
-      // Try this first — much faster than per-SKU /inventory/detail calls.
       let allItems: ReturnType<typeof normalizeInventory> = [];
       let usedBulk = false;
 
+      // ── Strategy 1: /inventory/detail without SKU (returns all for customer) ─
+      // ── Strategy 2: /inventory/list paginated ─────────────────────────────────
+      // Try bulk endpoints first (one call per customer vs one per SKU)
+      const BULK_ENDPOINTS = ["/api/wms/inventory/detail", "/api/wms/inventory/list"];
       const targetCusts = custList.length > 0 ? custList : [{ code: "", name: "" }];
-      for (const cust of targetCusts) {
-        let page = 1;
-        const pageSize = 500;
-        let gotAny = false;
-        while (true) {
-          const res = await fetch("/api/wms/inventory/list", {
-            method: "POST",
-            headers,
-            body: JSON.stringify({
-              warehouseCode: whCode,
-              customerCode: cust.code || undefined,
-              pageNum: page,
-              pageSize,
-            }),
-          });
-          if (!res.ok) break;
-          const json = await res.json();
-          // Accept various response shapes
-          const list: Record<string, unknown>[] =
-            Array.isArray(json?.data?.list) ? json.data.list :
-            Array.isArray(json?.data)       ? json.data :
-            Array.isArray(json?.list)       ? json.list :
-            Array.isArray(json)             ? json : [];
-          if (list.length === 0) break;
-          gotAny = true;
-          allItems.push(...normalizeInventory({ data: { list } }));
-          if (list.length < pageSize) break;
-          page++;
+
+      for (const endpoint of BULK_ENDPOINTS) {
+        if (usedBulk) break;
+        let tempItems: ReturnType<typeof normalizeInventory> = [];
+        let worked = false;
+
+        for (const cust of targetCusts) {
+          let page = 1;
+          while (true) {
+            const res = await fetch(endpoint, {
+              method: "POST",
+              headers,
+              body: JSON.stringify({
+                warehouseCode: whCode,
+                customerCode: cust.code || undefined,
+                pageNum: page,
+                pageSize: 500,
+              }),
+            });
+            if (!res.ok) break;
+            const json = await res.json();
+            const list: Record<string, unknown>[] =
+              Array.isArray(json?.data?.list) ? json.data.list :
+              Array.isArray(json?.data)       ? json.data :
+              Array.isArray(json?.list)       ? json.list :
+              Array.isArray(json)             ? json : [];
+            if (list.length === 0) break;
+            worked = true;
+            // Validate: bulk result should have varied SKUs (not just one repeated)
+            const skuSet = new Set(list.map((r) => String(r.productSku ?? r.sku ?? "")));
+            if (skuSet.size < 2 && list.length > 5) break; // looks like detail for one SKU
+            tempItems.push(...normalizeInventory({ data: { list } }));
+            if (list.length < 500) break;
+            page++;
+          }
         }
-        if (gotAny) usedBulk = true;
+        if (worked && tempItems.length > 0) {
+          allItems = tempItems;
+          usedBulk = true;
+        }
       }
 
-      // ── Strategy 2: per-SKU fallback (original approach) ──────────────────
+      // ── Strategy 3: per-SKU fallback ──────────────────────────────────────
       if (!usedBulk) {
         if (custList.length === 0) {
           setError("No customer data available.");
@@ -294,20 +306,18 @@ export default function InventoryPage() {
           if (!skus) {
             skus = [];
             let page = 1;
-            const pageSize = 500;
             while (true) {
               const skuRes = await fetch("/api/wms/product/list", {
                 method: "POST",
                 headers,
-                body: JSON.stringify({ warehouseCode: whCode, customerCode: cust.code, pageNum: page, pageSize }),
+                body: JSON.stringify({ warehouseCode: whCode, customerCode: cust.code, pageNum: page, pageSize: 500 }),
               });
               const skuJson = await skuRes.json();
               const list = (skuJson.data?.list ?? []) as Record<string, unknown>[];
               const pageSkus = list.map((p) => String(p.productSku ?? "")).filter(Boolean);
               skus.push(...pageSkus);
-              if (pageSkus.length < pageSize) break;
+              if (pageSkus.length < 500) break;
               page++;
-              await new Promise((r) => setTimeout(r, 300));
             }
             try { sessionStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), skus })); } catch { /* ignore */ }
           }
@@ -321,8 +331,9 @@ export default function InventoryPage() {
         }
 
         setProgress({ total: pairs.length, loaded: 0 });
-        const BATCH_SIZE = 5;
-        const BATCH_DELAY_MS = 400;
+        // Larger batch + shorter delay = faster without breaking the API
+        const BATCH_SIZE = 15;
+        const BATCH_DELAY_MS = 100;
         let loaded = 0;
 
         for (let i = 0; i < pairs.length; i += BATCH_SIZE) {
@@ -350,8 +361,8 @@ export default function InventoryPage() {
 
       setDebugInfo((d) => ({
         ...d,
-        inventoryRaw: { totalItems: allItems.length, method: usedBulk ? "bulk /inventory/list" : "per-SKU /inventory/detail" },
-        endpoint: usedBulk ? "POST /inventory/list" : `POST /product/list → POST /inventory/detail`,
+        inventoryRaw: { totalItems: allItems.length, method: usedBulk ? "bulk" : "per-SKU" },
+        endpoint: usedBulk ? "bulk /inventory/detail or /list" : "per-SKU /inventory/detail",
         status: 200,
       }));
 
