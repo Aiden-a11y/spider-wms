@@ -1788,7 +1788,7 @@ export default function BillingPage() {
   const [activeIdx, setActiveIdx] = useState(0);
 
   // ── extra tabs: Rate Table / OM Subsidy / Office Sublease ──
-  const [extraTab, setExtraTab] = useState<"none" | "rate-table" | "om-subsidy" | "sublease">("none");
+  const [extraTab, setExtraTab] = useState<"none" | "rate-table" | "om-subsidy" | "sublease" | "summary">("none");
   const [omWages, setOmWages] = useState<string>("");
   const [omAllocPct, setOmAllocPct] = useState<string>("40");
   // Office Sublease (top-level, not per-customer) — persisted to localStorage
@@ -2675,10 +2675,64 @@ export default function BillingPage() {
       setExportPreview(null);
     }
 
+    // Build flat table rows for the preview
+    type PreviewRow =
+      | { type: "secHeader"; label: string; color: "blue" | "amber" | "purple" }
+      | { type: "item";   no: number; description: string; rate: string; unit: string; qty: string; amount: number }
+      | { type: "subtotal"; label: string; amount: number }
+      | { type: "grandTotal"; amount: number };
+
+    const rows: PreviewRow[] = [];
+    let lineNo = 1;
+    let secNo  = 1;
+
+    // ── Per-customer sections ─────────────────────────────────────────────────
+    for (const inv of previewInvoices) {
+      const custLabel = isMulti
+        ? `${secNo}. ${inv.customerName || inv.customer}`
+        : `${secNo}. ${inv.customerName || inv.customer}`;
+      rows.push({ type: "secHeader", label: custLabel, color: "blue" });
+      secNo++;
+      for (const cat of BILLING_CATEGORIES) {
+        const amt = inv.subtotals?.[cat] ?? 0;
+        if (amt === 0) continue;
+        rows.push({ type: "item", no: lineNo++, description: cat, rate: "—", unit: "—", qty: "—", amount: amt });
+      }
+      rows.push({ type: "subtotal", label: `Subtotal — ${inv.customerName || inv.customer}`, amount: inv.total });
+    }
+
+    // ── Office Sublease section ───────────────────────────────────────────────
+    if (previewSublease > 0) {
+      rows.push({ type: "secHeader", label: `${secNo}. Office Sublease`, color: "amber" });
+      secNo++;
+      rows.push({ type: "item", no: lineNo++, description: "Monthly Office Rent (per MSA Section 3.2)",           rate: fmt(SUBLEASE_RENT_RATE),  unit: "per month",              qty: String(parseFloat(subleaseRentQty)||0), amount: subleaseRent });
+      rows.push({ type: "item", no: lineNo++, description: "Operating Cost Reimbursement (per MSA Section 3.3)",  rate: fmt(SUBLEASE_OP_RATE),    unit: "per square foot per month", qty: Number(parseFloat(subleaseOpQty)||0).toLocaleString(), amount: subleaseOp });
+      rows.push({ type: "subtotal", label: "Subtotal — Office Sublease", amount: previewSublease });
+    }
+
+    // ── OM Subsidy section ────────────────────────────────────────────────────
+    if (previewOmSubsidy > 0) {
+      const wages = parseFloat(omWages) || 0;
+      const allocPct = Math.max(0, Math.min(100, parseFloat(omAllocPct) || 0));
+      rows.push({ type: "secHeader", label: `${secNo}. Operations Manager Subsidy`, color: "purple" });
+      rows.push({ type: "item", no: lineNo++, description: "Operations Manager Salary Subsidy (per MSA Section 4)", rate: fmt(wages), unit: "of monthly cost", qty: `${allocPct.toFixed(1)}%`, amount: previewOmSubsidy });
+      rows.push({ type: "subtotal", label: "Subtotal — OM Subsidy", amount: previewOmSubsidy });
+    }
+
+    rows.push({ type: "grandTotal", amount: grandTotal });
+
+    const secHdrBg: Record<string, string> = {
+      blue:   "bg-[#BDD7EE] text-[#1B2F55]",
+      amber:  "bg-amber-100 text-amber-900",
+      purple: "bg-purple-100 text-purple-900",
+    };
+
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden">
+
+          {/* Header */}
+          <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 flex-shrink-0">
             <div>
               <h2 className="text-base font-bold text-slate-900">Export Summary</h2>
               <p className="text-xs text-slate-400 mt-0.5">{periodLabel(previewPeriod)}{isMulti ? ` · ${previewInvoices.length} customers` : ""}</p>
@@ -2687,79 +2741,70 @@ export default function BillingPage() {
               <X className="w-5 h-5" />
             </button>
           </div>
-          <div className="overflow-y-auto flex-1 px-6 py-4 space-y-4">
-            {previewInvoices.map((inv) => (
-              <div key={inv.id} className="rounded-xl border border-slate-200 overflow-hidden">
-                <div className="bg-slate-50 px-4 py-2.5 flex items-center justify-between border-b border-slate-200">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-800">{inv.customerName || inv.customer}</p>
-                    {isMulti && <p className="text-xs text-slate-400 font-mono">{inv.customer}</p>}
-                  </div>
-                  <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${inv.status === "final" ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>
-                    {inv.status === "final" ? "Final" : "Draft"}
-                  </span>
-                </div>
-                <div className="divide-y divide-slate-50">
-                  {BILLING_CATEGORIES.map((cat) => {
-                    const amt = inv.subtotals?.[cat] ?? 0;
-                    if (amt === 0) return null;
-                    return (
-                      <div key={cat} className="flex items-center justify-between px-4 py-2">
-                        <span className="text-xs text-slate-500">{cat}</span>
-                        <span className="text-xs font-semibold text-slate-800 tabular-nums">{fmt(amt)}</span>
-                      </div>
-                    );
-                  })}
-                  <div className="flex items-center justify-between px-4 py-2.5 bg-slate-50">
-                    <span className="text-xs font-bold text-slate-700">Customer Total</span>
-                    <span className="text-sm font-bold text-slate-900 tabular-nums">{fmt(inv.total)}</span>
-                  </div>
-                </div>
-              </div>
-            ))}
-            {previewOmSubsidy > 0 && (
-              <div className="flex items-center justify-between px-4 py-2.5 rounded-xl border border-purple-200 bg-purple-50">
-                <span className="text-sm font-medium text-purple-800">OM Subsidy — STL Allocation</span>
-                <span className="text-sm font-bold text-purple-900 tabular-nums">{fmt(previewOmSubsidy)}</span>
-              </div>
-            )}
-            {previewSublease > 0 && (
-              <div className="rounded-xl border border-amber-200 bg-amber-50 overflow-hidden">
-                <div className="flex items-center justify-between px-4 py-2.5 border-b border-amber-100">
-                  <span className="text-sm font-semibold text-amber-800 flex items-center gap-1.5">
-                    <Building2 className="w-3.5 h-3.5" />Office Sublease
-                  </span>
-                  <span className="text-sm font-bold text-amber-900 tabular-nums">{fmt(previewSublease)}</span>
-                </div>
-                <div className="px-4 py-2 space-y-1">
-                  <div className="flex justify-between text-xs text-amber-700">
-                    <span>Monthly Rent (§3.2) — {fmt(SUBLEASE_RENT_RATE)} × {parseFloat(subleaseRentQty)||0} mo</span>
-                    <span className="tabular-nums">{fmt(subleaseRent)}</span>
-                  </div>
-                  <div className="flex justify-between text-xs text-amber-700">
-                    <span>Operating Cost (§3.3) — {fmt(SUBLEASE_OP_RATE)} × {parseFloat(subleaseOpQty)||0} sq ft</span>
-                    <span className="tabular-nums">{fmt(subleaseOp)}</span>
-                  </div>
-                </div>
-              </div>
-            )}
+
+          {/* Table */}
+          <div className="overflow-y-auto flex-1">
+            <table className="w-full text-xs border-collapse">
+              <thead className="sticky top-0 z-10">
+                <tr className="bg-[#2E5FA3] text-white">
+                  <th className="px-3 py-2 text-center font-semibold w-10">No.</th>
+                  <th className="px-3 py-2 text-left font-semibold">Description</th>
+                  <th className="px-3 py-2 text-right font-semibold w-28">Rate</th>
+                  <th className="px-3 py-2 text-left font-semibold w-32">Unit</th>
+                  <th className="px-3 py-2 text-right font-semibold w-20">Qty</th>
+                  <th className="px-3 py-2 text-right font-semibold w-28">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row, ri) => {
+                  if (row.type === "secHeader") return (
+                    <tr key={ri} className={secHdrBg[row.color]}>
+                      <td colSpan={6} className="px-3 py-2 font-bold text-sm">{row.label}</td>
+                    </tr>
+                  );
+                  if (row.type === "item") return (
+                    <tr key={ri} className={ri % 2 === 0 ? "bg-white" : "bg-slate-50/60"}>
+                      <td className="px-3 py-1.5 text-center text-slate-400">{row.no}</td>
+                      <td className="px-3 py-1.5 text-slate-800">{row.description}</td>
+                      <td className="px-3 py-1.5 text-right font-mono text-teal-700 font-semibold">{row.rate}</td>
+                      <td className="px-3 py-1.5 text-slate-500">{row.unit}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums text-slate-700">{row.qty}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums font-semibold text-slate-900">{fmt(row.amount)}</td>
+                    </tr>
+                  );
+                  if (row.type === "subtotal") return (
+                    <tr key={ri} className="bg-[#F2F2F2]">
+                      <td colSpan={5} className="px-3 py-1.5 text-right font-semibold text-slate-700 text-xs">
+                        {row.label}
+                      </td>
+                      <td className="px-3 py-1.5 text-right tabular-nums font-bold text-slate-900">{fmt(row.amount)}</td>
+                    </tr>
+                  );
+                  if (row.type === "grandTotal") return (
+                    <tr key={ri} className="bg-[#375623]">
+                      <td colSpan={5} className="px-3 py-2.5 text-right font-bold text-white text-sm tracking-wide">
+                        GRAND TOTAL
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums font-bold text-white text-base">{fmt(row.amount)}</td>
+                    </tr>
+                  );
+                  return null;
+                })}
+              </tbody>
+            </table>
           </div>
-          <div className="border-t border-slate-100 px-6 py-4 bg-slate-50">
-            <div className="flex items-center justify-between mb-4">
-              <span className="text-sm font-semibold text-slate-600">Grand Total</span>
-              <span className="text-2xl font-bold text-slate-900 tabular-nums">{fmt(grandTotal)}</span>
-            </div>
-            <div className="flex gap-2 justify-end">
-              <button onClick={() => setExportPreview(null)}
-                className="px-4 py-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg hover:bg-white transition-colors">
-                Cancel
-              </button>
-              <button onClick={doExport}
-                className="flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-sm">
-                <Download className="w-4 h-4" />
-                Download Excel
-              </button>
-            </div>
+
+          {/* Footer */}
+          <div className="border-t border-slate-100 px-6 py-3.5 bg-slate-50 flex justify-end gap-2 flex-shrink-0">
+            <button onClick={() => setExportPreview(null)}
+              className="px-4 py-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg hover:bg-white transition-colors">
+              Cancel
+            </button>
+            <button onClick={doExport}
+              className="flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-sm">
+              <Download className="w-4 h-4" />
+              Download Excel
+            </button>
           </div>
         </div>
       </div>
@@ -2900,6 +2945,19 @@ export default function BillingPage() {
           >
             <Building2 className="w-3.5 h-3.5" />
             Office Sublease
+          </button>
+
+          {/* Summary tab */}
+          <button
+            onClick={() => setExtraTab(extraTab === "summary" ? "none" : "summary")}
+            className={`px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+              extraTab === "summary"
+                ? "border-emerald-600 text-emerald-700 bg-emerald-50/60"
+                : "border-transparent text-slate-400 hover:text-slate-700 hover:bg-slate-50"
+            }`}
+          >
+            <Table2 className="w-3.5 h-3.5" />
+            Summary
           </button>
         </div>
 
@@ -3200,6 +3258,137 @@ export default function BillingPage() {
               </div>
               <p className="text-xs text-slate-400 px-1">
                 These charges are fixed monthly contract amounts billed separately from customer WMS fees and added to the combined grand total.
+              </p>
+            </div>
+          );
+        })()}
+
+        {/* ── Summary panel ── */}
+        {extraTab === "summary" && (() => {
+          const group = getCurrentGroup();
+          const omSubsidy    = calcStlAlloc(omWages, omAllocPct);
+          const subleaseRent = (parseFloat(subleaseRentQty) || 0) * SUBLEASE_RENT_RATE;
+          const subleaseOp   = (parseFloat(subleaseOpQty)   || 0) * SUBLEASE_OP_RATE;
+          const subleaseAmt  = subleaseRent + subleaseOp;
+          const fmt = formatUSD;
+
+          // Build flat table rows (same logic as export preview modal)
+          type SumRow =
+            | { type: "secHeader"; label: string; color: "blue" | "amber" | "purple" | "green" }
+            | { type: "item";     no: number; description: string; rate: string; unit: string; qty: string; amount: number }
+            | { type: "subtotal"; label: string; amount: number }
+            | { type: "grandTotal"; amount: number };
+
+          const rows: SumRow[] = [];
+          let lineNo = 1;
+          let secNo  = 1;
+
+          for (const inv of group) {
+            rows.push({ type: "secHeader", label: `${secNo}. ${inv.customerName || inv.customer}`, color: "blue" });
+            secNo++;
+            for (const cat of BILLING_CATEGORIES) {
+              const catItems = inv.lineItems.filter(l => l.category === cat);
+              const catAmt   = catItems.reduce((s, i) => s + calcLineAmount(i), 0);
+              if (catAmt === 0) continue;
+              rows.push({ type: "item", no: lineNo++, description: cat, rate: "—", unit: "—", qty: "—", amount: catAmt });
+            }
+            rows.push({ type: "subtotal", label: `Subtotal — ${inv.customerName || inv.customer}`, amount: inv.total });
+          }
+
+          if (subleaseAmt > 0) {
+            rows.push({ type: "secHeader", label: `${secNo}. Office Sublease`, color: "amber" });
+            secNo++;
+            rows.push({ type: "item", no: lineNo++, description: "Monthly Office Rent (per MSA Section 3.2)",          rate: fmt(SUBLEASE_RENT_RATE), unit: "per month",               qty: String(parseFloat(subleaseRentQty)||0), amount: subleaseRent });
+            rows.push({ type: "item", no: lineNo++, description: "Operating Cost Reimbursement (per MSA Section 3.3)", rate: fmt(SUBLEASE_OP_RATE),   unit: "per sq ft / month",        qty: Number(parseFloat(subleaseOpQty)||0).toLocaleString(), amount: subleaseOp });
+            rows.push({ type: "subtotal", label: "Subtotal — Office Sublease", amount: subleaseAmt });
+          }
+
+          if (omSubsidy > 0) {
+            const wages    = parseFloat(omWages) || 0;
+            const allocPct = Math.max(0, Math.min(100, parseFloat(omAllocPct) || 0));
+            rows.push({ type: "secHeader", label: `${secNo}. Operations Manager Subsidy`, color: "purple" });
+            rows.push({ type: "item", no: lineNo++, description: "Operations Manager Salary Subsidy (per MSA Section 4)", rate: fmt(wages), unit: "of monthly cost", qty: `${allocPct.toFixed(1)}%`, amount: omSubsidy });
+            rows.push({ type: "subtotal", label: "Subtotal — OM Subsidy", amount: omSubsidy });
+          }
+
+          const grandTotal = group.reduce((s, inv) => s + inv.total, 0) + subleaseAmt + omSubsidy;
+          rows.push({ type: "grandTotal", amount: grandTotal });
+
+          const secHdrBg: Record<string, string> = {
+            blue:   "bg-[#BDD7EE] text-[#1B2F55]",
+            amber:  "bg-amber-100 text-amber-900",
+            purple: "bg-purple-100 text-purple-900",
+            green:  "bg-emerald-100 text-emerald-900",
+          };
+
+          return (
+            <div className="pb-8">
+              {/* Download button */}
+              <div className="flex justify-end mb-3">
+                <button
+                  onClick={() => {
+                    // Flush current customer's orderEdits before export
+                    const mergedEditsMap = { ...orderEditsMap, ...(editing ? { [editing.customer]: orderEdits } : {}) };
+                    const mergedSourceMap = { ...wmsSourceMap, ...(editing && wmsSource ? { [editing.customer]: wmsSource } : {}) };
+                    exportAllToExcel(group, editing!.period, mergedSourceMap, mergedEditsMap, storageRows, omSubsidy, subleaseAmt).catch(console.error);
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-sm"
+                >
+                  <Download className="w-4 h-4" />
+                  Download Excel
+                </button>
+              </div>
+
+              {/* Summary table */}
+              <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                <table className="w-full text-sm border-collapse">
+                  <thead>
+                    <tr className="bg-[#2E5FA3] text-white">
+                      <th className="px-4 py-2.5 text-center font-semibold w-10 text-xs">No.</th>
+                      <th className="px-4 py-2.5 text-left font-semibold text-xs">Description</th>
+                      <th className="px-4 py-2.5 text-right font-semibold w-32 text-xs">Rate</th>
+                      <th className="px-4 py-2.5 text-left font-semibold w-36 text-xs">Unit</th>
+                      <th className="px-4 py-2.5 text-right font-semibold w-24 text-xs">Qty</th>
+                      <th className="px-4 py-2.5 text-right font-semibold w-32 text-xs">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row, ri) => {
+                      if (row.type === "secHeader") return (
+                        <tr key={ri} className={secHdrBg[row.color]}>
+                          <td colSpan={6} className="px-4 py-2 font-bold text-sm">{row.label}</td>
+                        </tr>
+                      );
+                      if (row.type === "item") return (
+                        <tr key={ri} className={ri % 2 === 0 ? "bg-white" : "bg-slate-50/60"}>
+                          <td className="px-4 py-2 text-center text-slate-400 text-xs">{row.no}</td>
+                          <td className="px-4 py-2 text-slate-800">{row.description}</td>
+                          <td className="px-4 py-2 text-right font-mono text-teal-700 font-semibold text-xs">{row.rate}</td>
+                          <td className="px-4 py-2 text-slate-500 text-xs">{row.unit}</td>
+                          <td className="px-4 py-2 text-right tabular-nums text-slate-700 text-xs">{row.qty}</td>
+                          <td className="px-4 py-2 text-right tabular-nums font-semibold text-slate-900">{fmt(row.amount)}</td>
+                        </tr>
+                      );
+                      if (row.type === "subtotal") return (
+                        <tr key={ri} className="bg-[#F2F2F2]">
+                          <td colSpan={5} className="px-4 py-2 text-right font-semibold text-slate-700 text-xs">{row.label}</td>
+                          <td className="px-4 py-2 text-right tabular-nums font-bold text-slate-900">{fmt(row.amount)}</td>
+                        </tr>
+                      );
+                      if (row.type === "grandTotal") return (
+                        <tr key={ri} className="bg-[#375623]">
+                          <td colSpan={5} className="px-4 py-3 text-right font-bold text-white text-sm tracking-wide">GRAND TOTAL</td>
+                          <td className="px-4 py-3 text-right tabular-nums font-bold text-white text-base">{fmt(row.amount)}</td>
+                        </tr>
+                      );
+                      return null;
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              <p className="text-xs text-slate-400 mt-2 text-right">
+                Rate Version: {editing?.rateVersion} · Generated {new Date().toLocaleDateString("en-US")}
               </p>
             </div>
           );
@@ -4374,77 +4563,6 @@ export default function BillingPage() {
         </div>
       )}
 
-      {/* ── Office Sublease + Grand Total ── */}
-      {(() => {
-        const rentQty    = Math.max(0, parseFloat(subleaseRentQty) || 0);
-        const opQty      = Math.max(0, parseFloat(subleaseOpQty)   || 0);
-        const rentAmt    = rentQty * SUBLEASE_RENT_RATE;
-        const opAmt      = opQty   * SUBLEASE_OP_RATE;
-        const subleaseTotal = rentAmt + opAmt;
-        const invoicesTotal = invoices.reduce((s, inv) => s + inv.total, 0);
-        const grandTotal    = invoicesTotal + subleaseTotal;
-        const fmt = (v: number) => formatUSD(v);
-        return (
-          <div className="mt-4 space-y-3">
-            {/* Sublease card */}
-            <div className="bg-white border border-amber-200 rounded-xl overflow-hidden shadow-sm">
-              <div className="flex items-center justify-between px-5 py-3 border-b border-amber-100 bg-amber-50/60">
-                <div className="flex items-center gap-2">
-                  <Building2 className="w-4 h-4 text-amber-600" />
-                  <span className="text-sm font-semibold text-amber-800">Office Sublease</span>
-                  <span className="text-xs text-amber-600">— Monthly Fixed Charges</span>
-                </div>
-                <span className="text-sm font-bold text-amber-900 tabular-nums">{fmt(subleaseTotal)}</span>
-              </div>
-              <div className="px-5 py-3 flex flex-wrap gap-6">
-                {/* Rent */}
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="text-slate-500">Monthly Rent (§3.2)</span>
-                  <span className="text-slate-400 text-xs">{fmt(SUBLEASE_RENT_RATE)} ×</span>
-                  <input
-                    type="number" min={0} step={1} value={subleaseRentQty}
-                    onChange={e => setSubleaseRentQty(e.target.value)}
-                    className="w-16 text-right border border-amber-200 bg-amber-50 focus:bg-white focus:border-amber-400 rounded px-2 py-0.5 text-sm font-mono outline-none"
-                  />
-                  <span className="text-slate-400 text-xs">mo</span>
-                  <span className="font-semibold text-slate-800 tabular-nums">{fmt(rentAmt)}</span>
-                </div>
-                {/* Operating Cost */}
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="text-slate-500">Operating Cost (§3.3)</span>
-                  <span className="text-slate-400 text-xs">{fmt(SUBLEASE_OP_RATE)} ×</span>
-                  <input
-                    type="number" min={0} step={1} value={subleaseOpQty}
-                    onChange={e => setSubleaseOpQty(e.target.value)}
-                    className="w-20 text-right border border-amber-200 bg-amber-50 focus:bg-white focus:border-amber-400 rounded px-2 py-0.5 text-sm font-mono outline-none"
-                  />
-                  <span className="text-slate-400 text-xs">sq ft</span>
-                  <span className="font-semibold text-slate-800 tabular-nums">{fmt(opAmt)}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Grand Total bar */}
-            {invoices.length > 0 && (
-              <div className="bg-slate-900 rounded-xl px-6 py-4 flex items-center gap-4 flex-wrap shadow-lg">
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Grand Total</p>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs text-slate-500">Invoices</span>
-                  <span className="text-sm font-semibold text-slate-300 tabular-nums">{fmt(invoicesTotal)}</span>
-                </div>
-                <span className="text-slate-600">+</span>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs text-amber-500">Sublease</span>
-                  <span className="text-sm font-semibold text-amber-300 tabular-nums">{fmt(subleaseTotal)}</span>
-                </div>
-                <div className="ml-auto text-right">
-                  <p className="text-2xl font-bold text-white tabular-nums">{fmt(grandTotal)}</p>
-                </div>
-              </div>
-            )}
-          </div>
-        );
-      })()}
     </div>
   );
 }
