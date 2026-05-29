@@ -226,6 +226,7 @@ export default function ShippingTypePage() {
   const [allocRows,      setAllocRows]      = useState<AllocRow[]>([]);
   const [allocWarnings,  setAllocWarnings]  = useState<string[]>([]);
   const [uomMap,         setUomMap]         = useState<Record<string, number>>({}); // sku → units_per_carton
+  const [ticketSortOpen, setTicketSortOpen] = useState(false);  // PDF sort dropdown
 
   const headers = useMemo(
     () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
@@ -792,7 +793,7 @@ export default function ShippingTypePage() {
     writeFile(wb, `picking_alloc_${new Date().toISOString().slice(0, 10)}.xlsx`);
   }
 
-  function printPickingTicket() {
+  function printPickingTicket(sort: "location" | "sku" = "location") {
     const codes    = Object.keys(selectedCodes).filter((k) => selectedCodes[k]);
     const total    = allocRows.reduce((s, r) => s + r.totalQty, 0);
     const totalCtn = allocRows.reduce((s, r) => { const u = uomMap[r.sku] ?? 0; return s + (u > 0 ? Math.ceil(r.totalQty / u) : 0); }, 0);
@@ -808,9 +809,20 @@ export default function ShippingTypePage() {
     allocRows.forEach((r) => { if (r.sku) skuSet[r.sku] = true; });
     const totalSku = Object.keys(skuSet).length;
 
+    // ── Sort rows by chosen mode ──────────────────────────────────────────────
+    const sortedRows = sort === "sku"
+      ? [...allocRows].sort((a, b) =>
+          a.sku.localeCompare(b.sku) ||
+          a.lot.localeCompare(b.lot) ||
+          pickingSort(a, b)          // tie-break: location order within same SKU+lot
+        )
+      : [...allocRows]; // location order (already sorted by pickingSort when built)
+
+    const sortLabel = sort === "sku" ? "Sorted by SKU" : "Sorted by Location";
+
     // ── Table rows ────────────────────────────────────────────────────────────
     // Single font size 9pt, bold only for location + qty numbers
-    const rows = allocRows.map((row, i) => {
+    const rows = sortedRows.map((row, i) => {
       const isShared = Object.keys(row.perOrder).length > 1;
       const upc      = uomMap[row.sku] ?? 0;
       const cartons  = upc > 0 ? Math.ceil(row.totalQty / upc) : null;
@@ -885,6 +897,7 @@ export default function ShippingTypePage() {
       <div style="font-size:11pt;font-weight:bold;margin-bottom:3pt">Client: ${custName}</div>
       <div style="font-size:9pt">Total SKU: <b>${totalSku}</b></div>
       <div style="font-size:9pt">Total Qty: <b>${total.toLocaleString()}${totalCtn > 0 ? ` / ${totalCtn} CTN` : ""}</b></div>
+      <div style="font-size:8pt;color:#555;margin-top:2pt">&#128196; ${sortLabel}</div>
       <div style="font-size:9pt;margin-top:3pt">Order No.:</div>
       ${orderNoLines}
     </div>
@@ -2106,11 +2119,58 @@ ${labels}
               <div className="flex items-center gap-2">
                 {!allocLoading && allocRows.length > 0 && (
                   <>
-                    <button onClick={printPickingTicket}
-                      className="flex items-center gap-2 text-sm font-medium text-white bg-slate-700 hover:bg-slate-900 rounded-lg px-3 py-2 transition-colors shadow-sm">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
-                      Print Ticket (PDF)
-                    </button>
+                    {/* ── Print Ticket dropdown ── */}
+                    {ticketSortOpen && (
+                      <div className="fixed inset-0 z-40" onClick={() => setTicketSortOpen(false)} />
+                    )}
+                    <div className="relative">
+                      <div className="flex rounded-lg shadow-sm overflow-hidden">
+                        {/* Main button — location sort (default) */}
+                        <button
+                          onClick={() => { setTicketSortOpen(false); printPickingTicket("location"); }}
+                          className="flex items-center gap-2 text-sm font-medium text-white bg-slate-700 hover:bg-slate-900 px-3 py-2 transition-colors"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                          Print Ticket (PDF)
+                        </button>
+                        {/* Chevron toggle */}
+                        <button
+                          onClick={() => setTicketSortOpen((v) => !v)}
+                          className="flex items-center px-2 py-2 text-white bg-slate-600 hover:bg-slate-800 border-l border-slate-500 transition-colors"
+                          title="Sort options"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                        </button>
+                      </div>
+                      {/* Dropdown */}
+                      {ticketSortOpen && (
+                        <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-slate-200 rounded-lg shadow-lg overflow-hidden w-52">
+                          <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wide bg-slate-50 border-b border-slate-100">
+                            Sort Order
+                          </div>
+                          <button
+                            onClick={() => { setTicketSortOpen(false); printPickingTicket("location"); }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors text-left"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
+                            <div>
+                              <div className="font-medium">By Location</div>
+                              <div className="text-[10px] text-slate-400">Aisle → Bay → Level order</div>
+                            </div>
+                          </button>
+                          <button
+                            onClick={() => { setTicketSortOpen(false); printPickingTicket("sku"); }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors text-left border-t border-slate-100"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="9" y2="18"/></svg>
+                            <div>
+                              <div className="font-medium">By SKU</div>
+                              <div className="text-[10px] text-slate-400">SKU alphabetical order</div>
+                            </div>
+                          </button>
+                        </div>
+                      )}
+                    </div>
                     <button onClick={printPickingLabels}
                       className="flex items-center gap-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg px-3 py-2 transition-colors shadow-sm">
                       <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="10" y1="14" x2="14" y2="14"/></svg>
