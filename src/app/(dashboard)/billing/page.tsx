@@ -3277,61 +3277,75 @@ export default function BillingPage() {
 
         {/* ── Summary panel ── */}
         {extraTab === "summary" && (() => {
-          const group = getCurrentGroup();
-          const omSubsidy    = calcStlAlloc(omWages, omAllocPct);
+          const group       = getCurrentGroup();
+          const omSubsidy   = calcStlAlloc(omWages, omAllocPct);
           const subleaseRent = (parseFloat(subleaseRentQty) || 0) * SUBLEASE_RENT_RATE;
           const subleaseOp   = (parseFloat(subleaseOpQty)   || 0) * SUBLEASE_OP_RATE;
           const subleaseAmt  = subleaseRent + subleaseOp;
           const fmt = formatUSD;
 
-          // Build flat table rows (same logic as export preview modal)
           type SumRow =
-            | { type: "secHeader"; label: string; color: "blue" | "amber" | "purple" | "green" }
-            | { type: "item";     no: number; description: string; rate: string; unit: string; qty: string; amount: number }
-            | { type: "subtotal"; label: string; amount: number }
+            | { type: "custHeader"; label: string }
+            | { type: "catHeader";  label: string; color: string }
+            | { type: "item";       no: number; description: string; rate: string; unit: string; qty: string; amount: number; zero: boolean }
+            | { type: "catSubtotal"; label: string; amount: number }
+            | { type: "custTotal";  label: string; amount: number }
+            | { type: "secHeader";  label: string; color: string }
+            | { type: "subtotal";   label: string; amount: number }
             | { type: "grandTotal"; amount: number };
 
           const rows: SumRow[] = [];
           let lineNo = 1;
-          let secNo  = 1;
+          let custNo = 1;
 
           for (const inv of group) {
-            rows.push({ type: "secHeader", label: `${secNo}. ${inv.customerName || inv.customer}`, color: "blue" });
-            secNo++;
+            rows.push({ type: "custHeader", label: `${custNo}. ${inv.customerName || inv.customer}` });
+            custNo++;
+
             for (const cat of BILLING_CATEGORIES) {
               const catItems = inv.lineItems.filter(l => l.category === cat);
-              const catAmt   = catItems.reduce((s, i) => s + calcLineAmount(i), 0);
-              if (catAmt === 0) continue;
-              rows.push({ type: "item", no: lineNo++, description: cat, rate: "—", unit: "—", qty: "—", amount: catAmt });
+              // Show category only if at least one item has non-zero qty
+              if (catItems.every(i => i.qty === 0)) continue;
+
+              rows.push({ type: "catHeader", label: cat, color: CATEGORY_COLOR[cat] });
+
+              for (const item of catItems) {
+                const amt  = calcLineAmount(item);
+                const zero = item.qty === 0;
+                const rateStr = item.costPlus ? "cost+10%" : `$${item.rate}`;
+                const qtyStr  = item.costPlus
+                  ? fmt(item.qty)
+                  : (item.qty % 1 === 0 ? item.qty.toLocaleString() : item.qty.toFixed(2));
+                rows.push({ type: "item", no: lineNo++, description: item.description, rate: rateStr, unit: item.unit, qty: qtyStr, amount: amt, zero });
+              }
+
+              const catTotal = catItems.reduce((s, i) => s + calcLineAmount(i), 0);
+              rows.push({ type: "catSubtotal", label: `Subtotal — ${cat}`, amount: catTotal });
             }
-            rows.push({ type: "subtotal", label: `Subtotal — ${inv.customerName || inv.customer}`, amount: inv.total });
+
+            rows.push({ type: "custTotal", label: `Total — ${inv.customerName || inv.customer}`, amount: inv.total });
           }
 
+          // Office Sublease
           if (subleaseAmt > 0) {
-            rows.push({ type: "secHeader", label: `${secNo}. Office Sublease`, color: "amber" });
-            secNo++;
-            rows.push({ type: "item", no: lineNo++, description: "Monthly Office Rent (per MSA Section 3.2)",          rate: fmt(SUBLEASE_RENT_RATE), unit: "per month",               qty: String(parseFloat(subleaseRentQty)||0), amount: subleaseRent });
-            rows.push({ type: "item", no: lineNo++, description: "Operating Cost Reimbursement (per MSA Section 3.3)", rate: fmt(SUBLEASE_OP_RATE),   unit: "per sq ft / month",        qty: Number(parseFloat(subleaseOpQty)||0).toLocaleString(), amount: subleaseOp });
+            rows.push({ type: "secHeader", label: `${custNo}. Office Sublease`, color: "bg-amber-100 text-amber-900" });
+            custNo++;
+            rows.push({ type: "item", no: lineNo++, description: "Monthly Office Rent (per MSA Section 3.2)",          rate: fmt(SUBLEASE_RENT_RATE), unit: "per month",          qty: String(parseFloat(subleaseRentQty)||0), amount: subleaseRent, zero: false });
+            rows.push({ type: "item", no: lineNo++, description: "Operating Cost Reimbursement (per MSA Section 3.3)", rate: fmt(SUBLEASE_OP_RATE),   unit: "per sq ft / month", qty: Number(parseFloat(subleaseOpQty)||0).toLocaleString(),   amount: subleaseOp,   zero: false });
             rows.push({ type: "subtotal", label: "Subtotal — Office Sublease", amount: subleaseAmt });
           }
 
+          // OM Subsidy
           if (omSubsidy > 0) {
             const wages    = parseFloat(omWages) || 0;
             const allocPct = Math.max(0, Math.min(100, parseFloat(omAllocPct) || 0));
-            rows.push({ type: "secHeader", label: `${secNo}. Operations Manager Subsidy`, color: "purple" });
-            rows.push({ type: "item", no: lineNo++, description: "Operations Manager Salary Subsidy (per MSA Section 4)", rate: fmt(wages), unit: "of monthly cost", qty: `${allocPct.toFixed(1)}%`, amount: omSubsidy });
+            rows.push({ type: "secHeader", label: `${custNo}. Operations Manager Subsidy`, color: "bg-purple-100 text-purple-900" });
+            rows.push({ type: "item", no: lineNo++, description: "Operations Manager Salary Subsidy (per MSA Section 4)", rate: fmt(wages), unit: "of monthly cost", qty: `${allocPct.toFixed(1)}%`, amount: omSubsidy, zero: false });
             rows.push({ type: "subtotal", label: "Subtotal — OM Subsidy", amount: omSubsidy });
           }
 
           const grandTotal = group.reduce((s, inv) => s + inv.total, 0) + subleaseAmt + omSubsidy;
           rows.push({ type: "grandTotal", amount: grandTotal });
-
-          const secHdrBg: Record<string, string> = {
-            blue:   "bg-[#BDD7EE] text-[#1B2F55]",
-            amber:  "bg-amber-100 text-amber-900",
-            purple: "bg-purple-100 text-purple-900",
-            green:  "bg-emerald-100 text-emerald-900",
-          };
 
           return (
             <div className="pb-8">
@@ -3339,9 +3353,8 @@ export default function BillingPage() {
               <div className="flex justify-end mb-3">
                 <button
                   onClick={() => {
-                    // Flush current customer's orderEdits before export
-                    const mergedEditsMap = { ...orderEditsMap, ...(editing ? { [editing.customer]: orderEdits } : {}) };
-                    const mergedSourceMap = { ...wmsSourceMap, ...(editing && wmsSource ? { [editing.customer]: wmsSource } : {}) };
+                    const mergedEditsMap  = { ...orderEditsMap,  ...(editing ? { [editing.customer]: orderEdits }  : {}) };
+                    const mergedSourceMap = { ...wmsSourceMap,   ...(editing && wmsSource ? { [editing.customer]: wmsSource } : {}) };
                     exportAllToExcel(group, editing!.period, mergedSourceMap, mergedEditsMap, storageRows, omSubsidy, subleaseAmt).catch(console.error);
                   }}
                   className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-sm"
@@ -3358,7 +3371,7 @@ export default function BillingPage() {
                     <tr className="bg-[#2E5FA3] text-white">
                       <th className="px-4 py-2.5 text-center font-semibold w-10 text-xs">No.</th>
                       <th className="px-4 py-2.5 text-left font-semibold text-xs">Description</th>
-                      <th className="px-4 py-2.5 text-right font-semibold w-32 text-xs">Rate</th>
+                      <th className="px-4 py-2.5 text-right font-semibold w-28 text-xs">Rate</th>
                       <th className="px-4 py-2.5 text-left font-semibold w-36 text-xs">Unit</th>
                       <th className="px-4 py-2.5 text-right font-semibold w-24 text-xs">Qty</th>
                       <th className="px-4 py-2.5 text-right font-semibold w-32 text-xs">Amount</th>
@@ -3366,19 +3379,41 @@ export default function BillingPage() {
                   </thead>
                   <tbody>
                     {rows.map((row, ri) => {
-                      if (row.type === "secHeader") return (
-                        <tr key={ri} className={secHdrBg[row.color]}>
-                          <td colSpan={6} className="px-4 py-2 font-bold text-sm">{row.label}</td>
+                      if (row.type === "custHeader") return (
+                        <tr key={ri} className="bg-[#1B2F55] text-white">
+                          <td colSpan={6} className="px-4 py-2.5 font-bold text-sm">{row.label}</td>
+                        </tr>
+                      );
+                      if (row.type === "catHeader") return (
+                        <tr key={ri} className={`${row.color} border-t border-b`}>
+                          <td colSpan={6} className="px-5 py-1.5 font-semibold text-xs uppercase tracking-wide">{row.label}</td>
                         </tr>
                       );
                       if (row.type === "item") return (
-                        <tr key={ri} className={ri % 2 === 0 ? "bg-white" : "bg-slate-50/60"}>
-                          <td className="px-4 py-2 text-center text-slate-400 text-xs">{row.no}</td>
-                          <td className="px-4 py-2 text-slate-800">{row.description}</td>
-                          <td className="px-4 py-2 text-right font-mono text-teal-700 font-semibold text-xs">{row.rate}</td>
+                        <tr key={ri} className={row.zero ? "bg-slate-50 opacity-40" : ri % 2 === 0 ? "bg-white" : "bg-slate-50/50"}>
+                          <td className="px-4 py-2 text-center text-slate-400 text-xs">{row.zero ? "" : row.no}</td>
+                          <td className="px-4 py-2 text-slate-800 text-xs pl-8">{row.description}</td>
+                          <td className="px-4 py-2 text-right font-mono text-teal-700 text-xs">{row.rate}</td>
                           <td className="px-4 py-2 text-slate-500 text-xs">{row.unit}</td>
-                          <td className="px-4 py-2 text-right tabular-nums text-slate-700 text-xs">{row.qty}</td>
-                          <td className="px-4 py-2 text-right tabular-nums font-semibold text-slate-900">{fmt(row.amount)}</td>
+                          <td className="px-4 py-2 text-right tabular-nums text-slate-700 text-xs">{row.zero ? "—" : row.qty}</td>
+                          <td className="px-4 py-2 text-right tabular-nums font-semibold text-xs text-slate-900">{row.zero ? "—" : fmt(row.amount)}</td>
+                        </tr>
+                      );
+                      if (row.type === "catSubtotal") return (
+                        <tr key={ri} className="bg-slate-100">
+                          <td colSpan={5} className="px-4 py-1.5 text-right text-xs text-slate-500 font-medium">{row.label}</td>
+                          <td className="px-4 py-1.5 text-right tabular-nums text-xs font-bold text-slate-700">{fmt(row.amount)}</td>
+                        </tr>
+                      );
+                      if (row.type === "custTotal") return (
+                        <tr key={ri} className="bg-[#DDEEFF] border-t-2 border-[#2E5FA3]">
+                          <td colSpan={5} className="px-4 py-2 text-right font-bold text-[#1B2F55] text-sm">{row.label}</td>
+                          <td className="px-4 py-2 text-right tabular-nums font-bold text-[#1B2F55] text-sm">{fmt(row.amount)}</td>
+                        </tr>
+                      );
+                      if (row.type === "secHeader") return (
+                        <tr key={ri} className={row.color}>
+                          <td colSpan={6} className="px-4 py-2 font-bold text-sm">{row.label}</td>
                         </tr>
                       );
                       if (row.type === "subtotal") return (
@@ -3389,7 +3424,7 @@ export default function BillingPage() {
                       );
                       if (row.type === "grandTotal") return (
                         <tr key={ri} className="bg-[#375623]">
-                          <td colSpan={5} className="px-4 py-3 text-right font-bold text-white text-sm tracking-wide">GRAND TOTAL</td>
+                          <td colSpan={5} className="px-4 py-3 text-right font-bold text-white text-sm tracking-widest">GRAND TOTAL</td>
                           <td className="px-4 py-3 text-right tabular-nums font-bold text-white text-base">{fmt(row.amount)}</td>
                         </tr>
                       );
