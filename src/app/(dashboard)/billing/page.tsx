@@ -1784,11 +1784,15 @@ export default function BillingPage() {
   const [extraTab, setExtraTab] = useState<"none" | "rate-table" | "om-subsidy" | "sublease">("none");
   const [omWages, setOmWages] = useState<string>("");
   const [omAllocPct, setOmAllocPct] = useState<string>("40");
-  // Office Sublease (top-level, not per-customer)
+  // Office Sublease (top-level, not per-customer) — persisted to localStorage
   const SUBLEASE_RENT_RATE   = 1490;    // per month
   const SUBLEASE_OP_RATE     = 1.01;    // per sq ft / month
-  const [subleaseRentQty, setSubleaseRentQty] = useState<string>("1");
-  const [subleaseOpQty,   setSubleaseOpQty]   = useState<string>("1000");
+  const [subleaseRentQty, setSubleaseRentQty] = useState<string>(() =>
+    typeof window !== "undefined" ? (localStorage.getItem("billing_sublease_rent_qty") ?? "1") : "1"
+  );
+  const [subleaseOpQty, setSubleaseOpQty] = useState<string>(() =>
+    typeof window !== "undefined" ? (localStorage.getItem("billing_sublease_op_qty") ?? "1000") : "1000"
+  );
 
   // ── new invoice form: multi-select ──
   const [isMultiSelect, setIsMultiSelect] = useState(false);
@@ -2040,6 +2044,10 @@ export default function BillingPage() {
       })
       .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── persist sublease values to localStorage ──
+  useEffect(() => { localStorage.setItem("billing_sublease_rent_qty", subleaseRentQty); }, [subleaseRentQty]);
+  useEffect(() => { localStorage.setItem("billing_sublease_op_qty",   subleaseOpQty);   }, [subleaseOpQty]);
 
   // ── create new invoice (with rate master applied) ──
   async function createInvoice() {
@@ -4213,6 +4221,78 @@ export default function BillingPage() {
           </table>
         </div>
       )}
+
+      {/* ── Office Sublease + Grand Total ── */}
+      {(() => {
+        const rentQty    = Math.max(0, parseFloat(subleaseRentQty) || 0);
+        const opQty      = Math.max(0, parseFloat(subleaseOpQty)   || 0);
+        const rentAmt    = rentQty * SUBLEASE_RENT_RATE;
+        const opAmt      = opQty   * SUBLEASE_OP_RATE;
+        const subleaseTotal = rentAmt + opAmt;
+        const invoicesTotal = invoices.reduce((s, inv) => s + inv.total, 0);
+        const grandTotal    = invoicesTotal + subleaseTotal;
+        const fmt = (v: number) => formatUSD(v);
+        return (
+          <div className="mt-4 space-y-3">
+            {/* Sublease card */}
+            <div className="bg-white border border-amber-200 rounded-xl overflow-hidden shadow-sm">
+              <div className="flex items-center justify-between px-5 py-3 border-b border-amber-100 bg-amber-50/60">
+                <div className="flex items-center gap-2">
+                  <Building2 className="w-4 h-4 text-amber-600" />
+                  <span className="text-sm font-semibold text-amber-800">Office Sublease</span>
+                  <span className="text-xs text-amber-600">— Monthly Fixed Charges</span>
+                </div>
+                <span className="text-sm font-bold text-amber-900 tabular-nums">{fmt(subleaseTotal)}</span>
+              </div>
+              <div className="px-5 py-3 flex flex-wrap gap-6">
+                {/* Rent */}
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-slate-500">Monthly Rent (§3.2)</span>
+                  <span className="text-slate-400 text-xs">{fmt(SUBLEASE_RENT_RATE)} ×</span>
+                  <input
+                    type="number" min={0} step={1} value={subleaseRentQty}
+                    onChange={e => setSubleaseRentQty(e.target.value)}
+                    className="w-16 text-right border border-amber-200 bg-amber-50 focus:bg-white focus:border-amber-400 rounded px-2 py-0.5 text-sm font-mono outline-none"
+                  />
+                  <span className="text-slate-400 text-xs">mo</span>
+                  <span className="font-semibold text-slate-800 tabular-nums">{fmt(rentAmt)}</span>
+                </div>
+                {/* Operating Cost */}
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-slate-500">Operating Cost (§3.3)</span>
+                  <span className="text-slate-400 text-xs">{fmt(SUBLEASE_OP_RATE)} ×</span>
+                  <input
+                    type="number" min={0} step={1} value={subleaseOpQty}
+                    onChange={e => setSubleaseOpQty(e.target.value)}
+                    className="w-20 text-right border border-amber-200 bg-amber-50 focus:bg-white focus:border-amber-400 rounded px-2 py-0.5 text-sm font-mono outline-none"
+                  />
+                  <span className="text-slate-400 text-xs">sq ft</span>
+                  <span className="font-semibold text-slate-800 tabular-nums">{fmt(opAmt)}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Grand Total bar */}
+            {invoices.length > 0 && (
+              <div className="bg-slate-900 rounded-xl px-6 py-4 flex items-center gap-4 flex-wrap shadow-lg">
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Grand Total</p>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs text-slate-500">Invoices</span>
+                  <span className="text-sm font-semibold text-slate-300 tabular-nums">{fmt(invoicesTotal)}</span>
+                </div>
+                <span className="text-slate-600">+</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs text-amber-500">Sublease</span>
+                  <span className="text-sm font-semibold text-amber-300 tabular-nums">{fmt(subleaseTotal)}</span>
+                </div>
+                <div className="ml-auto text-right">
+                  <p className="text-2xl font-bold text-white tabular-nums">{fmt(grandTotal)}</p>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
