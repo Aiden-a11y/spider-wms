@@ -1814,6 +1814,9 @@ export default function BillingPage() {
   const [storageLoadingHistory, setStorageLoadingHistory] = useState(false);
   const [storageHistoryError, setStorageHistoryError] = useState("");
   const [storageHistoryDebug, setStorageHistoryDebug] = useState<{date15: string; dateLast: string; rows15: number; rowsLast: number; matched15: number; matchedLast: number} | null>(null);
+  // User-configurable snapshot dates (defaults: 15th and last day of period)
+  const [snapDate15,   setSnapDate15]   = useState("");
+  const [snapDateLast, setSnapDateLast] = useState("");
 
   // Derived: merge 15일 + 말일 → avg
   const storageRows = useMemo<StorageRow[]>(() => {
@@ -1919,10 +1922,10 @@ export default function BillingPage() {
     setStorageHistoryDebug(null);
 
     try {
+      const date15   = snapDate15   || `${editing.period}-15`;
       const [year, month] = editing.period.split("-").map(Number);
       const lastDayNum = new Date(year, month, 0).getDate();
-      const date15   = `${editing.period}-15`;
-      const dateLast = `${editing.period}-${String(lastDayNum).padStart(2, "0")}`;
+      const dateLast = snapDateLast || `${editing.period}-${String(lastDayNum).padStart(2, "0")}`;
       const whCode   = "STOO1";
 
       // 1. Fetch WMS location list → build occupancyInfo lookup (reuse wms.ts helpers)
@@ -2055,6 +2058,15 @@ export default function BillingPage() {
   // ── persist sublease values to localStorage ──
   useEffect(() => { localStorage.setItem("billing_sublease_rent_qty", subleaseRentQty); }, [subleaseRentQty]);
   useEffect(() => { localStorage.setItem("billing_sublease_op_qty",   subleaseOpQty);   }, [subleaseOpQty]);
+
+  // ── reset snapshot dates when editing period changes ──
+  useEffect(() => {
+    if (!editing?.period) return;
+    const [y, m] = editing.period.split("-").map(Number);
+    const lastDay = new Date(y, m, 0).getDate();
+    setSnapDate15(`${editing.period}-15`);
+    setSnapDateLast(`${editing.period}-${String(lastDay).padStart(2, "0")}`);
+  }, [editing?.period]);
 
   // ── create new invoice (with rate master applied) ──
   async function createInvoice() {
@@ -3913,15 +3925,36 @@ export default function BillingPage() {
         {/* ── Storage Import Panel ── */}
         <div className="bg-white border border-purple-200 rounded-xl overflow-hidden shadow-sm mb-4">
           {/* Header */}
-          <div className="flex items-center justify-between px-5 py-3.5 border-b border-purple-100 bg-purple-50/60">
-            <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-3 px-5 py-3.5 border-b border-purple-100 bg-purple-50/60">
+            <div className="flex items-center gap-2 flex-shrink-0">
               <span className="text-xs font-semibold px-2 py-0.5 rounded-full border bg-purple-50 border-purple-200 text-purple-800">Storage</span>
-              <span className="text-xs text-purple-600 font-medium">15th &amp; last-day snapshot → avg by Location Type</span>
+              <span className="text-xs text-purple-600 font-medium">snapshot → avg</span>
             </div>
-            <div className="flex items-center gap-2">
+            {/* Date pickers */}
+            <div className="flex items-center gap-2 flex-1 flex-wrap">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-slate-400 whitespace-nowrap">기준일 1</span>
+                <input
+                  type="date"
+                  value={snapDate15}
+                  onChange={e => setSnapDate15(e.target.value)}
+                  className="border border-purple-200 rounded-lg px-2 py-1 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-purple-400 text-slate-700"
+                />
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-slate-400 whitespace-nowrap">기준일 2</span>
+                <input
+                  type="date"
+                  value={snapDateLast}
+                  onChange={e => setSnapDateLast(e.target.value)}
+                  className="border border-purple-200 rounded-lg px-2 py-1 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-purple-400 text-slate-700"
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
               <button
                 onClick={loadStorageFromHistory}
-                disabled={storageLoadingHistory}
+                disabled={storageLoadingHistory || !snapDate15 || !snapDateLast}
                 className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-purple-300 bg-purple-600 hover:bg-purple-700 text-white disabled:opacity-50 transition-colors"
               >
                 {storageLoadingHistory
@@ -3958,8 +3991,8 @@ export default function BillingPage() {
           {/* Two upload zones */}
           <div className="grid grid-cols-2 divide-x divide-purple-100">
             {[
-              { label: "15th Day Data", snap: storage15, uploading: storageUploading15, handler: handleUpload15, color: "blue" },
-              { label: "Last Day Data", snap: storageLast, uploading: storageUploadingLast, handler: handleUploadLast, color: "indigo" },
+              { label: snapDate15   || "기준일 1", snap: storage15,    uploading: storageUploading15,    handler: handleUpload15,    color: "blue" },
+              { label: snapDateLast || "기준일 2", snap: storageLast,  uploading: storageUploadingLast,  handler: handleUploadLast,  color: "indigo" },
             ].map(({ label, snap, uploading, handler, color }) => (
               <div key={label} className="p-4 flex flex-col gap-2">
                 <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{label}</p>
