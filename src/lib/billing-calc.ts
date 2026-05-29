@@ -93,7 +93,6 @@ import {
   FULFILLMENT_RATES,
   RETURN_RATES,
   LABOR_RATES,
-  SUBLEASE_RATES,
   RATE_VERSION,
 } from "./billing-rates";
 
@@ -183,19 +182,6 @@ export function buildDefaultLineItems(): BillingLineItem[] {
       qty: 0,
       unit: r.unit,
       rate: r.rate,
-    });
-  }
-
-  // 7. Office Sublease — fixed monthly contract amounts (defaultQty pre-filled)
-  for (const [id, r] of Object.entries(SUBLEASE_RATES)) {
-    items.push({
-      id,
-      category: "Office Sublease",
-      description: r.description,
-      qty: r.defaultQty,
-      unit: r.unit,
-      rate: r.rate,
-      note: r.note,
     });
   }
 

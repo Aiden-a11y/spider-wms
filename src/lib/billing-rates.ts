@@ -125,20 +125,6 @@ export const LABOR_RATES: Record<
   labor_ot_weekend: { description: "Weekend / Holiday (2× Overtime)",       rate: 70,   unit: "per person/hr" },
 };
 
-// ─── 6. Office Sublease ───────────────────────────────────────────────────────
-
-export type SubleaseRateKey =
-  | "sublease_rent"
-  | "sublease_operating_cost";
-
-export const SUBLEASE_RATES: Record<
-  SubleaseRateKey,
-  { description: string; rate: number; unit: string; defaultQty: number; note?: string }
-> = {
-  sublease_rent:            { description: "Monthly Office Rent (per MSA Section 3.2)",           rate: 1490,  unit: "per month",               defaultQty: 1 },
-  sublease_operating_cost:  { description: "Operating Cost Reimbursement (per MSA Section 3.3)",  rate: 1.01,  unit: "per sq ft / month",        defaultQty: 1000 },
-};
-
 // ─── Category metadata ────────────────────────────────────────────────────────
 
 export type BillingCategory =
@@ -147,8 +133,7 @@ export type BillingCategory =
   | "Fulfillment B2B"
   | "Fulfillment B2C"
   | "Return Management"
-  | "Warehouse Labor"
-  | "Office Sublease";
+  | "Warehouse Labor";
 
 export const BILLING_CATEGORIES: BillingCategory[] = [
   "Inbound Handling",
@@ -157,5 +142,4 @@ export const BILLING_CATEGORIES: BillingCategory[] = [
   "Fulfillment B2C",
   "Return Management",
   "Warehouse Labor",
-  "Office Sublease",
 ];

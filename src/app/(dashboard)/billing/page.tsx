@@ -19,6 +19,7 @@ import {
   Upload,
   BarChart3,
   Calculator,
+  Building2,
 } from "lucide-react";
 
 // Raw WMS orders collected during auto-fetch (shown in Source Data panel)
@@ -98,7 +99,6 @@ const CATEGORY_COLOR: Record<BillingCategory, string> = {
   "Fulfillment B2C":   "bg-teal-50 border-teal-200 text-teal-800",
   "Return Management": "bg-orange-50 border-orange-200 text-orange-800",
   "Warehouse Labor":   "bg-red-50 border-red-200 text-red-800",
-  "Office Sublease":   "bg-amber-50 border-amber-200 text-amber-800",
 };
 
 // ─── Excel helpers (ExcelJS — styled) ────────────────────────────────────────
@@ -1302,7 +1302,8 @@ async function exportAllToExcel(
   wmsSourceMap?: Record<string, WmsSource> | null,
   orderEditsMap?: Record<string, Record<string, Record<string, number>>> | null,
   storageRows?: StorageRow[],
-  omSubsidy?: number
+  omSubsidy?: number,
+  subleaseTotal?: number
 ) {
   if (invoices.length === 0) return;
   const wb = new ExcelJS.Workbook();
@@ -1457,6 +1458,31 @@ async function exportAllToExcel(
     omRow.getCell(7).numFmt = "$#,##0.00";
   }
 
+  // ── Office Sublease rows (if provided) ──
+  if (subleaseTotal && subleaseTotal > 0) {
+    grandTotal += subleaseTotal;
+    // Section header
+    const slSec = ws.addRow(["Office Sublease"]);
+    slSec.height = 16;
+    mergeRow(ws, slSec.number);
+    const slSecCell = slSec.getCell(1);
+    slSecCell.font = { bold: true, size: 10, color: { argb: C.sectionFont } };
+    slSecCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF3CD" } };
+    slSecCell.alignment = { vertical: "middle", indent: 1 };
+    applyBorder(slSecCell, "medium");
+    // Single combined row
+    const slRow = ws.addRow(["", "Office Sublease", "Office Sublease — Monthly Fixed Charges", "", "monthly", 1, subleaseTotal]);
+    slRow.height = 15;
+    slRow.eachCell((cell, col) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF8E1" } };
+      cell.font = { size: 10, color: { argb: "FFB45309" } };
+      cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
+      applyBorder(cell);
+    });
+    slRow.getCell(6).numFmt = "#,##0";
+    slRow.getCell(7).numFmt = "$#,##0.00";
+  }
+
   // ── Grand Total — formula summing all subtotals ──
   const gtSubtotalRefs = Object.values(summaryCatSubtotalRows).map(r => `G${r}`).join("+");
   const gt = ws.addRow(["", "", "", "", "", "GRAND TOTAL",
@@ -1605,7 +1631,8 @@ async function exportAllToExcel(
     if (customerMetas.every(m => m.totalRowNum > 0)) {
       const parts = customerMetas.map(m => `${sn(m.sheetName)}!G${m.totalRowNum}`);
       const grandTotalResult = invoices.reduce((s, inv) => s + inv.total, 0)
-        + (omSubsidy && omSubsidy > 0 ? omSubsidy : 0);
+        + (omSubsidy && omSubsidy > 0 ? omSubsidy : 0)
+        + (subleaseTotal && subleaseTotal > 0 ? subleaseTotal : 0);
       ws.getCell(`G${gt.number}`).value = { formula: `=${parts.join("+")}`, result: grandTotalResult };
     }
 
@@ -1753,10 +1780,15 @@ export default function BillingPage() {
   const [editGroup, setEditGroup] = useState<BillingInvoice[]>([]);
   const [activeIdx, setActiveIdx] = useState(0);
 
-  // ── extra tabs: Rate Table / OM Subsidy ──
-  const [extraTab, setExtraTab] = useState<"none" | "rate-table" | "om-subsidy">("none");
+  // ── extra tabs: Rate Table / OM Subsidy / Office Sublease ──
+  const [extraTab, setExtraTab] = useState<"none" | "rate-table" | "om-subsidy" | "sublease">("none");
   const [omWages, setOmWages] = useState<string>("");
   const [omAllocPct, setOmAllocPct] = useState<string>("40");
+  // Office Sublease (top-level, not per-customer)
+  const SUBLEASE_RENT_RATE   = 1490;    // per month
+  const SUBLEASE_OP_RATE     = 1.01;    // per sq ft / month
+  const [subleaseRentQty, setSubleaseRentQty] = useState<string>("1");
+  const [subleaseOpQty,   setSubleaseOpQty]   = useState<string>("1000");
 
   // ── new invoice form: multi-select ──
   const [isMultiSelect, setIsMultiSelect] = useState(false);
@@ -2618,7 +2650,7 @@ export default function BillingPage() {
             <button
               onClick={() => {
                 const group = getCurrentGroup();
-                if (isMultiMode) exportAllToExcel(group, editing.period, wmsSourceMap, { [editing.customer]: orderEdits }, storageRows, calcStlAlloc(omWages, omAllocPct)).catch(console.error);
+                if (isMultiMode) exportAllToExcel(group, editing.period, wmsSourceMap, { [editing.customer]: orderEdits }, storageRows, calcStlAlloc(omWages, omAllocPct), (parseFloat(subleaseRentQty)||0)*SUBLEASE_RENT_RATE + (parseFloat(subleaseOpQty)||0)*SUBLEASE_OP_RATE).catch(console.error);
                 else exportInvoiceToExcel({ ...editing, total: currentTotal }, wmsSource, orderEdits, storageRows).catch(console.error);
               }}
               className="flex items-center gap-1.5 text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-600 hover:bg-slate-50 transition-colors"
@@ -2696,6 +2728,19 @@ export default function BillingPage() {
           >
             <Calculator className="w-3.5 h-3.5" />
             OM Subsidy
+          </button>
+
+          {/* Office Sublease tab */}
+          <button
+            onClick={() => setExtraTab(extraTab === "sublease" ? "none" : "sublease")}
+            className={`px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+              extraTab === "sublease"
+                ? "border-amber-600 text-amber-700 bg-amber-50/60"
+                : "border-transparent text-slate-400 hover:text-slate-700 hover:bg-slate-50"
+            }`}
+          >
+            <Building2 className="w-3.5 h-3.5" />
+            Office Sublease
           </button>
         </div>
 
@@ -2917,6 +2962,86 @@ export default function BillingPage() {
                   </tbody>
                 </table>
               </div>
+            </div>
+          );
+        })()}
+
+        {/* ── Office Sublease panel ── */}
+        {extraTab === "sublease" && (() => {
+          const rentQty = Math.max(0, parseFloat(subleaseRentQty) || 0);
+          const opQty   = Math.max(0, parseFloat(subleaseOpQty)   || 0);
+          const rentAmt = rentQty * SUBLEASE_RENT_RATE;
+          const opAmt   = opQty   * SUBLEASE_OP_RATE;
+          const total   = rentAmt + opAmt;
+          const fmt = (v: number) => `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+          return (
+            <div className="space-y-4 pb-8 max-w-2xl">
+              <div className="rounded-xl border border-amber-200 overflow-hidden">
+                <div className="bg-amber-600 text-white text-sm font-semibold px-4 py-2.5 flex items-center gap-2">
+                  <Building2 className="w-4 h-4" />
+                  Office Sublease — Monthly Fixed Charges
+                </div>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50 text-xs text-slate-400 uppercase tracking-wide">
+                      <th className="px-4 py-2 text-left font-medium">Description</th>
+                      <th className="px-4 py-2 text-right font-medium">Rate</th>
+                      <th className="px-4 py-2 text-right font-medium">Qty</th>
+                      <th className="px-4 py-2 text-right font-medium">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {/* Rent */}
+                    <tr className="border-b border-slate-100">
+                      <td className="px-4 py-3 text-slate-700">
+                        Monthly Office Rent
+                        <span className="ml-2 text-xs text-slate-400">(per MSA Section 3.2)</span>
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono text-teal-700">{fmt(SUBLEASE_RENT_RATE)} / mo</td>
+                      <td className="px-4 py-3 text-right">
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          value={subleaseRentQty}
+                          onChange={e => setSubleaseRentQty(e.target.value)}
+                          className="w-20 text-right border border-amber-200 bg-amber-50 focus:bg-white focus:border-amber-400 rounded px-2 py-1 text-sm font-mono outline-none"
+                        />
+                        <span className="ml-1.5 text-xs text-slate-400">months</span>
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono font-semibold text-slate-800">{fmt(rentAmt)}</td>
+                    </tr>
+                    {/* Operating Cost */}
+                    <tr className="border-b border-slate-200">
+                      <td className="px-4 py-3 text-slate-700">
+                        Operating Cost Reimbursement
+                        <span className="ml-2 text-xs text-slate-400">(per MSA Section 3.3)</span>
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono text-teal-700">{fmt(SUBLEASE_OP_RATE)} / sq ft</td>
+                      <td className="px-4 py-3 text-right">
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          value={subleaseOpQty}
+                          onChange={e => setSubleaseOpQty(e.target.value)}
+                          className="w-20 text-right border border-amber-200 bg-amber-50 focus:bg-white focus:border-amber-400 rounded px-2 py-1 text-sm font-mono outline-none"
+                        />
+                        <span className="ml-1.5 text-xs text-slate-400">sq ft</span>
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono font-semibold text-slate-800">{fmt(opAmt)}</td>
+                    </tr>
+                    {/* Subtotal */}
+                    <tr className="bg-amber-50">
+                      <td colSpan={3} className="px-4 py-3 font-bold text-amber-900 text-right">Subtotal — Office Sublease</td>
+                      <td className="px-4 py-3 text-right font-mono font-bold text-amber-900 text-base">{fmt(total)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-xs text-slate-400 px-1">
+                These charges are fixed monthly contract amounts billed separately from customer WMS fees and added to the combined grand total.
+              </p>
             </div>
           );
         })()}
@@ -3713,7 +3838,10 @@ export default function BillingPage() {
         {/* ── Combined grand total bar (multi-mode) ── */}
         {isMultiMode && (() => {
           const group = getCurrentGroup();
-          const grandTotal = group.reduce((s, inv) => s + inv.total, 0);
+          const customerTotal = group.reduce((s, inv) => s + inv.total, 0);
+          const subleaseTotal = (parseFloat(subleaseRentQty) || 0) * SUBLEASE_RENT_RATE
+                              + (parseFloat(subleaseOpQty)   || 0) * SUBLEASE_OP_RATE;
+          const grandTotal = customerTotal + subleaseTotal;
           return (
             <div className="mt-4 bg-slate-900 rounded-xl px-6 py-4 flex items-center gap-6 flex-wrap shadow-lg">
               <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex-shrink-0">Combined Total</p>
@@ -3730,6 +3858,12 @@ export default function BillingPage() {
                   <span className="text-sm font-semibold text-slate-200 tabular-nums">{formatUSD(inv.total)}</span>
                 </div>
               ))}
+              {subleaseTotal > 0 && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-medium px-2 py-0.5 rounded bg-amber-700 text-amber-100">Sublease</span>
+                  <span className="text-sm font-semibold text-amber-300 tabular-nums">{formatUSD(subleaseTotal)}</span>
+                </div>
+              )}
               <div className="ml-auto text-right flex-shrink-0">
                 <p className="text-xs text-slate-400 uppercase tracking-wide">Grand Total</p>
                 <p className="text-2xl font-bold text-white tabular-nums">{formatUSD(grandTotal)}</p>
