@@ -3277,80 +3277,92 @@ export default function BillingPage() {
 
         {/* ── Summary panel ── */}
         {extraTab === "summary" && (() => {
-          const group       = getCurrentGroup();
-          const omSubsidy   = calcStlAlloc(omWages, omAllocPct);
+          const group        = getCurrentGroup();
+          const omSubsidy    = calcStlAlloc(omWages, omAllocPct);
           const subleaseRent = (parseFloat(subleaseRentQty) || 0) * SUBLEASE_RENT_RATE;
           const subleaseOp   = (parseFloat(subleaseOpQty)   || 0) * SUBLEASE_OP_RATE;
           const subleaseAmt  = subleaseRent + subleaseOp;
-          const fmt = formatUSD;
+          const fmt          = formatUSD;
 
+          // ── Aggregate line items across all invoices (same as Excel Summary sheet) ──
+          const itemMap = new Map<string, BillingLineItem & { totalQty: number }>();
+          for (const def of buildDefaultLineItems()) {
+            itemMap.set(def.id, { ...def, totalQty: 0 });
+          }
+          for (const inv of group) {
+            for (const item of inv.lineItems) {
+              const existing = itemMap.get(item.id);
+              if (existing) {
+                existing.totalQty += item.qty;
+                existing.rate      = item.rate;
+                existing.costPlus  = item.costPlus;
+              } else {
+                itemMap.set(item.id, { ...item, totalQty: item.qty });
+              }
+            }
+          }
+
+          // ── Build rows ──
           type SumRow =
-            | { type: "custHeader"; label: string }
-            | { type: "catHeader";  label: string; color: string }
-            | { type: "item";       no: number; description: string; rate: string; unit: string; qty: string; amount: number; zero: boolean }
-            | { type: "catSubtotal"; label: string; amount: number }
-            | { type: "custTotal";  label: string; amount: number }
-            | { type: "secHeader";  label: string; color: string }
-            | { type: "subtotal";   label: string; amount: number }
+            | { type: "secHeader"; no: number; label: string; color: string }
+            | { type: "item";  no: number; description: string; rate: string; unit: string; qty: string; amount: number; zero: boolean }
+            | { type: "subtotal"; label: string; amount: number }
+            | { type: "extra"; label: string; color: string }
+            | { type: "extraItem"; no: number; description: string; rate: string; unit: string; qty: string; amount: number }
             | { type: "grandTotal"; amount: number };
 
           const rows: SumRow[] = [];
-          let lineNo = 1;
-          let custNo = 1;
+          let lineNo  = 1;
+          let secNo   = 1;
+          let grandTotal = 0;
 
-          for (const inv of group) {
-            rows.push({ type: "custHeader", label: `${custNo}. ${inv.customerName || inv.customer}` });
-            custNo++;
+          for (const cat of BILLING_CATEGORIES) {
+            const catItems = Array.from(itemMap.values()).filter(i => i.category === cat);
+            // skip entirely empty categories
+            if (catItems.every(i => i.totalQty === 0)) continue;
 
-            for (const cat of BILLING_CATEGORIES) {
-              const catItems = inv.lineItems.filter(l => l.category === cat);
-              // Show category only if at least one item has non-zero qty
-              if (catItems.every(i => i.qty === 0)) continue;
+            rows.push({ type: "secHeader", no: secNo++, label: cat, color: CATEGORY_COLOR[cat] });
 
-              rows.push({ type: "catHeader", label: cat, color: CATEGORY_COLOR[cat] });
-
-              for (const item of catItems) {
-                const amt  = calcLineAmount(item);
-                const zero = item.qty === 0;
-                const rateStr = item.costPlus ? "cost+10%" : `$${item.rate}`;
-                const qtyStr  = item.costPlus
-                  ? fmt(item.qty)
-                  : (item.qty % 1 === 0 ? item.qty.toLocaleString() : item.qty.toFixed(2));
-                rows.push({ type: "item", no: lineNo++, description: item.description, rate: rateStr, unit: item.unit, qty: qtyStr, amount: amt, zero });
-              }
-
-              const catTotal = catItems.reduce((s, i) => s + calcLineAmount(i), 0);
-              rows.push({ type: "catSubtotal", label: `Subtotal — ${cat}`, amount: catTotal });
+            for (const item of catItems) {
+              const qty  = item.totalQty;
+              const amt  = qty === 0 ? 0 : (item.costPlus ? qty * 1.1 : qty * item.rate);
+              const zero = qty === 0;
+              const rateStr = item.costPlus ? "cost+10%" : `$${item.rate}`;
+              const qtyStr  = zero ? "—" : (item.costPlus ? fmt(qty) : (qty % 1 === 0 ? qty.toLocaleString() : qty.toFixed(2)));
+              rows.push({ type: "item", no: zero ? 0 : lineNo++, description: item.description, rate: rateStr, unit: item.unit, qty: qtyStr, amount: amt, zero });
             }
 
-            rows.push({ type: "custTotal", label: `Total — ${inv.customerName || inv.customer}`, amount: inv.total });
-          }
-
-          // Office Sublease
-          if (subleaseAmt > 0) {
-            rows.push({ type: "secHeader", label: `${custNo}. Office Sublease`, color: "bg-amber-100 text-amber-900" });
-            custNo++;
-            rows.push({ type: "item", no: lineNo++, description: "Monthly Office Rent (per MSA Section 3.2)",          rate: fmt(SUBLEASE_RENT_RATE), unit: "per month",          qty: String(parseFloat(subleaseRentQty)||0), amount: subleaseRent, zero: false });
-            rows.push({ type: "item", no: lineNo++, description: "Operating Cost Reimbursement (per MSA Section 3.3)", rate: fmt(SUBLEASE_OP_RATE),   unit: "per sq ft / month", qty: Number(parseFloat(subleaseOpQty)||0).toLocaleString(),   amount: subleaseOp,   zero: false });
-            rows.push({ type: "subtotal", label: "Subtotal — Office Sublease", amount: subleaseAmt });
+            const catTotal = catItems.reduce((s, i) => {
+              const q = i.totalQty;
+              return s + (q === 0 ? 0 : (i.costPlus ? q * 1.1 : q * i.rate));
+            }, 0);
+            grandTotal += catTotal;
+            rows.push({ type: "subtotal", label: `Subtotal — ${cat}`, amount: catTotal });
           }
 
           // OM Subsidy
           if (omSubsidy > 0) {
-            const wages    = parseFloat(omWages) || 0;
-            const allocPct = Math.max(0, Math.min(100, parseFloat(omAllocPct) || 0));
-            rows.push({ type: "secHeader", label: `${custNo}. Operations Manager Subsidy`, color: "bg-purple-100 text-purple-900" });
-            rows.push({ type: "item", no: lineNo++, description: "Operations Manager Salary Subsidy (per MSA Section 4)", rate: fmt(wages), unit: "of monthly cost", qty: `${allocPct.toFixed(1)}%`, amount: omSubsidy, zero: false });
+            grandTotal += omSubsidy;
+            rows.push({ type: "extra", label: "OM Subsidy", color: "bg-purple-100 text-purple-900" });
+            rows.push({ type: "extraItem", no: lineNo++, description: "Operations Manager Salary Subsidy (per MSA Section 4)", rate: fmt(parseFloat(omWages)||0), unit: "of monthly cost", qty: `${Math.max(0,Math.min(100,parseFloat(omAllocPct)||0)).toFixed(1)}%`, amount: omSubsidy });
             rows.push({ type: "subtotal", label: "Subtotal — OM Subsidy", amount: omSubsidy });
           }
 
-          const grandTotal = group.reduce((s, inv) => s + inv.total, 0) + subleaseAmt + omSubsidy;
+          // Office Sublease
+          if (subleaseAmt > 0) {
+            grandTotal += subleaseAmt;
+            rows.push({ type: "extra", label: "Office Sublease", color: "bg-amber-100 text-amber-900" });
+            rows.push({ type: "extraItem", no: lineNo++, description: "Monthly Office Rent (per MSA Section 3.2)",          rate: fmt(SUBLEASE_RENT_RATE), unit: "per month",          qty: String(parseFloat(subleaseRentQty)||0), amount: subleaseRent });
+            rows.push({ type: "extraItem", no: lineNo++, description: "Operating Cost Reimbursement (per MSA Section 3.3)", rate: fmt(SUBLEASE_OP_RATE),   unit: "per sq ft / month", qty: Number(parseFloat(subleaseOpQty)||0).toLocaleString(), amount: subleaseOp });
+            rows.push({ type: "subtotal", label: "Subtotal — Office Sublease", amount: subleaseAmt });
+          }
+
           rows.push({ type: "grandTotal", amount: grandTotal });
 
           return (
-            <div className="pb-8">
+            <div className="pb-8 space-y-4">
               {/* Download button */}
-              <div className="flex justify-end mb-3">
+              <div className="flex justify-end">
                 <button
                   onClick={() => {
                     const mergedEditsMap  = { ...orderEditsMap,  ...(editing ? { [editing.customer]: orderEdits }  : {}) };
@@ -3364,7 +3376,7 @@ export default function BillingPage() {
                 </button>
               </div>
 
-              {/* Summary table */}
+              {/* ── Aggregated invoice table ── */}
               <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
                 <table className="w-full text-sm border-collapse">
                   <thead>
@@ -3379,47 +3391,42 @@ export default function BillingPage() {
                   </thead>
                   <tbody>
                     {rows.map((row, ri) => {
-                      if (row.type === "custHeader") return (
-                        <tr key={ri} className="bg-[#1B2F55] text-white">
-                          <td colSpan={6} className="px-4 py-2.5 font-bold text-sm">{row.label}</td>
-                        </tr>
-                      );
-                      if (row.type === "catHeader") return (
+                      if (row.type === "secHeader") return (
                         <tr key={ri} className={`${row.color} border-t border-b`}>
-                          <td colSpan={6} className="px-5 py-1.5 font-semibold text-xs uppercase tracking-wide">{row.label}</td>
+                          <td colSpan={6} className="px-4 py-2 font-bold text-xs uppercase tracking-wide">
+                            {row.no}. {row.label}
+                          </td>
                         </tr>
                       );
                       if (row.type === "item") return (
-                        <tr key={ri} className={row.zero ? "bg-slate-50 opacity-40" : ri % 2 === 0 ? "bg-white" : "bg-slate-50/50"}>
-                          <td className="px-4 py-2 text-center text-slate-400 text-xs">{row.zero ? "" : row.no}</td>
-                          <td className="px-4 py-2 text-slate-800 text-xs pl-8">{row.description}</td>
-                          <td className="px-4 py-2 text-right font-mono text-teal-700 text-xs">{row.rate}</td>
-                          <td className="px-4 py-2 text-slate-500 text-xs">{row.unit}</td>
-                          <td className="px-4 py-2 text-right tabular-nums text-slate-700 text-xs">{row.zero ? "—" : row.qty}</td>
-                          <td className="px-4 py-2 text-right tabular-nums font-semibold text-xs text-slate-900">{row.zero ? "—" : fmt(row.amount)}</td>
-                        </tr>
-                      );
-                      if (row.type === "catSubtotal") return (
-                        <tr key={ri} className="bg-slate-100">
-                          <td colSpan={5} className="px-4 py-1.5 text-right text-xs text-slate-500 font-medium">{row.label}</td>
-                          <td className="px-4 py-1.5 text-right tabular-nums text-xs font-bold text-slate-700">{fmt(row.amount)}</td>
-                        </tr>
-                      );
-                      if (row.type === "custTotal") return (
-                        <tr key={ri} className="bg-[#DDEEFF] border-t-2 border-[#2E5FA3]">
-                          <td colSpan={5} className="px-4 py-2 text-right font-bold text-[#1B2F55] text-sm">{row.label}</td>
-                          <td className="px-4 py-2 text-right tabular-nums font-bold text-[#1B2F55] text-sm">{fmt(row.amount)}</td>
-                        </tr>
-                      );
-                      if (row.type === "secHeader") return (
-                        <tr key={ri} className={row.color}>
-                          <td colSpan={6} className="px-4 py-2 font-bold text-sm">{row.label}</td>
+                        <tr key={ri} className={row.zero ? "opacity-30" : ri % 2 === 0 ? "bg-white" : "bg-slate-50/50"}>
+                          <td className="px-4 py-1.5 text-center text-slate-400 text-xs">{row.zero ? "" : row.no}</td>
+                          <td className="px-4 py-1.5 text-slate-800 text-xs pl-6">{row.description}</td>
+                          <td className="px-4 py-1.5 text-right font-mono text-teal-700 text-xs">{row.rate}</td>
+                          <td className="px-4 py-1.5 text-slate-500 text-xs">{row.unit}</td>
+                          <td className="px-4 py-1.5 text-right tabular-nums text-slate-700 text-xs">{row.qty}</td>
+                          <td className="px-4 py-1.5 text-right tabular-nums font-semibold text-xs text-slate-900">{row.zero ? "—" : fmt(row.amount)}</td>
                         </tr>
                       );
                       if (row.type === "subtotal") return (
                         <tr key={ri} className="bg-[#F2F2F2]">
-                          <td colSpan={5} className="px-4 py-2 text-right font-semibold text-slate-700 text-xs">{row.label}</td>
-                          <td className="px-4 py-2 text-right tabular-nums font-bold text-slate-900">{fmt(row.amount)}</td>
+                          <td colSpan={5} className="px-4 py-2 text-right font-semibold text-slate-600 text-xs">{row.label}</td>
+                          <td className="px-4 py-2 text-right tabular-nums font-bold text-slate-900 text-sm">{fmt(row.amount)}</td>
+                        </tr>
+                      );
+                      if (row.type === "extra") return (
+                        <tr key={ri} className={`${row.color} border-t border-b`}>
+                          <td colSpan={6} className="px-4 py-2 font-bold text-xs uppercase tracking-wide">{row.label}</td>
+                        </tr>
+                      );
+                      if (row.type === "extraItem") return (
+                        <tr key={ri} className={ri % 2 === 0 ? "bg-white" : "bg-slate-50/50"}>
+                          <td className="px-4 py-1.5 text-center text-slate-400 text-xs">{row.no}</td>
+                          <td className="px-4 py-1.5 text-slate-800 text-xs pl-6">{row.description}</td>
+                          <td className="px-4 py-1.5 text-right font-mono text-teal-700 text-xs">{row.rate}</td>
+                          <td className="px-4 py-1.5 text-slate-500 text-xs">{row.unit}</td>
+                          <td className="px-4 py-1.5 text-right tabular-nums text-slate-700 text-xs">{row.qty}</td>
+                          <td className="px-4 py-1.5 text-right tabular-nums font-semibold text-xs text-slate-900">{fmt(row.amount)}</td>
                         </tr>
                       );
                       if (row.type === "grandTotal") return (
@@ -3434,7 +3441,53 @@ export default function BillingPage() {
                 </table>
               </div>
 
-              <p className="text-xs text-slate-400 mt-2 text-right">
+              {/* ── Per Customer Breakdown ── */}
+              {group.length > 1 && (
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                  <div className="bg-[#1B2F55] text-white px-4 py-2.5 text-sm font-bold">Per Customer Breakdown</div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-[#2E5FA3] text-white">
+                          <th className="px-4 py-2 text-left font-semibold">Customer</th>
+                          {BILLING_CATEGORIES.map(cat => (
+                            <th key={cat} className="px-3 py-2 text-right font-semibold whitespace-nowrap">{cat}</th>
+                          ))}
+                          <th className="px-4 py-2 text-right font-semibold">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {group.map((inv, i) => (
+                          <tr key={inv.customer} className={i % 2 === 0 ? "bg-white" : "bg-slate-50"}>
+                            <td className="px-4 py-2 font-medium text-slate-800">
+                              {inv.customerName || inv.customer}
+                              <span className="ml-1.5 text-slate-400 font-mono text-[10px]">{inv.customer}</span>
+                            </td>
+                            {BILLING_CATEGORIES.map(cat => (
+                              <td key={cat} className="px-3 py-2 text-right tabular-nums text-slate-700">
+                                {(inv.subtotals?.[cat] ?? 0) > 0 ? fmt(inv.subtotals[cat]) : <span className="text-slate-300">—</span>}
+                              </td>
+                            ))}
+                            <td className="px-4 py-2 text-right tabular-nums font-bold text-slate-900">{fmt(inv.total)}</td>
+                          </tr>
+                        ))}
+                        {/* Total row */}
+                        <tr className="bg-[#375623] text-white font-bold">
+                          <td className="px-4 py-2">TOTAL</td>
+                          {BILLING_CATEGORIES.map(cat => (
+                            <td key={cat} className="px-3 py-2 text-right tabular-nums">
+                              {fmt(group.reduce((s, inv) => s + (inv.subtotals?.[cat] ?? 0), 0))}
+                            </td>
+                          ))}
+                          <td className="px-4 py-2 text-right tabular-nums">{fmt(group.reduce((s, inv) => s + inv.total, 0))}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              <p className="text-xs text-slate-400 text-right">
                 Rate Version: {editing?.rateVersion} · Generated {new Date().toLocaleDateString("en-US")}
               </p>
             </div>
