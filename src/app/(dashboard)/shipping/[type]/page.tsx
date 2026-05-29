@@ -831,10 +831,9 @@ export default function ShippingTypePage() {
         ? codes
             .filter((c) => row.perOrder[c] != null)
             .map((c) => {
-              const oIdx = codes.indexOf(c);
-              const qty  = row.perOrder[c]!;
-              const ctn  = upc > 0 ? Math.ceil(qty / upc) : null;
-              return `<div style="font-size:9pt;margin-top:1pt">&nbsp;&nbsp;#${oIdx + 1}: ${qty.toLocaleString()} EA${ctn != null ? ` / ${ctn} CTN` : ""}</div>`;
+              const qty = row.perOrder[c]!;
+              const ctn = upc > 0 ? Math.ceil(qty / upc) : null;
+              return `<div style="font-size:8pt;margin-top:1pt;font-family:'Courier New',monospace">&nbsp;&nbsp;▸ ${c}: <b>${qty.toLocaleString()} EA${ctn != null ? ` / ${ctn} CTN` : ""}</b></div>`;
             }).join("")
         : "";
 
