@@ -32,6 +32,7 @@ const CATEGORY_COLOR: Record<BillingCategory, string> = {
   "Fulfillment B2C":   "bg-teal-50 border-teal-200 text-teal-800",
   "Return Management": "bg-orange-50 border-orange-200 text-orange-800",
   "Warehouse Labor":   "bg-red-50 border-red-200 text-red-800",
+  "Office Sublease":   "bg-amber-50 border-amber-200 text-amber-800",
 };
 
 const DEFAULT_ITEMS = buildDefaultLineItems();

@@ -98,6 +98,7 @@ const CATEGORY_COLOR: Record<BillingCategory, string> = {
   "Fulfillment B2C":   "bg-teal-50 border-teal-200 text-teal-800",
   "Return Management": "bg-orange-50 border-orange-200 text-orange-800",
   "Warehouse Labor":   "bg-red-50 border-red-200 text-red-800",
+  "Office Sublease":   "bg-amber-50 border-amber-200 text-amber-800",
 };
 
 // ─── Excel helpers (ExcelJS — styled) ────────────────────────────────────────
@@ -2070,7 +2071,7 @@ export default function BillingPage() {
 
   // ── open a grouped (combined) invoice set ──
   function openGroupInvoice(group: BillingInvoice[]) {
-    const cloned = group.map(inv => JSON.parse(JSON.stringify(inv)));
+    const cloned = group.map(inv => mergeNewLineItems(JSON.parse(JSON.stringify(inv))));
     setEditGroup(cloned);
     setActiveIdx(0);
     setEditing(cloned[0]);
@@ -2134,10 +2135,24 @@ export default function BillingPage() {
   }
 
   // ── open existing invoice ──
+  function mergeNewLineItems(inv: BillingInvoice): BillingInvoice {
+    // Add any line items that exist in the current default but not in the saved invoice
+    // (handles rate table additions like Office Sublease added after initial save)
+    const existingIds = new Set(inv.lineItems.map((i) => i.id));
+    const defaults = buildDefaultLineItems();
+    const missing = defaults.filter((d) => !existingIds.has(d.id));
+    if (missing.length === 0) return inv;
+    const merged = { ...inv, lineItems: [...inv.lineItems, ...missing] };
+    merged.subtotals = calcSubtotals(merged.lineItems);
+    merged.total = calcTotal(merged.lineItems);
+    return merged;
+  }
+
   function openInvoice(inv: BillingInvoice) {
-    const cloned = JSON.parse(JSON.stringify(inv));
-    setEditing(cloned);
-    setEditGroup([cloned]);
+    const cloned: BillingInvoice = JSON.parse(JSON.stringify(inv));
+    const merged = mergeNewLineItems(cloned);
+    setEditing(merged);
+    setEditGroup([merged]);
     setActiveIdx(0);
     setStorage15(null); setStorageLast(null);
     setFetchMsg("");
@@ -3039,11 +3054,15 @@ export default function BillingPage() {
                               o.cartonQty ?? o.boxQty ?? o.packageQty ?? o.cartonCount;
                             const counted = isContainer ? 0 : (cartonFieldVal != null ? Number(cartonFieldVal) : 1);
                             const isDefault = cartonFieldName === "default";
+                            const inDateVal = String(o.inDate ?? o.receiveDate ?? o.orderDate ?? "");
+                            const missingDate = !inDateVal || inDateVal.length < 6;
                             return (
-                              <tr key={i} className={`border-b border-slate-50 ${isContainer ? "bg-red-50/40" : "hover:bg-slate-50"}`}>
+                              <tr key={i} className={`border-b border-slate-50 ${missingDate ? "bg-yellow-50" : isContainer ? "bg-red-50/40" : "hover:bg-slate-50"}`}>
                                 <td className="px-3 py-1.5 font-mono text-blue-600 whitespace-nowrap">{String(o.receiveOrderCode ?? o.orderCode ?? "—")}</td>
                                 <td className="px-3 py-1.5 text-slate-400 font-mono text-[10px]">{String(o.poNo ?? o.poNumber ?? o.referenceNo ?? "—")}</td>
-                                <td className="px-3 py-1.5 text-slate-500 whitespace-nowrap">{String(o.inDate ?? o.receiveDate ?? o.orderDate ?? "—")}</td>
+                                <td className={`px-3 py-1.5 whitespace-nowrap font-semibold ${missingDate ? "text-yellow-600" : "text-slate-500"}`}>
+                                  {missingDate ? "⚠ No date" : inDateVal}
+                                </td>
                                 <td className="px-3 py-1.5">
                                   <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
                                     String(o.status ?? o.orderStatus ?? "") === "DA"
@@ -3166,6 +3185,8 @@ export default function BillingPage() {
                               const lhOT = ov["labor_ot_weekday"]  ?? lhOT0;
                               const lhWk = ov["labor_ot_weekend"]  ?? lhWk0;
                               const warn = pp0 > 0 && oc0 === 0 && op0 === 0 && supplies0 === 0 && !("b2b_carton_packing" in ov);
+                              const outDateVal = String(o.outDate ?? o.deliveryDate ?? o.shippingDate ?? o.outboundDate ?? "");
+                              const missingOutDate = !outDateVal || outDateVal.length < 6;
                               const inputCls = (color?: string, modified?: boolean) =>
                                 `w-14 text-right text-xs font-semibold rounded px-1 py-0.5 border ${
                                   modified
@@ -3218,12 +3239,14 @@ export default function BillingPage() {
                                 });
                               };
                               return (
-                                <tr key={i} className={`border-b border-slate-50 ${warn ? "bg-amber-50" : ""}`}>
+                                <tr key={i} className={`border-b border-slate-50 ${missingOutDate ? "bg-yellow-50" : warn ? "bg-amber-50" : ""}`}>
                                   <td className="px-3 py-1 font-mono text-emerald-600 text-xs">
                                     {code}
                                     {warn && <span className="ml-1 text-amber-500">⚠</span>}
                                   </td>
-                                  <td className="px-3 py-1 text-slate-500">{String(o.orderDate ?? "—")}</td>
+                                  <td className={`px-3 py-1 whitespace-nowrap font-semibold ${missingOutDate ? "text-yellow-600" : "text-slate-500"}`}>
+                                    {missingOutDate ? "⚠ No date" : outDateVal}
+                                  </td>
                                   <td className="px-1 py-1 text-right"><input type="number" min={0} value={pp || ""} placeholder="—" onChange={e => setOv("b2b_pick_piece", e.target.value)} className={inputCls(undefined, "b2b_pick_piece" in ov)} /></td>
                                   <td className="px-1 py-1 text-right"><input type="number" min={0} value={pc || ""} placeholder="—" onChange={e => setOv("b2b_pick_carton", e.target.value)} className={inputCls(undefined, "b2b_pick_carton" in ov)} /></td>
                                   <td className="px-1 py-1 text-right"><input type="number" min={0} value={ppl || ""} placeholder="—" onChange={e => setOv("b2b_pick_pallet", e.target.value)} className={inputCls(undefined, "b2b_pick_pallet" in ov)} /></td>
@@ -3309,10 +3332,14 @@ export default function BillingPage() {
                           {wmsSource.b2c.map((o, i) => {
                             const qty = Number(o.totalQty ?? o.orderQty ?? 0);
                             const extra = Math.max(0, qty - 5);
+                            const b2cDateVal = String(o.outDate ?? o.deliveryDate ?? o.shippingDate ?? "");
+                            const b2cMissingDate = !b2cDateVal || b2cDateVal.length < 6;
                             return (
-                              <tr key={i} className="border-b border-slate-50">
+                              <tr key={i} className={`border-b border-slate-50 ${b2cMissingDate ? "bg-yellow-50" : "hover:bg-slate-50"}`}>
                                 <td className="px-3 py-1.5 font-mono text-teal-600">{String(o.shipOrderCode ?? o.orderCode ?? "—")}</td>
-                                <td className="px-3 py-1.5 text-slate-500">{String(o.orderDate ?? "—")}</td>
+                                <td className={`px-3 py-1.5 whitespace-nowrap font-semibold ${b2cMissingDate ? "text-yellow-600" : "text-slate-500"}`}>
+                                  {b2cMissingDate ? "⚠ No date" : b2cDateVal}
+                                </td>
                                 <td className="px-3 py-1.5 text-right">{qty}</td>
                                 <td className="px-3 py-1.5 text-right font-semibold text-teal-600">1</td>
                                 <td className="px-3 py-1.5 text-right font-semibold text-teal-600">{extra > 0 ? extra : "—"}</td>
@@ -3347,10 +3374,14 @@ export default function BillingPage() {
                         <tbody>
                           {wmsSource.returns.map((o, i) => {
                             const qty = Number(o.totalQty ?? o.qty ?? 0);
+                            const retDateVal = String(o.returnDate ?? o.inDate ?? o.orderDate ?? "");
+                            const retMissingDate = !retDateVal || retDateVal.length < 6;
                             return (
-                              <tr key={i} className="border-b border-slate-50">
+                              <tr key={i} className={`border-b border-slate-50 ${retMissingDate ? "bg-yellow-50" : "hover:bg-slate-50"}`}>
                                 <td className="px-3 py-1.5 font-mono text-orange-600">{String(o.returnOrderCode ?? o.orderCode ?? "—")}</td>
-                                <td className="px-3 py-1.5 text-slate-500">{String(o.orderDate ?? "—")}</td>
+                                <td className={`px-3 py-1.5 whitespace-nowrap font-semibold ${retMissingDate ? "text-yellow-600" : "text-slate-500"}`}>
+                                  {retMissingDate ? "⚠ No date" : retDateVal}
+                                </td>
                                 <td className="px-3 py-1.5 text-right">{qty}</td>
                                 <td className="px-3 py-1.5 text-right font-semibold text-orange-600">1</td>
                                 <td className="px-3 py-1.5 text-right font-semibold text-orange-600">{qty}</td>
