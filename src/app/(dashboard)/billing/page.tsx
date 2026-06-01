@@ -3641,14 +3641,14 @@ export default function BillingPage() {
           const gpct    = (v: number) => show ? `${(v / wages * 100).toFixed(2)}%` : "";
 
           const rateInp = (val: string, setter: (s: string) => void) => (
-            <div className="flex items-center gap-0.5">
+            <div className="inline-flex items-center gap-0.5">
               <input type="number" step="0.01" min="0" value={val} onChange={e => setter(e.target.value)}
-                className="w-18 text-right border border-slate-300 bg-white focus:border-blue-400 rounded px-1.5 py-0.5 text-xs font-mono outline-none" />
+                className="w-16 text-right border border-slate-300 bg-white focus:border-blue-400 rounded px-1.5 py-0.5 text-xs font-mono outline-none" />
               <span className="text-slate-400 text-xs">%</span>
             </div>
           );
           const fixedInp = (val: string, setter: (s: string) => void) => (
-            <div className="flex items-center gap-0.5">
+            <div className="inline-flex items-center gap-0.5">
               <span className="text-slate-400 text-xs">$</span>
               <input type="number" step="0.01" min="0" value={val} onChange={e => setter(e.target.value)}
                 className="w-24 text-right border border-slate-300 bg-white focus:border-blue-400 rounded px-1.5 py-0.5 text-xs font-mono outline-none" />
@@ -3658,41 +3658,46 @@ export default function BillingPage() {
           type RowProps = { label: React.ReactNode; right: React.ReactNode; pct?: string; bg?: string; bold?: boolean };
           const Row = ({ label, right, pct = "", bg = "", bold = false }: RowProps) => (
             <tr className={`border-b border-slate-100 ${bg}`}>
-              <td className={`px-4 py-2 text-slate-700 ${bold ? "font-bold" : ""}`}>{label}</td>
-              <td className="px-4 py-2 text-right font-mono">{right}</td>
-              <td className="px-4 py-2 text-right font-mono text-slate-400 text-xs">{pct}</td>
+              <td className={`px-3 py-2 text-slate-700 ${bold ? "font-bold" : ""}`}>{label}</td>
+              <td className="px-3 py-2 text-right font-mono whitespace-nowrap">{right}</td>
+              <td className="px-3 py-2 text-right font-mono text-slate-400 text-xs whitespace-nowrap w-20">{pct}</td>
             </tr>
           );
 
           return (
-            <div className="pb-8 max-w-2xl">
+            <div className="pb-8 w-full">
               <div className="rounded-xl border border-slate-200 overflow-hidden text-sm">
                 <div className="bg-purple-700 text-white text-sm font-semibold px-4 py-2.5">OM Subsidy Calculator</div>
-                <table className="w-full">
+                <table className="w-full table-fixed">
+                  <colgroup>
+                    <col className="w-auto" />
+                    <col style={{ width: "160px" }} />
+                    <col style={{ width: "88px" }} />
+                  </colgroup>
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200 text-xs text-slate-400 uppercase">
-                      <th className="px-4 py-2 text-left font-medium">Description</th>
-                      <th className="px-4 py-2 text-right font-medium">Amount</th>
-                      <th className="px-4 py-2 text-right font-medium w-28">% Gross Wage</th>
+                      <th className="px-3 py-2 text-left font-medium">Description</th>
+                      <th className="px-3 py-2 text-right font-medium">Amount</th>
+                      <th className="px-3 py-2 text-right font-medium">% Wage</th>
                     </tr>
                   </thead>
                   <tbody>
                     {/* Wages */}
                     <tr className="border-b border-slate-200 bg-yellow-50">
-                      <td className="px-4 py-2.5 font-semibold text-slate-800">Total Taxable Wages</td>
-                      <td className="px-4 py-2.5 text-right">
+                      <td className="px-3 py-2.5 font-semibold text-slate-800">Total Taxable Wages</td>
+                      <td className="px-3 py-2.5 text-right">
                         <div className="flex items-center justify-end gap-1">
                           <span className="text-slate-500 text-xs">$</span>
                           <input type="number" step="0.01" value={omWages} onChange={e => setOmWages(e.target.value)} placeholder="0.00"
-                            className="w-32 text-right border border-yellow-300 bg-yellow-50 focus:bg-white focus:border-blue-400 rounded px-2 py-1 font-mono outline-none" />
+                            className="w-28 text-right border border-yellow-300 bg-yellow-50 focus:bg-white focus:border-blue-400 rounded px-2 py-1 font-mono outline-none" />
                         </div>
                       </td>
-                      <td className="px-4 py-2.5 text-right text-slate-400 text-xs font-mono">100%</td>
+                      <td className="px-3 py-2.5 text-right text-slate-400 text-xs font-mono">100%</td>
                     </tr>
 
                     {/* Overhead header */}
                     <tr className="bg-slate-50 border-b border-slate-100">
-                      <td colSpan={3} className="px-4 py-1 text-xs font-bold text-slate-400 uppercase tracking-wide">Overhead</td>
+                      <td colSpan={3} className="px-3 py-1 text-xs font-bold text-slate-400 uppercase tracking-wide">Overhead</td>
                     </tr>
 
                     {/* 1. Employer Tax */}
@@ -3704,41 +3709,46 @@ export default function BillingPage() {
 
                     {/* 2. Benefits */}
                     <tr className="bg-slate-50/50 border-b border-slate-100">
-                      <td colSpan={3} className="px-6 py-0.5 text-xs font-semibold text-slate-400">2. Benefits</td>
+                      <td colSpan={3} className="px-4 py-0.5 text-xs font-semibold text-slate-400">2. Benefits</td>
                     </tr>
-                    <Row label={<span className="pl-4">Health Insurance — Dental</span>} right={fixedInp(omDentalFixed, setOmDentalFixed)} pct={gpct(dental)} />
-                    <Row label={<span className="pl-4">Health Insurance — Medical</span>} right={fixedInp(omMedicalFixed, setOmMedicalFixed)} pct={gpct(medical)} />
+                    <Row label={<span className="pl-3">Dental Insurance</span>} right={fixedInp(omDentalFixed, setOmDentalFixed)} pct={gpct(dental)} />
+                    <Row label={<span className="pl-3">Medical Insurance</span>} right={fixedInp(omMedicalFixed, setOmMedicalFixed)} pct={gpct(medical)} />
 
                     {/* 3. Insurance */}
                     <tr className="bg-slate-50/50 border-b border-slate-100">
-                      <td colSpan={3} className="px-6 py-0.5 text-xs font-semibold text-slate-400">3. Insurance</td>
+                      <td colSpan={3} className="px-4 py-0.5 text-xs font-semibold text-slate-400">3. Insurance</td>
                     </tr>
                     {/* Workers Comp */}
                     <tr className="border-b border-slate-100">
-                      <td className="px-4 py-2 text-slate-700">
-                        <div className="pl-4">Workers Comp</div>
-                        <div className="pl-4 flex items-center gap-1 text-[11px] text-slate-400 mt-0.5">
-                          wages × {rateInp(omWcGrossRate, setOmWcGrossRate)} × (1 − {rateInp(omWcDiscount, setOmWcDiscount)})
+                      <td className="px-3 py-2 text-slate-700">
+                        <div className="pl-3">Workers Comp</div>
+                        <div className="pl-3 flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[11px] text-slate-400 mt-0.5">
+                          <span>wages ×</span>
+                          {rateInp(omWcGrossRate, setOmWcGrossRate)}
+                          <span>× (1−</span>
+                          {rateInp(omWcDiscount, setOmWcDiscount)}
+                          <span>)</span>
                         </div>
                       </td>
-                      <td className="px-4 py-2 text-right font-mono text-slate-800">{show ? fmtN(wc) : "—"}</td>
-                      <td className="px-4 py-2 text-right font-mono text-slate-400 text-xs">{gpct(wc)}</td>
+                      <td className="px-3 py-2 text-right font-mono text-slate-800 whitespace-nowrap">{show ? fmtN(wc) : "—"}</td>
+                      <td className="px-3 py-2 text-right font-mono text-slate-400 text-xs whitespace-nowrap">{gpct(wc)}</td>
                     </tr>
                     {/* GL */}
                     <tr className="border-b border-slate-200">
-                      <td className="px-4 py-2 text-slate-700">
-                        <div className="pl-4">General Liability Insurance</div>
-                        <div className="pl-4 flex items-center gap-1 text-[11px] text-slate-400 mt-0.5">
-                          (invoice revenue + wages+tax+benefits+WC) × {rateInp(omGlRate, setOmGlRate)}
+                      <td className="px-3 py-2 text-slate-700">
+                        <div className="pl-3">General Liability</div>
+                        <div className="pl-3 flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[11px] text-slate-400 mt-0.5">
+                          <span>(rev+wages+tax+ben+WC) ×</span>
+                          {rateInp(omGlRate, setOmGlRate)}
                         </div>
                         {invRevenue > 0 && (
-                          <div className="pl-4 text-[10px] text-slate-400 mt-0.5">
-                            Revenue base: ${invRevenue.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          <div className="pl-3 text-[10px] text-slate-400 mt-0.5">
+                            base: ${invRevenue.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </div>
                         )}
                       </td>
-                      <td className="px-4 py-2 text-right font-mono text-slate-800">{show ? fmtN(gl) : "—"}</td>
-                      <td className="px-4 py-2 text-right font-mono text-slate-400 text-xs">{gpct(gl)}</td>
+                      <td className="px-3 py-2 text-right font-mono text-slate-800 whitespace-nowrap">{show ? fmtN(gl) : "—"}</td>
+                      <td className="px-3 py-2 text-right font-mono text-slate-400 text-xs whitespace-nowrap">{gpct(gl)}</td>
                     </tr>
 
                     {/* Total Overhead */}
@@ -3746,8 +3756,8 @@ export default function BillingPage() {
 
                     {/* Total Cost */}
                     <tr className="border-b border-slate-200 bg-slate-200">
-                      <td className="px-4 py-2 font-bold text-slate-800">Total Cost</td>
-                      <td className="px-4 py-2 text-right font-mono font-bold text-slate-900">
+                      <td className="px-3 py-2 font-bold text-slate-800">Total Cost</td>
+                      <td className="px-3 py-2 text-right font-mono font-bold text-slate-900 whitespace-nowrap">
                         {show ? <><span className="text-slate-500 font-normal mr-1 text-xs">$</span>{fmtN(totalCost)}</> : "—"}
                       </td>
                       <td />
@@ -3755,8 +3765,8 @@ export default function BillingPage() {
 
                     {/* % Allocated */}
                     <tr className="border-b border-slate-100 bg-purple-50">
-                      <td className="px-4 py-2 text-slate-700">% Allocated to STL</td>
-                      <td className="px-4 py-2 text-right">
+                      <td className="px-3 py-2 text-slate-700">% Allocated to STL</td>
+                      <td className="px-3 py-2 text-right">
                         <div className="flex items-center justify-end gap-1">
                           <input type="number" step="1" min="0" max="100" value={omAllocPct} onChange={e => setOmAllocPct(e.target.value)}
                             className="w-16 text-right border border-purple-300 bg-purple-50 focus:bg-white focus:border-purple-500 rounded px-2 py-1 font-mono outline-none text-purple-800 font-semibold" />
@@ -3768,8 +3778,8 @@ export default function BillingPage() {
 
                     {/* Charge to STL */}
                     <tr className="bg-green-100">
-                      <td className="px-4 py-3 font-bold text-green-900 text-base">Charge to STL</td>
-                      <td className="px-4 py-3 text-right font-bold text-green-900 text-base">
+                      <td className="px-3 py-3 font-bold text-green-900 text-base">Charge to STL</td>
+                      <td className="px-3 py-3 text-right font-bold text-green-900 text-base whitespace-nowrap">
                         {show ? <><span className="text-green-700 font-normal mr-1 text-xs">$</span>{fmtN(stlAlloc)}</> : "—"}
                       </td>
                       <td />
