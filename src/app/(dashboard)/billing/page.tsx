@@ -2042,6 +2042,9 @@ export default function BillingPage() {
   // per-customer order edits map: customerCode → orderCode → billingKey → number
   const [orderEditsMap, setOrderEditsMap] = useState<Record<string, Record<string, Record<string, number>>>>({});
 
+  // ── last saved timestamp ──
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+
   // ── multi-customer combined invoice ──
   const [editGroup, setEditGroup] = useState<BillingInvoice[]>([]);
   const [activeIdx, setActiveIdx] = useState(0);
@@ -2531,6 +2534,17 @@ export default function BillingPage() {
     setEditGroup(cloned);
     setActiveIdx(0);
     setEditing(cloned[0]);
+    // Use most-recent updatedAt across group as last-saved time
+    const latestSaved = cloned.reduce<string | null>((latest, inv) =>
+      !latest || inv.updatedAt > latest ? inv.updatedAt : latest, null);
+    setLastSavedAt(latestSaved ? new Date(latestSaved) : null);
+    // Restore saved orderEdits for each customer
+    const restoredEditsMap: Record<string, Record<string, Record<string, number>>> = {};
+    for (const inv of cloned) {
+      restoredEditsMap[inv.customer] = inv.orderEdits ?? {};
+    }
+    setOrderEditsMap(restoredEditsMap);
+    setOrderEdits(cloned[0].orderEdits ?? {});
 
     // Restore per-customer storage from localStorage for all customers in group
     const newStorageMap: Record<string, CustomerStorageState> = {};
@@ -2599,10 +2613,18 @@ export default function BillingPage() {
   async function saveAllMulti(status: "draft" | "final") {
     if (!editing) return;
     setSaving(true); setSaveError("");
+    // Flush current customer's orderEdits into the map before saving
+    const flushedEditsMap = { ...orderEditsMap, [editing.customer]: orderEdits };
     const group = getCurrentGroup();
     try {
+      const now = new Date().toISOString();
       for (const inv of group) {
-        const payload: BillingInvoice = { ...inv, status, updatedAt: new Date().toISOString() };
+        const payload: BillingInvoice = {
+          ...inv,
+          status,
+          updatedAt: now,
+          orderEdits: flushedEditsMap[inv.customer] ?? {},
+        };
         const res = await fetch("/api/billing/invoices", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2610,8 +2632,11 @@ export default function BillingPage() {
         });
         if (!res.ok) throw new Error(`Save failed for ${inv.customer}`);
       }
-      await loadList();
-      setEditing(null); setEditGroup([]); setActiveIdx(0);
+      setLastSavedAt(new Date());
+      // Update editGroup with saved status/timestamp (stay on current page)
+      setEditGroup(prev => prev.map(inv => ({ ...inv, status, updatedAt: now })));
+      setEditing(prev => prev ? { ...prev, status, updatedAt: now } : prev);
+      loadList(); // refresh list in background
     } catch (e) {
       setSaveError(String(e instanceof Error ? e.message : e));
     } finally {
@@ -2639,6 +2664,10 @@ export default function BillingPage() {
     setEditing(merged);
     setEditGroup([merged]);
     setActiveIdx(0);
+    setLastSavedAt(merged.updatedAt ? new Date(merged.updatedAt) : null);
+    // Restore saved orderEdits
+    setOrderEdits(merged.orderEdits ?? {});
+    setOrderEditsMap({ [merged.customer]: merged.orderEdits ?? {} });
     // Restore storage for this customer
     const cs = getStorageFromLocal(merged.period, merged.customer);
     setStorageMap(cs ? { [merged.customer]: cs } : {});
@@ -3183,15 +3212,15 @@ export default function BillingPage() {
     if (editGroup.length > 1) { await saveAllMulti(status); return; }
     setSaving(true);
     setSaveError("");
-    // Persist current orderEdits to map before saving
-    setOrderEditsMap(prev => ({ ...prev, [editing.customer]: orderEdits }));
     try {
+      const now = new Date().toISOString();
       const payload: BillingInvoice = {
         ...editing,
         subtotals: calcSubtotals(editing.lineItems),
         total: calcTotal(editing.lineItems),
         status,
-        updatedAt: new Date().toISOString(),
+        updatedAt: now,
+        orderEdits,   // persist per-order qty overrides
       };
       const res = await fetch("/api/billing/invoices", {
         method: "POST",
@@ -3199,8 +3228,11 @@ export default function BillingPage() {
         body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error("Save failed");
-      await loadList();
-      setEditing(null); setEditGroup([]); setActiveIdx(0);
+      setLastSavedAt(new Date());
+      // Stay on current page — just update status/timestamp in state
+      setEditing(prev => prev ? { ...prev, status, updatedAt: now } : prev);
+      setEditGroup(prev => prev.map((inv, i) => i === activeIdx ? { ...inv, status, updatedAt: now } : inv));
+      loadList(); // refresh list in background
     } catch (e) {
       setSaveError(String(e instanceof Error ? e.message : e));
     } finally {
@@ -3484,7 +3516,20 @@ export default function BillingPage() {
                 ? `Combined Invoice — ${periodLabel(editing.period)} (${editGroup.length} customers)`
                 : `${editing.customerName || editing.customer} — ${periodLabel(editing.period)}`}
             </h1>
-            <p className="text-slate-400 text-xs mt-0.5">Rate ver. {editing.rateVersion}</p>
+            <p className="text-slate-400 text-xs mt-0.5 flex items-center gap-2">
+              <span>Rate ver. {editing.rateVersion}</span>
+              {lastSavedAt && (
+                <span className="text-emerald-600 font-medium flex items-center gap-1">
+                  <span>·</span>
+                  <svg className="w-3 h-3" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M13 2H3a1 1 0 00-1 1v10a1 1 0 001 1h10a1 1 0 001-1V3a1 1 0 00-1-1z"/>
+                    <path d="M11 2v4H5V2M5 9h6M5 12h4"/>
+                  </svg>
+                  Saved {lastSavedAt.toLocaleDateString("en-US", { month: "short", day: "numeric" })} {lastSavedAt.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
+                </span>
+              )}
+              {saveError && <span className="text-red-500">· {saveError}</span>}
+            </p>
           </div>
           <div className="flex items-center gap-2">
             {/* Auto-fetch */}

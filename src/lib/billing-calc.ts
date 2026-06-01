@@ -30,6 +30,7 @@ export type BillingInvoice = {
   createdAt: string;
   updatedAt: string;
   groupId?: string;        // shared ID for combined invoices created together
+  orderEdits?: Record<string, Record<string, number>>; // per-order qty overrides (inbound carton, B2B picks, etc.)
 };
 
 // ─── Calculation ──────────────────────────────────────────────────────────────
