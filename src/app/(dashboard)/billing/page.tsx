@@ -950,27 +950,47 @@ function addB2CDetailSheet(
   return { sheetName, rowCount: orders.length };
 }
 
-type StorageRawLoc = { loc: string; type: string };
+/** Full raw inventory_history row, enriched with occupancy type */
+type StorageRawRow = {
+  location:     string;
+  locationType: string;    // computed from occupancy lookup
+  sku:          string;
+  product_name: string | null;
+  qty:          number;
+  available_qty: number | null;
+  lot:          string | null;
+  expire_date:  string | null;
+};
 
-/** Add a raw-location sheet (evidence) for one storage snapshot */
+/** Add a raw-inventory sheet (SKU/qty evidence) for one storage snapshot */
 function addStorageRawSheet(
   wb: ExcelJS.Workbook,
   date: string,
-  rawLocs: StorageRawLoc[]
+  rawRows: StorageRawRow[]
 ): string {
   const name = `StorageRaw_${date}`.slice(0, 31);
   const ws = wb.addWorksheet(name);
-  ws.columns = [{ width: 6 }, { width: 24 }, { width: 18 }];
+  ws.columns = [
+    { width: 6 },  // #
+    { width: 22 }, // Location
+    { width: 18 }, // Type
+    { width: 20 }, // SKU
+    { width: 28 }, // Product Name
+    { width: 8  }, // Qty
+    { width: 10 }, // Avail Qty
+    { width: 14 }, // Lot
+    { width: 14 }, // Expire Date
+  ];
 
-  // Date label row
+  // Date label row (merged)
   const dateRow = ws.addRow([date]);
-  ws.mergeCells(`A${dateRow.number}:C${dateRow.number}`);
+  ws.mergeCells(`A${dateRow.number}:I${dateRow.number}`);
   dateRow.getCell(1).font = { bold: true, size: 10, color: { argb: C.navy } };
   dateRow.getCell(1).alignment = { horizontal: "center" };
   dateRow.height = 14;
 
-  // Column header
-  const hdr = ws.addRow(["#", "Location", "Type"]);
+  // Column headers
+  const hdr = ws.addRow(["#", "Location", "Type", "SKU", "Product Name", "Qty", "Avail Qty", "Lot", "Expire Date"]);
   hdr.height = 16;
   hdr.eachCell((cell) => {
     cell.font = { bold: true, color: { argb: C.white }, size: 10 };
@@ -979,28 +999,41 @@ function addStorageRawSheet(
     applyBorder(cell, "medium");
   });
 
-  // Sort by type, then location
-  const sorted = [...rawLocs].sort(
-    (a, b) => a.type.localeCompare(b.type) || a.loc.localeCompare(b.loc)
+  // Sort by type → location → SKU
+  const sorted = [...rawRows].sort(
+    (a, b) => a.locationType.localeCompare(b.locationType) || a.location.localeCompare(b.location) || a.sku.localeCompare(b.sku)
   );
   sorted.forEach((item, i) => {
-    const r = ws.addRow([i + 1, item.loc, item.type]);
+    const r = ws.addRow([
+      i + 1,
+      item.location,
+      item.locationType,
+      item.sku,
+      item.product_name ?? "",
+      item.qty,
+      item.available_qty ?? "",
+      item.lot ?? "",
+      item.expire_date ?? "",
+    ]);
     r.height = 14;
     r.eachCell((cell, col) => {
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: i % 2 === 0 ? C.white : C.rowAlt } };
       cell.font = { size: 10 };
-      cell.alignment = { vertical: "middle", horizontal: col === 1 ? "center" : "left" };
+      cell.alignment = { vertical: "middle", horizontal: col <= 3 || col >= 4 ? "left" : "right" };
+      if (col === 1) cell.alignment = { horizontal: "center" };
+      if (col === 6 || col === 7) { cell.alignment = { horizontal: "right" }; cell.numFmt = "#,##0"; }
       applyBorder(cell);
     });
   });
 
   // Total row
-  const totRow = ws.addRow(["", `Total: ${sorted.length}`, ""]);
-  ws.mergeCells(`B${totRow.number}:C${totRow.number}`);
+  const totQty = sorted.reduce((s, r) => s + r.qty, 0);
+  const totRow = ws.addRow(["", `Total: ${sorted.length} rows`, "", "", "", totQty, "", "", ""]);
   totRow.height = 15;
-  totRow.eachCell((cell) => {
+  totRow.eachCell((cell, col) => {
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.subtotalBg } };
     cell.font = { bold: true, size: 10 };
+    if (col === 6) { cell.numFmt = "#,##0"; cell.alignment = { horizontal: "right" }; }
     applyBorder(cell, "medium");
   });
 
@@ -1013,8 +1046,8 @@ function addInventoryDetailSheets(
   storageRows: StorageRow[],
   date1 = "Date 1",
   date2 = "Date 2",
-  rawLocs15?: StorageRawLoc[],
-  rawLocsLast?: StorageRawLoc[]
+  rawRows15?: StorageRawRow[],
+  rawRowsLast?: StorageRawRow[]
 ): { avgSheetName: string; snap1SheetName: string; snap2SheetName: string } {
   // Truncate date labels to fit Excel 31-char sheet name limit
   const snap1Name = `Storage_${date1}`.slice(0, 31);
@@ -1133,9 +1166,9 @@ function addInventoryDetailSheets(
   });
   [2, 3, 4].forEach(c => { wsAvg.getRow(totAvg.number).getCell(c).numFmt = "#,##0.00"; });
 
-  // Raw location sheets (근거 데이터)
-  if (rawLocs15 && rawLocs15.length > 0)   addStorageRawSheet(wb, date1, rawLocs15);
-  if (rawLocsLast && rawLocsLast.length > 0) addStorageRawSheet(wb, date2, rawLocsLast);
+  // Raw inventory sheets (근거 데이터 — SKU/qty per location)
+  if (rawRows15   && rawRows15.length   > 0) addStorageRawSheet(wb, date1, rawRows15);
+  if (rawRowsLast && rawRowsLast.length > 0) addStorageRawSheet(wb, date2, rawRowsLast);
 
   return { avgSheetName, snap1SheetName: snap1Name, snap2SheetName: snap2Name };
 }
@@ -1376,8 +1409,8 @@ async function exportInvoiceToExcel(
   storageRows?: StorageRow[],
   snapDate1?: string,
   snapDate2?: string,
-  rawLocs15?: StorageRawLoc[],
-  rawLocsLast?: StorageRawLoc[]
+  rawRows15?: StorageRawRow[],
+  rawRowsLast?: StorageRawRow[]
 ) {
   const wb = new ExcelJS.Workbook();
   const custCode = invoice.customer;
@@ -1399,7 +1432,7 @@ async function exportInvoiceToExcel(
     }
   }
   if (storageRows && storageRows.length > 0) {
-    const { avgSheetName } = addInventoryDetailSheets(wb, storageRows, snapDate1, snapDate2, rawLocs15, rawLocsLast);
+    const { avgSheetName } = addInventoryDetailSheets(wb, storageRows, snapDate1, snapDate2, rawRows15, rawRowsLast);
     refs.storageAvgSheet = avgSheetName;
   }
 
@@ -1428,8 +1461,8 @@ async function exportAllToExcel(
   subleaseTotal?: number,
   snapDate1?: string,
   snapDate2?: string,
-  rawLocs15?: StorageRawLoc[],
-  rawLocsLast?: StorageRawLoc[]
+  rawRows15?: StorageRawRow[],
+  rawRowsLast?: StorageRawRow[]
 ) {
   if (invoices.length === 0) return;
   const wb = new ExcelJS.Workbook();
@@ -1696,7 +1729,7 @@ async function exportAllToExcel(
   // ── Inventory storage sheets (shared across all customers) ──
   let sharedStorageAvg: string | undefined;
   if (storageRows && storageRows.length > 0) {
-    const { avgSheetName } = addInventoryDetailSheets(wb, storageRows, snapDate1, snapDate2, rawLocs15, rawLocsLast);
+    const { avgSheetName } = addInventoryDetailSheets(wb, storageRows, snapDate1, snapDate2, rawRows15, rawRowsLast);
     sharedStorageAvg = avgSheetName;
   }
 
@@ -1935,10 +1968,19 @@ export default function BillingPage() {
   const [exportingNow, setExportingNow] = useState(false);
 
   // ── Storage import ──
-  type StorageRawLoc = { loc: string; type: string };
-  type StorageSnap = { data: Record<string, number>; file: string; rawLocs?: StorageRawLoc[] };
+  // StorageRawRow is defined at top-level (outside component)
+  type StorageSnap = { data: Record<string, number>; file: string; rawRows?: StorageRawRow[] };
+  // Per-customer storage state (same pattern as wmsSourceMap)
+  type CustomerStorageState = {
+    snap15:   StorageSnap | null;
+    snapLast: StorageSnap | null;
+    date15:   string;
+    dateLast: string;
+  };
   const [storage15, setStorage15] = useState<StorageSnap | null>(null);
   const [storageLast, setStorageLast] = useState<StorageSnap | null>(null);
+  // Map: customerCode → their loaded storage (survives tab switches)
+  const [storageMap, setStorageMap] = useState<Record<string, CustomerStorageState>>({});
   const [storageUploading15, setStorageUploading15] = useState(false);
   const [storageUploadingLast, setStorageUploadingLast] = useState(false);
   const [storageLoadingHistory, setStorageLoadingHistory] = useState(false);
@@ -2014,38 +2056,55 @@ export default function BillingPage() {
     return result;
   }
 
-  // Helper: save current storage snaps to localStorage for a period
+  // Helper: save storage snaps to localStorage keyed by period+customer
   function persistStorageToLocal(
     period: string,
+    customerCode: string,
     snap15: StorageSnap | null,
     snapLast: StorageSnap | null,
-    date1?: string,
-    date2?: string
+    date1: string,
+    date2: string
   ) {
     if (!snap15 && !snapLast) return;
     try {
-      localStorage.setItem(`billing_storage_${period}`, JSON.stringify({
-        snap15:   snap15   ? { ...snap15,   date: date1 ?? "" } : null,
-        snapLast: snapLast ? { ...snapLast, date: date2 ?? "" } : null,
+      localStorage.setItem(`billing_storage_${period}_${customerCode}`, JSON.stringify({
+        snap15:   snap15   ? { ...snap15,   date: date1 } : null,
+        snapLast: snapLast ? { ...snapLast, date: date2 } : null,
       }));
     } catch { /* quota exceeded — ignore */ }
   }
 
-  // Helper: restore storage snaps from localStorage for a period
-  function restoreStorageFromLocal(period: string) {
+  // Helper: read one customer's storage state from localStorage
+  function getStorageFromLocal(period: string, customerCode: string): CustomerStorageState | null {
     try {
-      const raw = localStorage.getItem(`billing_storage_${period}`);
-      if (!raw) { setStorage15(null); setStorageLast(null); return; }
+      const raw = localStorage.getItem(`billing_storage_${period}_${customerCode}`);
+      if (!raw) return null;
       const { snap15, snapLast } = JSON.parse(raw) as {
         snap15:   (StorageSnap & { date: string }) | null;
         snapLast: (StorageSnap & { date: string }) | null;
       };
-      setStorage15(snap15   ? { data: snap15.data,   file: snap15.file,   rawLocs: snap15.rawLocs   } : null);
-      setStorageLast(snapLast ? { data: snapLast.data, file: snapLast.file, rawLocs: snapLast.rawLocs } : null);
-      if (snap15?.date)   setSnapDate15(snap15.date);
-      if (snapLast?.date) setSnapDateLast(snapLast.date);
+      return {
+        snap15:   snap15   ? { data: snap15.data,   file: snap15.file,   rawRows: snap15.rawRows   } : null,
+        snapLast: snapLast ? { data: snapLast.data, file: snapLast.file, rawRows: snapLast.rawRows } : null,
+        date15:   snap15?.date   ?? "",
+        dateLast: snapLast?.date ?? "",
+      };
     } catch {
-      setStorage15(null); setStorageLast(null);
+      return null;
+    }
+  }
+
+  // Helper: restore storage for a specific customer from localStorage into active state
+  function restoreStorageFromLocal(period: string, customerCode: string) {
+    const cs = getStorageFromLocal(period, customerCode);
+    if (cs) {
+      setStorage15(cs.snap15);
+      setStorageLast(cs.snapLast);
+      setSnapDate15(cs.date15);
+      setSnapDateLast(cs.dateLast);
+    } else {
+      setStorage15(null);
+      setStorageLast(null);
     }
   }
 
@@ -2057,8 +2116,8 @@ export default function BillingPage() {
       const data = await parseInventoryFile(file, editing.customer);
       const snap = { data, file: file.name };
       setStorage15(snap);
-      // Persist both snaps; snapLast may already be in localStorage
-      persistStorageToLocal(editing.period, snap, storageLast, snapDate15, snapDateLast);
+      setStorageMap(prev => ({ ...prev, [editing.customer]: { snap15: snap, snapLast: storageLast, date15: snapDate15, dateLast: snapDateLast } }));
+      persistStorageToLocal(editing.period, editing.customer, snap, storageLast, snapDate15, snapDateLast);
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to parse file.");
     } finally {
@@ -2075,7 +2134,8 @@ export default function BillingPage() {
       const data = await parseInventoryFile(file, editing.customer);
       const snap = { data, file: file.name };
       setStorageLast(snap);
-      persistStorageToLocal(editing.period, storage15, snap, snapDate15, snapDateLast);
+      setStorageMap(prev => ({ ...prev, [editing.customer]: { snap15: storage15, snapLast: snap, date15: snapDate15, dateLast: snapDateLast } }));
+      persistStorageToLocal(editing.period, editing.customer, storage15, snap, snapDate15, snapDateLast);
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to parse file.");
     } finally {
@@ -2113,35 +2173,59 @@ export default function BillingPage() {
       const occupancyLookup = buildLocationOccupancyLookup(locArr);
 
       // 2. Query inventory_history via server API (uses service-role key, bypasses RLS)
-      const fetchSnap = async (date: string): Promise<{ data: Record<string, number>; totalRows: number; matchedRows: number; actualDate: string; rawLocs: StorageRawLoc[] }> => {
+      const fetchSnap = async (date: string): Promise<{ data: Record<string, number>; totalRows: number; matchedRows: number; actualDate: string; rawRows: StorageRawRow[] }> => {
         const url = `/api/billing/storage-snapshot?warehouseCode=${encodeURIComponent(whCode)}&customerCode=${encodeURIComponent(editing!.customer)}&date=${encodeURIComponent(date)}`;
         const res = await fetch(url);
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           throw new Error(`Snapshot fetch error (${date}): ${err.error ?? res.status}`);
         }
-        const json: { date: string; rows: number; locations: string[] } = await res.json();
-        if (json.rows === 0) return { data: {}, totalRows: 0, matchedRows: 0, actualDate: date, rawLocs: [] };
+        const json: {
+          date: string; rows: number; locations: string[];
+          rawRows?: Array<{
+            location: string; sku: string; product_name: string | null;
+            qty: number; available_qty: number | null;
+            lot: string | null; expire_date: string | null;
+          }>;
+        } = await res.json();
+        if (json.rows === 0) return { data: {}, totalRows: 0, matchedRows: 0, actualDate: date, rawRows: [] };
 
-        // Count distinct locations per storage type + collect raw rows
+        // Use rawRows from API (full SKU/qty data); fall back to locations[] for older API
+        const apiRows = json.rawRows ?? json.locations.map(loc => ({
+          location: loc, sku: "", product_name: null, qty: 1, available_qty: null, lot: null, expire_date: null
+        }));
+
         const locSets: Record<string, Set<string>> = {};
-        const rawLocs: StorageRawLoc[] = [];
+        const rawRows: StorageRawRow[] = [];
         let matchedRows = 0;
-        for (const loc of json.locations) {
-          if (!loc) continue;
-          const [zone, aisle, bay, level, position] = loc.split("-");
-          const fakeRow = { location: loc, locationCode: loc, zone, aisle, bay, level, position,
-            zoneName: zone, aisleName: aisle, bayName: bay, levelName: level, positionName: position };
+
+        for (const row of apiRows) {
+          if (!row.location) continue;
+          const [zone, aisle, bay, level, position] = row.location.split("-");
+          const fakeRow = {
+            location: row.location, locationCode: row.location,
+            zone, aisle, bay, level, position,
+            zoneName: zone, aisleName: aisle, bayName: bay, levelName: level, positionName: position
+          };
           const typeLabel = getLocationOccupancyInfo(occupancyLookup, fakeRow);
           const key = STORAGE_LABEL_MAP[typeLabel.toLowerCase()];
           if (!key) continue;
-          rawLocs.push({ loc, type: typeLabel });
+          rawRows.push({
+            location:     row.location,
+            locationType: typeLabel,
+            sku:          row.sku,
+            product_name: row.product_name,
+            qty:          row.qty,
+            available_qty: row.available_qty,
+            lot:          row.lot,
+            expire_date:  row.expire_date,
+          });
           matchedRows++;
-          (locSets[key] ??= new Set()).add(loc);
+          (locSets[key] ??= new Set()).add(row.location);
         }
         const result: Record<string, number> = {};
         for (const [k, s] of Object.entries(locSets)) result[k] = s.size;
-        return { data: result, totalRows: json.rows, matchedRows, actualDate: date, rawLocs };
+        return { data: result, totalRows: json.rows, matchedRows, actualDate: date, rawRows };
       };
 
       const [snap15, snapLast] = await Promise.all([
@@ -2167,17 +2251,15 @@ export default function BillingPage() {
           `The WMS location list returned ${locArr.length} locations (${occupancyLookup.size} with occupancyInfo).`
         );
       } else {
-        const s15  = { data: snap15.data,   file: `WMS History · ${date15}`,   rawLocs: snap15.rawLocs };
-        const sLst = { data: snapLast.data, file: `WMS History · ${dateLast}`, rawLocs: snapLast.rawLocs };
+        const s15  = { data: snap15.data,   file: `WMS History · ${date15}`,   rawRows: snap15.rawRows };
+        const sLst = { data: snapLast.data, file: `WMS History · ${dateLast}`, rawRows: snapLast.rawRows };
         setStorage15(s15);
         setStorageLast(sLst);
-        // Persist to localStorage so re-opening the invoice restores snap data
-        try {
-          localStorage.setItem(`billing_storage_${editing.period}`, JSON.stringify({
-            snap15:    { ...s15,   date: date15 },
-            snapLast:  { ...sLst,  date: dateLast },
-          }));
-        } catch { /* quota exceeded — ignore */ }
+        // Update per-customer storageMap
+        const custState: CustomerStorageState = { snap15: s15, snapLast: sLst, date15, dateLast };
+        setStorageMap(prev => ({ ...prev, [editing.customer]: custState }));
+        // Persist to localStorage (per-customer key)
+        persistStorageToLocal(editing.period, editing.customer, s15, sLst, date15, dateLast);
       }
     } catch (e) {
       setStorageHistoryError(e instanceof Error ? e.message : "Failed to load history data");
@@ -2315,7 +2397,21 @@ export default function BillingPage() {
     setEditGroup(cloned);
     setActiveIdx(0);
     setEditing(cloned[0]);
-    restoreStorageFromLocal(cloned[0].period); // restore previously loaded snap data if any
+
+    // Restore per-customer storage from localStorage for all customers in group
+    const newStorageMap: Record<string, CustomerStorageState> = {};
+    for (const inv of cloned) {
+      const cs = getStorageFromLocal(inv.period, inv.customer);
+      if (cs) newStorageMap[inv.customer] = cs;
+    }
+    setStorageMap(newStorageMap);
+    // Set active customer's storage
+    const first = newStorageMap[cloned[0].customer];
+    setStorage15(first?.snap15 ?? null);
+    setStorageLast(first?.snapLast ?? null);
+    setSnapDate15(first?.date15 ?? "");
+    setSnapDateLast(first?.dateLast ?? "");
+
     setFetchMsg(""); setWmsSource(null); setShowSource(false);
   }
 
@@ -2333,21 +2429,36 @@ export default function BillingPage() {
   function switchTab(idx: number) {
     if (!editing || idx === activeIdx) return;
     const group = getCurrentGroup();
-    // Save current customer's wmsSource and orderEdits before switching
+
+    // Save current customer's state (orders + storage)
     setWmsSourceMap(prev => ({ ...prev, [editing.customer]: wmsSource ?? prev[editing.customer] }));
     setOrderEditsMap(prev => ({ ...prev, [editing.customer]: orderEdits }));
+    const curState: CustomerStorageState = { snap15: storage15, snapLast: storageLast, date15: snapDate15, dateLast: snapDateLast };
+    setStorageMap(prev => ({ ...prev, [editing.customer]: curState }));
+
     setEditGroup(group);
     const newCust = group[idx].customer;
     setEditing(JSON.parse(JSON.stringify(group[idx])));
     setActiveIdx(idx);
     setExtraTab("none");
-    setStorage15(null); setStorageLast(null);
     setStorageHistoryError(""); setStorageHistoryDebug(null);
     setFetchMsg("");
     setShowSource(false);
-    // Restore new customer's wmsSource and orderEdits
+
+    // Restore new customer's state (orders)
     setWmsSource(wmsSourceMap[newCust] ?? null);
     setOrderEdits(orderEditsMap[newCust] ?? {});
+
+    // Restore storage for new customer (from in-memory map first, then localStorage)
+    const newStorage = storageMap[newCust];
+    if (newStorage) {
+      setStorage15(newStorage.snap15);
+      setStorageLast(newStorage.snapLast);
+      setSnapDate15(newStorage.date15);
+      setSnapDateLast(newStorage.dateLast);
+    } else {
+      restoreStorageFromLocal(group[idx].period, newCust);
+    }
   }
 
   // ── save all invoices in combined group ──
@@ -2394,7 +2505,13 @@ export default function BillingPage() {
     setEditing(merged);
     setEditGroup([merged]);
     setActiveIdx(0);
-    restoreStorageFromLocal(merged.period); // restore previously loaded snap data if any
+    // Restore storage for this customer
+    const cs = getStorageFromLocal(merged.period, merged.customer);
+    setStorageMap(cs ? { [merged.customer]: cs } : {});
+    setStorage15(cs?.snap15 ?? null);
+    setStorageLast(cs?.snapLast ?? null);
+    setSnapDate15(cs?.date15 ?? "");
+    setSnapDateLast(cs?.dateLast ?? "");
     setFetchMsg("");
     setWmsSource(null);
     setShowSource(false);
@@ -2730,11 +2847,34 @@ export default function BillingPage() {
         }
       }
 
+      // Build merged storageMap (in-memory + current editing)
+      const fullStorageMap: Record<string, CustomerStorageState> = {
+        ...storageMap,
+        ...(editing ? { [editing.customer]: { snap15: storage15, snapLast: storageLast, date15: snapDate15, dateLast: snapDateLast } } : {}),
+      };
+
+      // Use first customer's storage for shared Storage_Avg formula sheet
+      const firstCustStorage = fullStorageMap[group[0]?.customer ?? ""];
+      const effectiveStorageRows = firstCustStorage
+        ? STORAGE_TEMPLATE_ROWS
+            .map(r => {
+              const qty15   = firstCustStorage.snap15?.data[r.key]   ?? 0;
+              const qtyLast = firstCustStorage.snapLast?.data[r.key] ?? 0;
+              return { key: r.key, label: r.label, qty15, qtyLast, avg: (qty15 + qtyLast) / 2 };
+            })
+            .filter(r => r.qty15 > 0 || r.qtyLast > 0)
+        : storageRows;
+
+      const effectiveDate15   = firstCustStorage?.date15   || snapDate15   || undefined;
+      const effectiveDateLast = firstCustStorage?.dateLast || snapDateLast || undefined;
+      const effectiveRawRows15   = firstCustStorage?.snap15?.rawRows;
+      const effectiveRawRowsLast = firstCustStorage?.snapLast?.rawRows;
+
       await exportAllToExcel(
         group, period, sourceMap, editsMap,
-        storageRows, omSubsidyAmt, subleaseAmt,
-        snapDate15 || undefined, snapDateLast || undefined,
-        storage15?.rawLocs, storageLast?.rawLocs
+        effectiveStorageRows, omSubsidyAmt, subleaseAmt,
+        effectiveDate15, effectiveDateLast,
+        effectiveRawRows15, effectiveRawRowsLast
       );
     } finally {
       setExportingNow(false);
@@ -2904,7 +3044,7 @@ export default function BillingPage() {
         exportInvoiceToExcel(
           exportPreview!.invoice as BillingInvoice, wmsSource, orderEdits,
           storageRows, snapDate15 || undefined, snapDateLast || undefined,
-          storage15?.rawLocs, storageLast?.rawLocs
+          storage15?.rawRows, storageLast?.rawRows
         ).catch(console.error);
       } else if (exportPreview!.mode === "multi") {
         const ep = exportPreview as Extract<typeof exportPreview, { mode: "multi" }>;
