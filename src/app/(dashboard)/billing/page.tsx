@@ -890,7 +890,7 @@ function addInboundDetailSheet(
   custCode: string,
   orders: Record<string, unknown>[],
   orderEdits: Record<string, Record<string, number>> = {}
-): { sheetName: string; rowCount: number } {
+): { sheetName: string; rowCount: number; dataEndRow: number } {
   const sheetName = `${custCode}_Inbound`.slice(0, 31);
   const ws = wb.addWorksheet(sheetName);
 
@@ -1013,7 +1013,9 @@ function addInboundDetailSheet(
   // Merge label cells A–F in total row
   ws.mergeCells(totalRow.number, 1, totalRow.number, 6);
 
-  return { sheetName, rowCount: orders.length };
+  // lastDataRow = row number of the last data row (= header row 1 + N data rows)
+  // Used by getQtyFormula so SUM stops before the TOTAL row
+  return { sheetName, rowCount: orders.length, dataEndRow: lastDataRow };
 }
 
 /** Add a [CustCode]_B2C sheet */
@@ -1300,6 +1302,7 @@ function addInventoryDetailSheets(
 type DataSheetRefs = {
   b2bSheet?: string;
   inboundSheet?: string;
+  inboundDataEndRow?: number; // last data row (excl. total row) so SUM doesn't double-count
   b2cSheet?: string;
   storageAvgSheet?: string;
 };
@@ -1312,6 +1315,7 @@ function getQtyFormula(
 ): number | ExcelJS.CellFormulaValue {
   const b = refs.b2bSheet;
   const ib = refs.inboundSheet;
+  const ibEnd = refs.inboundDataEndRow ?? 9999; // stop before TOTAL row
   const c = refs.b2cSheet;
   const s = refs.storageAvgSheet;
 
@@ -1348,7 +1352,7 @@ function getQtyFormula(
   };
   if (ibColMap[itemId] && ib) {
     const col = ibColMap[itemId];
-    return { formula: `=SUM('${ib}'!${col}2:${col}9999)`, result: fallbackQty };
+    return { formula: `=SUM('${ib}'!${col}2:${col}${ibEnd})`, result: fallbackQty };
   }
   if (itemId === "b2c_order" && c) {
     return { formula: `=COUNTA('${c}'!A2:A9999)`, result: fallbackQty };
@@ -1560,8 +1564,9 @@ async function exportInvoiceToExcel(
       refs.b2bSheet = sheetName;
     }
     if (source.receiving.length > 0) {
-      const { sheetName } = addInboundDetailSheet(wb, custCode, source.receiving, orderEdits ?? {});
+      const { sheetName, dataEndRow } = addInboundDetailSheet(wb, custCode, source.receiving, orderEdits ?? {});
       refs.inboundSheet = sheetName;
+      refs.inboundDataEndRow = dataEndRow;
     }
     if (source.b2c.length > 0) {
       const { sheetName } = addB2CDetailSheet(wb, custCode, source.b2c);
@@ -1977,8 +1982,9 @@ async function exportAllToExcel(
         refs.b2bSheet = sheetName;
       }
       if (source.receiving.length > 0) {
-        const { sheetName } = addInboundDetailSheet(wb, custCode, source.receiving, custOrderEdits);
+        const { sheetName, dataEndRow } = addInboundDetailSheet(wb, custCode, source.receiving, custOrderEdits);
         refs.inboundSheet = sheetName;
+        refs.inboundDataEndRow = dataEndRow;
       }
       if (source.b2c.length > 0) {
         const { sheetName } = addB2CDetailSheet(wb, custCode, source.b2c);
