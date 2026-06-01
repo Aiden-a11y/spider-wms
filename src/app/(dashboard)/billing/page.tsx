@@ -451,45 +451,50 @@ function addRateTableSheet(wb: ExcelJS.Workbook) {
 }
 
 // ── OM Subsidy sheet ──────────────────────────────────────────────────────────
-// Constants (update annually)
+// Defaults (update annually)
 const OM_SUBSIDY = {
-  employerTaxRate:   0.0765,   // FICA — only % item
-  dental:            31.39,    // fixed monthly default
-  medical:           542.55,   // fixed monthly default
-  wcDefault:         262.63,   // fixed monthly default (Workers Comp)
-  glDefault:         254.05,   // fixed monthly default (GL Insurance)
-  // Reference rates (for info display only)
-  wcRate:            0.1185,
-  wcWarehouseExp:    750685,
-  wcOfficeExp:       480438,
-  wcSalesExp:        52548,
-  wcOfficeRate:      0.0046,
-  wcSalesRate:       0.0069,
-  wcActualPremium:   52482,
-  glAnnualPremium:   122889.91,
-  glRevenueBase:     6600000,
-  allocToSTL:        0.40,
+  ficaRate:     0.0765,  // Employer FICA — % of wages
+  dental:       31.39,   // fixed monthly
+  medical:      542.55,  // fixed monthly
+  wcGrossRate:  0.1185,  // WC gross rate (% of wages)
+  wcDiscount:   0.4266,  // WC company-wide discount %
+  glRate:       0.0186,  // GL applied on (wages + FICA + benefits + WC)
 } as const;
 
-type OmFixedOverhead = { wc: number; gl: number; dental: number; medical: number };
+type OmRates = {
+  wcGrossRate: number; wcDiscount: number; glRate: number;
+  dental: number; medical: number;
+};
 
-/** Calculate STL OM-subsidy allocation amount from raw state strings.
- *  STL Subsidy = (wages + overhead) × allocPct%
- *  FICA is the only % item; WC/GL/Dental/Medical are fixed dollar amounts. */
+/** Workers Comp = wages × wcGrossRate × (1 − wcDiscount) */
+function calcWC(wages: number, r: OmRates) {
+  return wages * r.wcGrossRate * (1 - r.wcDiscount);
+}
+/** GL = (wages + FICA + dental + medical + WC) × glRate */
+function calcGL(wages: number, fica: number, dental: number, medical: number, wc: number, r: OmRates) {
+  return (wages + fica + dental + medical + wc) * r.glRate;
+}
+
+/** Calculate STL OM-subsidy allocation: Charge = (wages + overhead) × allocPct% */
 function calcStlAlloc(
   omWages: string,
   omAllocPct: string,
-  fixed?: OmFixedOverhead,
+  rates?: Partial<OmRates>,
 ): number {
   const S = OM_SUBSIDY;
   const wages = parseFloat(omWages) || 0;
   if (wages <= 0) return 0;
-  const fica = wages * S.employerTaxRate;
-  const wc     = fixed?.wc     ?? S.wcDefault;
-  const gl     = fixed?.gl     ?? S.glDefault;
-  const dental = fixed?.dental ?? S.dental;
-  const medical= fixed?.medical?? S.medical;
-  const totalOverhead = fica + wc + gl + dental + medical;
+  const r: OmRates = {
+    wcGrossRate: rates?.wcGrossRate ?? S.wcGrossRate,
+    wcDiscount:  rates?.wcDiscount  ?? S.wcDiscount,
+    glRate:      rates?.glRate      ?? S.glRate,
+    dental:      rates?.dental      ?? S.dental,
+    medical:     rates?.medical     ?? S.medical,
+  };
+  const fica   = wages * S.ficaRate;
+  const wc     = calcWC(wages, r);
+  const gl     = calcGL(wages, fica, r.dental, r.medical, wc, r);
+  const totalOverhead = fica + r.dental + r.medical + wc + gl;
   const totalCost = wages + totalOverhead;
   const allocPct = Math.max(0, Math.min(100, parseFloat(omAllocPct) || 0));
   return totalCost * (allocPct / 100);
@@ -579,10 +584,10 @@ function addOmSubsidySheet(wb: ExcelJS.Workbook) {
   ws.addRow([]); // blank
   label("Overhead");
 
-  // ── 1. Employer Tax ──
-  const etRow = ws.addRow(["1. Employer Tax",
-    { formula: `ROUND(B${wageRowNum}*${S.employerTaxRate},2)` },
-    { formula: `IF(B${wageRowNum}>0,ROUND(B${wageRowNum}*${S.employerTaxRate},2)/B${wageRowNum},0)` },
+  // ── 1. Employer Tax (FICA 7.65%) ──
+  const etRow = ws.addRow(["1. Employer Tax (FICA 7.65%)",
+    { formula: `ROUND(B${wageRowNum}*${S.ficaRate},2)` },
+    { formula: `IF(B${wageRowNum}>0,ROUND(B${wageRowNum}*${S.ficaRate},2)/B${wageRowNum},0)` },
   ]);
   etRow.height = 14;
   etRow.getCell(2).numFmt = '"$"#,##0.00'; etRow.getCell(2).alignment = { horizontal: "right" };
@@ -617,12 +622,9 @@ function addOmSubsidySheet(wb: ExcelJS.Workbook) {
   ws.addRow([]);
   label("3. Insurance");
 
-  // Workers Comp — calculated from company-wide discount
-  // WC base premium (company-wide)
-  const wcBasePremium = S.wcWarehouseExp * S.wcRate + S.wcOfficeExp * S.wcOfficeRate + S.wcSalesExp * S.wcSalesRate;
-  const wcDiscountRate = 1 - S.wcActualPremium / wcBasePremium; // ~42.66%
-  const wcNetRate = S.wcRate * (1 - wcDiscountRate);
-  const wcRow = ws.addRow(["    Workers Comp",
+  // Workers Comp: wages × wcGrossRate × (1 - wcDiscount)
+  const wcNetRate = S.wcGrossRate * (1 - S.wcDiscount);
+  const wcRow = ws.addRow([`    Workers Comp (${(S.wcGrossRate*100).toFixed(2)}% × ${((1-S.wcDiscount)*100).toFixed(2)}%)`,
     { formula: `ROUND(B${wageRowNum}*${wcNetRate.toFixed(6)},2)` },
     { formula: `IF(B${wageRowNum}>0,ROUND(B${wageRowNum}*${wcNetRate.toFixed(6)},2)/B${wageRowNum},0)` },
   ]);
@@ -633,11 +635,10 @@ function addOmSubsidySheet(wb: ExcelJS.Workbook) {
   [1,2,3].forEach(i => applyBorder(wcRow.getCell(i)));
   const wcRowNum = wcRow.number;
 
-  // General Liability
-  const glRate = S.glAnnualPremium / S.glRevenueBase; // ~1.862%
-  const glRow = ws.addRow(["    General Liability Insurance",
-    { formula: `ROUND(B${wageRowNum}*${glRate.toFixed(6)},2)` },
-    { formula: `IF(B${wageRowNum}>0,ROUND(B${wageRowNum}*${glRate.toFixed(6)},2)/B${wageRowNum},0)` },
+  // General Liability: (wages + FICA + dental + medical + WC) × glRate
+  const glRow = ws.addRow([`    General Liability (${(S.glRate*100).toFixed(2)}% of wages+tax+benefits+WC)`,
+    { formula: `ROUND((B${wageRowNum}+B${etRowNum}+B${dentalRowNum}+B${medRowNum}+B${wcRowNum})*${S.glRate.toFixed(6)},2)` },
+    { formula: `IF(B${wageRowNum}>0,ROUND((B${wageRowNum}+B${etRowNum}+B${dentalRowNum}+B${medRowNum}+B${wcRowNum})*${S.glRate.toFixed(6)},2)/B${wageRowNum},0)` },
   ]);
   glRow.height = 14; glRow.getCell(2).numFmt = '"$"#,##0.00';
   glRow.getCell(2).alignment = { horizontal: "right" };
@@ -675,12 +676,18 @@ function addOmSubsidySheet(wb: ExcelJS.Workbook) {
   [1,2].forEach(i => applyBorder(tcRow.getCell(i)));
   const tcRowNum = tcRow.number;
 
-  // % Allocated to STL
-  const pctRow = ws.addRow(["% Allocated to STL", S.allocToSTL]);
+  // % Allocated to STL (input cell)
+  const pctRow = ws.addRow(["% Allocated to STL", 0]);
   pctRow.height = 14;
   pctRow.getCell(2).numFmt = "0%"; pctRow.getCell(2).alignment = { horizontal: "right" };
+  pctRow.getCell(2).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
+  pctRow.getCell(2).font = { bold: true, size: 10, color: { argb: "FF333333" } };
   [1,2].forEach(i => applyBorder(pctRow.getCell(i)));
   const pctRowNum = pctRow.number;
+  const pctNote = ws.getCell(`C${pctRowNum}`);
+  pctNote.value = "← Enter allocation % here";
+  pctNote.font = { italic: true, size: 9, color: { argb: "FFDD6600" } };
+  ws.mergeCells(`C${pctRowNum}:G${pctRowNum}`);
 
   // Charge to STL (highlighted)
   const chargeRow = ws.addRow(["Charge to STL",
@@ -694,84 +701,9 @@ function addOmSubsidySheet(wb: ExcelJS.Workbook) {
     applyBorder(chargeRow.getCell(i), "medium");
   });
 
-  ws.addRow([]);
-  ws.addRow([]);
-
-  // ── Workers Comp detail table ──
-  const wcTitle = ws.addRow(["Workers Comp — Company-wide Detail"]);
-  ws.mergeCells(`A${wcTitle.number}:G${wcTitle.number}`);
-  Object.assign(wcTitle.getCell(1), {
-    font: { bold: true, size: 10, color: { argb: C.white } },
-    fill: { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } },
-    alignment: { horizontal: "center" },
-  }); applyBorder(wcTitle.getCell(1));
-
-  const wcHdr = ws.addRow(["", "Exposure", "Rate", "Premium Base", "%", "Premium after Discount", "Discount Rate"]);
-  wcHdr.height = 14; wcHdr.eachCell(c => {
-    c.font = { bold: true, size: 9, color: { argb: C.white } };
-    c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
-    c.alignment = { horizontal: "center" }; applyBorder(c);
-  });
-
-  const wcWHBase = S.wcWarehouseExp * S.wcRate;
-  const wcOFBase = S.wcOfficeExp * S.wcOfficeRate;
-  const wcSLBase = S.wcSalesExp * S.wcSalesRate;
-  const wcTotalBase = wcWHBase + wcOFBase + wcSLBase;
-  const discPct = 1 - S.wcActualPremium / wcTotalBase;
-
-  const wcDetails = [
-    ["Warehouse", S.wcWarehouseExp, S.wcRate, wcWHBase, wcWHBase/wcTotalBase, wcWHBase*(1-discPct)],
-    ["Office",    S.wcOfficeExp,    S.wcOfficeRate, wcOFBase, wcOFBase/wcTotalBase, wcOFBase*(1-discPct)],
-    ["Sales",     S.wcSalesExp,     S.wcSalesRate,  wcSLBase, wcSLBase/wcTotalBase, wcSLBase*(1-discPct)],
-  ];
-  wcDetails.forEach((d, i) => {
-    const r = ws.addRow([d[0], d[1], d[2], d[3], d[4], d[5], i === 0 ? discPct : ""]);
-    r.height = 14;
-    const bg = i % 2 === 0 ? C.white : C.rowAlt;
-    r.eachCell(c => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: bg } }; c.font = { size: 9 }; applyBorder(c); });
-    r.getCell(2).numFmt = "#,##0"; r.getCell(3).numFmt = "0.00%";
-    r.getCell(4).numFmt = '"$"#,##0.00'; r.getCell(5).numFmt = "0.0%";
-    r.getCell(6).numFmt = '"$"#,##0.00';
-    if (i === 0) { r.getCell(7).numFmt = "0.00%"; r.getCell(7).font = { bold: true, size: 9 }; }
-  });
-  // Total row
-  const wcTot = ws.addRow(["Total", "", "", wcTotalBase, 1, S.wcActualPremium, discPct]);
-  wcTot.height = 14;
-  wcTot.eachCell(c => {
-    c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.rowAlt } };
-    c.font = { bold: true, size: 9 }; applyBorder(c, "medium");
-  });
-  wcTot.getCell(4).numFmt = '"$"#,##0.00'; wcTot.getCell(5).numFmt = "0.0%";
-  wcTot.getCell(6).numFmt = '"$"#,##0.00'; wcTot.getCell(7).numFmt = "0.00%";
-
-  ws.addRow([]);
-
-  // ── GL Insurance detail ──
-  const glTitle = ws.addRow(["General Liability — Annual Reference"]);
-  ws.mergeCells(`A${glTitle.number}:G${glTitle.number}`);
-  Object.assign(glTitle.getCell(1), {
-    font: { bold: true, size: 10, color: { argb: C.white } },
-    fill: { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } },
-    alignment: { horizontal: "center" },
-  }); applyBorder(glTitle.getCell(1));
-
-  const glDetails = [
-    ["Annual Premium", S.glAnnualPremium],
-    ["Revenue Base",   S.glRevenueBase],
-    ["Effective Rate", glRate],
-  ];
-  glDetails.forEach((d, i) => {
-    const r = ws.addRow([d[0], d[1]]);
-    r.height = 14;
-    r.getCell(1).font = { size: 10 };
-    r.getCell(2).numFmt = i === 2 ? "0.000%" : '"$"#,##0.00';
-    r.getCell(2).alignment = { horizontal: "right" };
-    [1,2].forEach(c => applyBorder(r.getCell(c)));
-  });
-
   // Footer note
   ws.addRow([]);
-  const fn = ws.addRow(["※ Yellow cell (Total Taxable Wages) is the only manual input. All other values auto-calculate."]);
+  const fn = ws.addRow(["※ Yellow cells are manual inputs. All other values auto-calculate based on the formulas above."]);
   ws.mergeCells(`A${fn.number}:G${fn.number}`);
   fn.getCell(1).font = { italic: true, size: 9, color: { argb: "FF888888" } };
 }
@@ -2008,10 +1940,11 @@ export default function BillingPage() {
   const [omWages, setOmWages] = useState<string>("");
   const [omAllocPct, setOmAllocPct] = useState<string>("40");
   const S_OM = OM_SUBSIDY;
-  const [omWcFixed,      setOmWcFixed]      = useState<string>(() => typeof window !== "undefined" ? (localStorage.getItem("billing_om_wc")      ?? String(S_OM.wcDefault))  : String(S_OM.wcDefault));
-  const [omGlFixed,      setOmGlFixed]      = useState<string>(() => typeof window !== "undefined" ? (localStorage.getItem("billing_om_gl")      ?? String(S_OM.glDefault))  : String(S_OM.glDefault));
-  const [omDentalFixed,  setOmDentalFixed]  = useState<string>(() => typeof window !== "undefined" ? (localStorage.getItem("billing_om_dental")  ?? String(S_OM.dental))     : String(S_OM.dental));
-  const [omMedicalFixed, setOmMedicalFixed] = useState<string>(() => typeof window !== "undefined" ? (localStorage.getItem("billing_om_medical") ?? String(S_OM.medical))    : String(S_OM.medical));
+  const [omWcGrossRate,  setOmWcGrossRate]  = useState<string>(() => typeof window !== "undefined" ? (localStorage.getItem("billing_om_wc_gross")    ?? String(S_OM.wcGrossRate * 100)) : String(S_OM.wcGrossRate * 100));
+  const [omWcDiscount,   setOmWcDiscount]   = useState<string>(() => typeof window !== "undefined" ? (localStorage.getItem("billing_om_wc_discount") ?? String(S_OM.wcDiscount * 100))  : String(S_OM.wcDiscount * 100));
+  const [omGlRate,       setOmGlRate]       = useState<string>(() => typeof window !== "undefined" ? (localStorage.getItem("billing_om_gl_rate")     ?? String(S_OM.glRate * 100))      : String(S_OM.glRate * 100));
+  const [omDentalFixed,  setOmDentalFixed]  = useState<string>(() => typeof window !== "undefined" ? (localStorage.getItem("billing_om_dental")      ?? String(S_OM.dental))            : String(S_OM.dental));
+  const [omMedicalFixed, setOmMedicalFixed] = useState<string>(() => typeof window !== "undefined" ? (localStorage.getItem("billing_om_medical")     ?? String(S_OM.medical))           : String(S_OM.medical));
   // Office Sublease (top-level, not per-customer) — persisted to localStorage
   const SUBLEASE_RENT_RATE   = 1490;    // per month
   const SUBLEASE_OP_RATE     = 1.01;    // per sq ft / month
@@ -2392,10 +2325,11 @@ export default function BillingPage() {
   // ── persist sublease values to localStorage ──
   useEffect(() => { localStorage.setItem("billing_sublease_rent_qty", subleaseRentQty); }, [subleaseRentQty]);
   useEffect(() => { localStorage.setItem("billing_sublease_op_qty",   subleaseOpQty);   }, [subleaseOpQty]);
-  useEffect(() => { localStorage.setItem("billing_om_wc",      omWcFixed);      }, [omWcFixed]);
-  useEffect(() => { localStorage.setItem("billing_om_gl",      omGlFixed);      }, [omGlFixed]);
-  useEffect(() => { localStorage.setItem("billing_om_dental",  omDentalFixed);  }, [omDentalFixed]);
-  useEffect(() => { localStorage.setItem("billing_om_medical", omMedicalFixed); }, [omMedicalFixed]);
+  useEffect(() => { localStorage.setItem("billing_om_wc_gross",    omWcGrossRate);  }, [omWcGrossRate]);
+  useEffect(() => { localStorage.setItem("billing_om_wc_discount", omWcDiscount);   }, [omWcDiscount]);
+  useEffect(() => { localStorage.setItem("billing_om_gl_rate",     omGlRate);       }, [omGlRate]);
+  useEffect(() => { localStorage.setItem("billing_om_dental",      omDentalFixed);  }, [omDentalFixed]);
+  useEffect(() => { localStorage.setItem("billing_om_medical",     omMedicalFixed); }, [omMedicalFixed]);
 
   // ── reset snapshot dates when editing period changes ──
   useEffect(() => {
@@ -3441,7 +3375,7 @@ export default function BillingPage() {
                     mode: "multi",
                     invoices: group,
                     period: editing.period,
-                    omSubsidy: calcStlAlloc(omWages, omAllocPct, { wc: parseFloat(omWcFixed)||0, gl: parseFloat(omGlFixed)||0, dental: parseFloat(omDentalFixed)||0, medical: parseFloat(omMedicalFixed)||0 }),
+                    omSubsidy: calcStlAlloc(omWages, omAllocPct, { wcGrossRate: (parseFloat(omWcGrossRate)||0)/100, wcDiscount: (parseFloat(omWcDiscount)||0)/100, glRate: (parseFloat(omGlRate)||0)/100, dental: parseFloat(omDentalFixed)||0, medical: parseFloat(omMedicalFixed)||0 }),
                     subleaseTotal: (parseFloat(subleaseRentQty)||0)*SUBLEASE_RENT_RATE + (parseFloat(subleaseOpQty)||0)*SUBLEASE_OP_RATE,
                   });
                 } else {
@@ -3626,145 +3560,158 @@ export default function BillingPage() {
         {/* ── OM Subsidy panel ── */}
         {extraTab === "om-subsidy" && (() => {
           const S = OM_SUBSIDY;
-          const wages   = parseFloat(omWages)       || 0;
-          const wc      = parseFloat(omWcFixed)      || 0;
-          const gl      = parseFloat(omGlFixed)      || 0;
-          const dental  = parseFloat(omDentalFixed)  || 0;
-          const medical = parseFloat(omMedicalFixed) || 0;
-          // FICA — only % item
-          const ficaRate = S.employerTaxRate;
-          const fica = wages * ficaRate;
-          // Total overhead
-          const totalOverhead = fica + wc + gl + dental + medical;
-          // Total cost = wages + overhead
-          const totalCost = wages + totalOverhead;
-          // STL allocation
-          const allocPct = Math.max(0, Math.min(100, parseFloat(omAllocPct) || 0));
-          const stlAlloc = totalCost * (allocPct / 100);
+          const wages       = parseFloat(omWages)       || 0;
+          const dental      = parseFloat(omDentalFixed)  || 0;
+          const medical     = parseFloat(omMedicalFixed) || 0;
+          const wcGrossRate = (parseFloat(omWcGrossRate) || 0) / 100;
+          const wcDiscount  = (parseFloat(omWcDiscount)  || 0) / 100;
+          const glRate      = (parseFloat(omGlRate)      || 0) / 100;
 
-          const fmtAmt = (v: number) => `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-          const fmtPct = (v: number, base: number) =>
-            base > 0 ? <span className="text-slate-400 text-xs ml-1">({(v / base * 100).toFixed(2)}%)</span> : null;
+          const fica    = wages * S.ficaRate;
+          const wc      = wages * wcGrossRate * (1 - wcDiscount);
+          const glBase  = wages + fica + dental + medical + wc;
+          const gl      = glBase * glRate;
+          const totalOverhead = fica + dental + medical + wc + gl;
+          const totalCost     = wages + totalOverhead;
+          const allocPct      = Math.max(0, Math.min(100, parseFloat(omAllocPct) || 0));
+          const stlAlloc      = totalCost * (allocPct / 100);
 
-          const fixedInput = (val: string, setter: (v: string) => void) => (
-            <div className="flex items-center justify-end gap-1">
+          const show    = wages > 0;
+          const fmtN    = (v: number) => v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          const gpct    = (v: number) => show ? `${(v / wages * 100).toFixed(2)}%` : "";
+
+          const rateInp = (val: string, setter: (s: string) => void) => (
+            <div className="flex items-center gap-0.5">
+              <input type="number" step="0.01" min="0" value={val} onChange={e => setter(e.target.value)}
+                className="w-18 text-right border border-slate-300 bg-white focus:border-blue-400 rounded px-1.5 py-0.5 text-xs font-mono outline-none" />
+              <span className="text-slate-400 text-xs">%</span>
+            </div>
+          );
+          const fixedInp = (val: string, setter: (s: string) => void) => (
+            <div className="flex items-center gap-0.5">
               <span className="text-slate-400 text-xs">$</span>
-              <input type="number" step="0.01" min="0" value={val}
-                onChange={e => setter(e.target.value)}
-                className="w-28 text-right border border-slate-300 bg-slate-50 focus:bg-white focus:border-blue-400 rounded px-2 py-1 text-sm font-mono outline-none" />
+              <input type="number" step="0.01" min="0" value={val} onChange={e => setter(e.target.value)}
+                className="w-24 text-right border border-slate-300 bg-white focus:border-blue-400 rounded px-1.5 py-0.5 text-xs font-mono outline-none" />
             </div>
           );
 
+          type RowProps = { label: React.ReactNode; right: React.ReactNode; pct?: string; bg?: string; bold?: boolean };
+          const Row = ({ label, right, pct = "", bg = "", bold = false }: RowProps) => (
+            <tr className={`border-b border-slate-100 ${bg}`}>
+              <td className={`px-4 py-2 text-slate-700 ${bold ? "font-bold" : ""}`}>{label}</td>
+              <td className="px-4 py-2 text-right font-mono">{right}</td>
+              <td className="px-4 py-2 text-right font-mono text-slate-400 text-xs">{pct}</td>
+            </tr>
+          );
+
           return (
-            <div className="space-y-6 pb-8 max-w-xl">
-              <div className="rounded-xl border border-slate-200 overflow-hidden">
+            <div className="pb-8 max-w-2xl">
+              <div className="rounded-xl border border-slate-200 overflow-hidden text-sm">
                 <div className="bg-purple-700 text-white text-sm font-semibold px-4 py-2.5">OM Subsidy Calculator</div>
-                <table className="w-full text-sm">
+                <table className="w-full">
                   <thead>
-                    <tr className="border-b border-slate-200 bg-slate-50 text-xs text-slate-400 uppercase tracking-wide">
+                    <tr className="bg-slate-50 border-b border-slate-200 text-xs text-slate-400 uppercase">
                       <th className="px-4 py-2 text-left font-medium">Description</th>
                       <th className="px-4 py-2 text-right font-medium">Amount</th>
+                      <th className="px-4 py-2 text-right font-medium w-28">% Gross Wage</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {/* Wages input */}
+                    {/* Wages */}
                     <tr className="border-b border-slate-200 bg-yellow-50">
-                      <td className="px-4 py-3 font-semibold text-slate-800">Total Taxable Wages (monthly)</td>
-                      <td className="px-4 py-3 text-right">
+                      <td className="px-4 py-2.5 font-semibold text-slate-800">Total Taxable Wages</td>
+                      <td className="px-4 py-2.5 text-right">
                         <div className="flex items-center justify-end gap-1">
-                          <span className="text-slate-500 text-sm">$</span>
-                          <input type="number" step="0.01" value={omWages}
-                            onChange={e => setOmWages(e.target.value)} placeholder="0.00"
-                            className="w-36 text-right border border-yellow-300 bg-yellow-50 focus:bg-white focus:border-blue-400 rounded px-2 py-1 text-sm font-mono outline-none" />
+                          <span className="text-slate-500 text-xs">$</span>
+                          <input type="number" step="0.01" value={omWages} onChange={e => setOmWages(e.target.value)} placeholder="0.00"
+                            className="w-32 text-right border border-yellow-300 bg-yellow-50 focus:bg-white focus:border-blue-400 rounded px-2 py-1 font-mono outline-none" />
                         </div>
                       </td>
+                      <td className="px-4 py-2.5 text-right text-slate-400 text-xs font-mono">100%</td>
                     </tr>
-                    {/* Section: Overhead */}
-                    <tr className="bg-slate-50 border-b border-slate-200">
-                      <td colSpan={2} className="px-4 py-1.5 text-xs font-semibold text-slate-400 uppercase tracking-wide">Overhead</td>
+
+                    {/* Overhead header */}
+                    <tr className="bg-slate-50 border-b border-slate-100">
+                      <td colSpan={3} className="px-4 py-1 text-xs font-bold text-slate-400 uppercase tracking-wide">Overhead</td>
                     </tr>
-                    {/* FICA — % of wages */}
+
+                    {/* 1. Employer Tax */}
+                    <Row
+                      label={<>1. Employer Tax &nbsp;<span className="text-blue-500 font-mono text-xs">{(S.ficaRate*100).toFixed(2)}% of wages</span></>}
+                      right={show ? fmtN(fica) : "—"}
+                      pct={gpct(fica)}
+                    />
+
+                    {/* 2. Benefits */}
+                    <tr className="bg-slate-50/50 border-b border-slate-100">
+                      <td colSpan={3} className="px-6 py-0.5 text-xs font-semibold text-slate-400">2. Benefits</td>
+                    </tr>
+                    <Row label={<span className="pl-4">Health Insurance — Dental</span>} right={fixedInp(omDentalFixed, setOmDentalFixed)} pct={gpct(dental)} />
+                    <Row label={<span className="pl-4">Health Insurance — Medical</span>} right={fixedInp(omMedicalFixed, setOmMedicalFixed)} pct={gpct(medical)} />
+
+                    {/* 3. Insurance */}
+                    <tr className="bg-slate-50/50 border-b border-slate-100">
+                      <td colSpan={3} className="px-6 py-0.5 text-xs font-semibold text-slate-400">3. Insurance</td>
+                    </tr>
+                    {/* Workers Comp */}
                     <tr className="border-b border-slate-100">
-                      <td className="px-4 py-2.5 text-slate-700">
-                        Employer Tax (FICA)
-                        <span className="ml-2 text-xs text-blue-500 font-mono">{(ficaRate*100).toFixed(2)}% of wages</span>
+                      <td className="px-4 py-2 text-slate-700">
+                        <div className="pl-4">Workers Comp</div>
+                        <div className="pl-4 flex items-center gap-1 text-[11px] text-slate-400 mt-0.5">
+                          wages × {rateInp(omWcGrossRate, setOmWcGrossRate)} × (1 − {rateInp(omWcDiscount, setOmWcDiscount)})
+                        </div>
                       </td>
-                      <td className="px-4 py-2.5 text-right font-mono text-slate-800">
-                        {wages > 0 ? fmtAmt(fica) : "—"}
-                      </td>
+                      <td className="px-4 py-2 text-right font-mono text-slate-800">{show ? fmtN(wc) : "—"}</td>
+                      <td className="px-4 py-2 text-right font-mono text-slate-400 text-xs">{gpct(wc)}</td>
                     </tr>
-                    {/* Workers Comp — fixed editable */}
-                    <tr className="border-b border-slate-100">
-                      <td className="px-4 py-2.5 text-slate-700">
-                        Workers&apos; Comp
-                        {wages > 0 && fmtPct(wc, wages)}
+                    {/* GL */}
+                    <tr className="border-b border-slate-200">
+                      <td className="px-4 py-2 text-slate-700">
+                        <div className="pl-4">General Liability Insurance</div>
+                        <div className="pl-4 flex items-center gap-1 text-[11px] text-slate-400 mt-0.5">
+                          (wages+tax+benefits+WC) × {rateInp(omGlRate, setOmGlRate)}
+                        </div>
                       </td>
-                      <td className="px-4 py-2.5 text-right">{fixedInput(omWcFixed, setOmWcFixed)}</td>
+                      <td className="px-4 py-2 text-right font-mono text-slate-800">{show ? fmtN(gl) : "—"}</td>
+                      <td className="px-4 py-2 text-right font-mono text-slate-400 text-xs">{gpct(gl)}</td>
                     </tr>
-                    {/* GL Insurance — fixed editable */}
-                    <tr className="border-b border-slate-100">
-                      <td className="px-4 py-2.5 text-slate-700">
-                        General Liability Insurance
-                        {wages > 0 && fmtPct(gl, wages)}
-                      </td>
-                      <td className="px-4 py-2.5 text-right">{fixedInput(omGlFixed, setOmGlFixed)}</td>
-                    </tr>
-                    {/* Dental — fixed editable */}
-                    <tr className="border-b border-slate-100">
-                      <td className="px-4 py-2.5 text-slate-700">
-                        Health Insurance — Dental
-                        {wages > 0 && fmtPct(dental, wages)}
-                      </td>
-                      <td className="px-4 py-2.5 text-right">{fixedInput(omDentalFixed, setOmDentalFixed)}</td>
-                    </tr>
-                    {/* Medical — fixed editable */}
-                    <tr className="border-b border-slate-100">
-                      <td className="px-4 py-2.5 text-slate-700">
-                        Health Insurance — Medical
-                        {wages > 0 && fmtPct(medical, wages)}
-                      </td>
-                      <td className="px-4 py-2.5 text-right">{fixedInput(omMedicalFixed, setOmMedicalFixed)}</td>
-                    </tr>
+
                     {/* Total Overhead */}
-                    <tr className="border-b border-slate-200 bg-slate-100">
-                      <td className="px-4 py-2.5 font-semibold text-slate-700">Total Overhead</td>
-                      <td className="px-4 py-2.5 text-right font-mono font-semibold text-slate-900">
-                        {wages > 0 ? fmtAmt(totalOverhead) : "—"}
-                      </td>
-                    </tr>
-                    {/* Total Cost = Wages + Overhead */}
+                    <Row label="Total Overhead" right={show ? fmtN(totalOverhead) : "—"} pct={gpct(totalOverhead)} bg="bg-slate-100" bold />
+
+                    {/* Total Cost */}
                     <tr className="border-b border-slate-200 bg-slate-200">
-                      <td className="px-4 py-2.5 font-bold text-slate-800">Total Cost (Wages + Overhead)</td>
-                      <td className="px-4 py-2.5 text-right font-mono font-bold text-slate-900">
-                        {wages > 0 ? fmtAmt(totalCost) : "—"}
+                      <td className="px-4 py-2 font-bold text-slate-800">Total Cost</td>
+                      <td className="px-4 py-2 text-right font-mono font-bold text-slate-900">
+                        {show ? <><span className="text-slate-500 font-normal mr-1 text-xs">$</span>{fmtN(totalCost)}</> : "—"}
                       </td>
+                      <td />
                     </tr>
-                    {/* STL Allocation */}
-                    <tr className="bg-purple-50">
-                      <td className="px-4 py-3 font-bold text-purple-900">
-                        × STL Allocation
-                        <span className="ml-2 text-xs text-purple-500 font-normal">(% of Total Cost)</span>
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          <input type="number" step="1" min="0" max="100" value={omAllocPct}
-                            onChange={e => setOmAllocPct(e.target.value)}
-                            className="w-16 text-right border border-purple-300 bg-purple-50 focus:bg-white focus:border-purple-500 rounded px-2 py-1 text-sm font-mono outline-none text-purple-800 font-semibold" />
-                          <span className="text-purple-700 font-semibold text-sm">%</span>
-                          <span className="font-mono font-bold text-purple-900 text-base min-w-24 text-right">
-                            {wages > 0 ? fmtAmt(stlAlloc) : "—"}
-                          </span>
+
+                    {/* % Allocated */}
+                    <tr className="border-b border-slate-100 bg-purple-50">
+                      <td className="px-4 py-2 text-slate-700">% Allocated to STL</td>
+                      <td className="px-4 py-2 text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <input type="number" step="1" min="0" max="100" value={omAllocPct} onChange={e => setOmAllocPct(e.target.value)}
+                            className="w-16 text-right border border-purple-300 bg-purple-50 focus:bg-white focus:border-purple-500 rounded px-2 py-1 font-mono outline-none text-purple-800 font-semibold" />
+                          <span className="text-purple-600 font-semibold">%</span>
                         </div>
                       </td>
+                      <td />
+                    </tr>
+
+                    {/* Charge to STL */}
+                    <tr className="bg-green-100">
+                      <td className="px-4 py-3 font-bold text-green-900 text-base">Charge to STL</td>
+                      <td className="px-4 py-3 text-right font-bold text-green-900 text-base">
+                        {show ? <><span className="text-green-700 font-normal mr-1 text-xs">$</span>{fmtN(stlAlloc)}</> : "—"}
+                      </td>
+                      <td />
                     </tr>
                   </tbody>
                 </table>
               </div>
-
-              {/* Reference: Employer Tax rate note */}
-              <p className="text-xs text-slate-400 px-1">
-                Employer FICA rate: {(S.employerTaxRate * 100).toFixed(2)}% (fixed by law) · All other overhead items are fixed monthly amounts — edit as needed.
-              </p>
             </div>
           );
         })()}
@@ -3852,7 +3799,7 @@ export default function BillingPage() {
         {/* ── Summary panel ── */}
         {extraTab === "summary" && (() => {
           const group        = getCurrentGroup();
-          const omSubsidy    = calcStlAlloc(omWages, omAllocPct, { wc: parseFloat(omWcFixed)||0, gl: parseFloat(omGlFixed)||0, dental: parseFloat(omDentalFixed)||0, medical: parseFloat(omMedicalFixed)||0 });
+          const omSubsidy    = calcStlAlloc(omWages, omAllocPct, { wcGrossRate: (parseFloat(omWcGrossRate)||0)/100, wcDiscount: (parseFloat(omWcDiscount)||0)/100, glRate: (parseFloat(omGlRate)||0)/100, dental: parseFloat(omDentalFixed)||0, medical: parseFloat(omMedicalFixed)||0 });
           const subleaseRent = (parseFloat(subleaseRentQty) || 0) * SUBLEASE_RENT_RATE;
           const subleaseOp   = (parseFloat(subleaseOpQty)   || 0) * SUBLEASE_OP_RATE;
           const subleaseAmt  = subleaseRent + subleaseOp;
