@@ -470,16 +470,19 @@ type OmRates = {
 function calcWC(wages: number, r: OmRates) {
   return wages * r.wcGrossRate * (1 - r.wcDiscount);
 }
-/** GL = (wages + FICA + dental + medical + WC) × glRate */
-function calcGL(wages: number, fica: number, dental: number, medical: number, wc: number, r: OmRates) {
-  return (wages + fica + dental + medical + wc) * r.glRate;
+/** GL = (invoiceRevenue + wages + FICA + dental + medical + WC) × glRate */
+function calcGL(wages: number, fica: number, dental: number, medical: number, wc: number, r: OmRates, invoiceRevenue = 0) {
+  return (invoiceRevenue + wages + fica + dental + medical + wc) * r.glRate;
 }
 
-/** Calculate STL OM-subsidy allocation: Charge = (wages + overhead) × allocPct% */
+/** Calculate STL OM-subsidy allocation: Charge = (wages + overhead) × allocPct%
+ *  invoiceRevenue = sum of all invoice subtotals (inbound+storage+fulfillment+labor+sublease)
+ *  used as part of GL insurance base */
 function calcStlAlloc(
   omWages: string,
   omAllocPct: string,
   rates?: Partial<OmRates>,
+  invoiceRevenue = 0,
 ): number {
   const S = OM_SUBSIDY;
   const wages = parseFloat(omWages) || 0;
@@ -493,14 +496,16 @@ function calcStlAlloc(
   };
   const fica   = wages * S.ficaRate;
   const wc     = calcWC(wages, r);
-  const gl     = calcGL(wages, fica, r.dental, r.medical, wc, r);
+  const gl     = calcGL(wages, fica, r.dental, r.medical, wc, r, invoiceRevenue);
   const totalOverhead = fica + r.dental + r.medical + wc + gl;
   const totalCost = wages + totalOverhead;
   const allocPct = Math.max(0, Math.min(100, parseFloat(omAllocPct) || 0));
   return totalCost * (allocPct / 100);
 }
 
-function addOmSubsidySheet(wb: ExcelJS.Workbook) {
+type InvoiceSheetRef = { sheetName: string; catSubtotalRowNums: Record<string, number> };
+
+function addOmSubsidySheet(wb: ExcelJS.Workbook, invoiceRefs?: InvoiceSheetRef[]) {
   const ws = wb.addWorksheet("OM Subsidy");
   ws.columns = [{ width: 32 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 12 }, { width: 18 }, { width: 14 }];
 
@@ -635,10 +640,50 @@ function addOmSubsidySheet(wb: ExcelJS.Workbook) {
   [1,2,3].forEach(i => applyBorder(wcRow.getCell(i)));
   const wcRowNum = wcRow.number;
 
-  // General Liability: (wages + FICA + dental + medical + WC) × glRate
-  const glRow = ws.addRow([`    General Liability (${(S.glRate*100).toFixed(2)}% of wages+tax+benefits+WC)`,
-    { formula: `ROUND((B${wageRowNum}+B${etRowNum}+B${dentalRowNum}+B${medRowNum}+B${wcRowNum})*${S.glRate.toFixed(6)},2)` },
-    { formula: `IF(B${wageRowNum}>0,ROUND((B${wageRowNum}+B${etRowNum}+B${dentalRowNum}+B${medRowNum}+B${wcRowNum})*${S.glRate.toFixed(6)},2)/B${wageRowNum},0)` },
+  // General Liability: (invoiceRevenue + wages + FICA + dental + medical + WC) × glRate
+  // Build cross-sheet reference to invoice subtotals
+  const invRevParts: string[] = [];
+  if (invoiceRefs && invoiceRefs.length > 0) {
+    for (const ref of invoiceRefs) {
+      const safeName = ref.sheetName.includes(" ") || ref.sheetName.includes("'")
+        ? `'${ref.sheetName.replace(/'/g, "''")}'`
+        : ref.sheetName;
+      for (const rowNum of Object.values(ref.catSubtotalRowNums)) {
+        invRevParts.push(`${safeName}!G${rowNum}`);
+      }
+    }
+  }
+
+  // "Applicable Revenue" info row (invoice subtotals linked from invoice sheets)
+  let appRevRowNum = -1;
+  if (invRevParts.length > 0) {
+    ws.addRow([]); // spacer
+    const appRevInfoRow = ws.addRow(["  ↳ GL Insurance Base includes:"]);
+    appRevInfoRow.getCell(1).font = { italic: true, size: 9, color: { argb: "FF888888" } };
+
+    const appRevRow = ws.addRow([`    Applicable Revenue (Inbound+Storage+Fulfillment+Labor+Sublease)`,
+      { formula: invRevParts.join("+") },
+    ]);
+    appRevRow.height = 14;
+    appRevRow.getCell(1).font = { size: 9, italic: true, color: { argb: "FF444444" } };
+    appRevRow.getCell(2).numFmt = '"$"#,##0.00'; appRevRow.getCell(2).alignment = { horizontal: "right" };
+    appRevRow.getCell(2).font = { size: 9, color: { argb: "FF444444" } };
+    [1,2].forEach(i => applyBorder(appRevRow.getCell(i)));
+    appRevRowNum = appRevRow.number;
+    ws.addRow([]); // spacer
+  }
+
+  const glBaseFormula = appRevRowNum > 0
+    ? `B${appRevRowNum}+B${wageRowNum}+B${etRowNum}+B${dentalRowNum}+B${medRowNum}+B${wcRowNum}`
+    : `B${wageRowNum}+B${etRowNum}+B${dentalRowNum}+B${medRowNum}+B${wcRowNum}`;
+
+  const glLabel = appRevRowNum > 0
+    ? `    General Liability (${(S.glRate*100).toFixed(2)}% of revenue+wages+tax+benefits+WC)`
+    : `    General Liability (${(S.glRate*100).toFixed(2)}% of wages+tax+benefits+WC)`;
+
+  const glRow = ws.addRow([glLabel,
+    { formula: `ROUND((${glBaseFormula})*${S.glRate.toFixed(6)},2)` },
+    { formula: `IF(B${wageRowNum}>0,ROUND((${glBaseFormula})*${S.glRate.toFixed(6)},2)/B${wageRowNum},0)` },
   ]);
   glRow.height = 14; glRow.getCell(2).numFmt = '"$"#,##0.00';
   glRow.getCell(2).alignment = { horizontal: "right" };
@@ -1392,14 +1437,16 @@ async function exportInvoiceToExcel(
   // Invoice sheet: use formula version if we have data sheets, else styled static
   const sheetName = (invoice.customerName || invoice.customer).slice(0, 31);
   const hasRefs = Object.keys(refs).length > 0;
+  let invoiceSheetRefs: InvoiceSheetRef[] | undefined;
   if (hasRefs) {
-    fillInvoiceSheetFormula(wb.addWorksheet(sheetName), invoice, refs);
+    const meta = fillInvoiceSheetFormula(wb.addWorksheet(sheetName), invoice, refs);
+    invoiceSheetRefs = [{ sheetName, catSubtotalRowNums: meta.catSubtotalRowNums }];
   } else {
     fillInvoiceSheet(wb.addWorksheet(sheetName), invoice);
   }
 
   addRateTableSheet(wb);
-  addOmSubsidySheet(wb);
+  addOmSubsidySheet(wb, invoiceSheetRefs);
   await downloadWorkbook(wb, `Invoice_${invoice.customer}_${invoice.period}.xlsx`);
 }
 
@@ -1846,7 +1893,7 @@ async function exportAllToExcel(
   }
 
   addRateTableSheet(wb);
-  addOmSubsidySheet(wb);
+  addOmSubsidySheet(wb, customerMetas.map(m => ({ sheetName: m.sheetName, catSubtotalRowNums: m.catSubtotalRowNums })));
 
   await downloadWorkbook(wb, `Invoice_ALL_${period}.xlsx`);
 }
@@ -3375,7 +3422,12 @@ export default function BillingPage() {
                     mode: "multi",
                     invoices: group,
                     period: editing.period,
-                    omSubsidy: calcStlAlloc(omWages, omAllocPct, { wcGrossRate: (parseFloat(omWcGrossRate)||0)/100, wcDiscount: (parseFloat(omWcDiscount)||0)/100, glRate: (parseFloat(omGlRate)||0)/100, dental: parseFloat(omDentalFixed)||0, medical: parseFloat(omMedicalFixed)||0 }),
+                    omSubsidy: (() => {
+                      const _grp = getCurrentGroup();
+                      const _sl = ((parseFloat(subleaseRentQty)||0)*SUBLEASE_RENT_RATE) + ((parseFloat(subleaseOpQty)||0)*SUBLEASE_OP_RATE);
+                      const _rev = _grp.reduce((s, inv) => s + inv.total, 0) + _sl;
+                      return calcStlAlloc(omWages, omAllocPct, { wcGrossRate: (parseFloat(omWcGrossRate)||0)/100, wcDiscount: (parseFloat(omWcDiscount)||0)/100, glRate: (parseFloat(omGlRate)||0)/100, dental: parseFloat(omDentalFixed)||0, medical: parseFloat(omMedicalFixed)||0 }, _rev);
+                    })(),
                     subleaseTotal: (parseFloat(subleaseRentQty)||0)*SUBLEASE_RENT_RATE + (parseFloat(subleaseOpQty)||0)*SUBLEASE_OP_RATE,
                   });
                 } else {
@@ -3567,9 +3619,17 @@ export default function BillingPage() {
           const wcDiscount  = (parseFloat(omWcDiscount)  || 0) / 100;
           const glRate      = (parseFloat(omGlRate)      || 0) / 100;
 
+          // Invoice revenue base for GL (inbound+storage+fulfillment+labor+sublease)
+          const invRevenue  = (() => {
+            const group = getCurrentGroup();
+            const invTotal = group.reduce((s, inv) => s + inv.total, 0);
+            const subleaseAmt2 = ((parseFloat(subleaseRentQty)||0) * SUBLEASE_RENT_RATE) + ((parseFloat(subleaseOpQty)||0) * SUBLEASE_OP_RATE);
+            return invTotal + subleaseAmt2;
+          })();
+
           const fica    = wages * S.ficaRate;
           const wc      = wages * wcGrossRate * (1 - wcDiscount);
-          const glBase  = wages + fica + dental + medical + wc;
+          const glBase  = invRevenue + wages + fica + dental + medical + wc;
           const gl      = glBase * glRate;
           const totalOverhead = fica + dental + medical + wc + gl;
           const totalCost     = wages + totalOverhead;
@@ -3669,8 +3729,13 @@ export default function BillingPage() {
                       <td className="px-4 py-2 text-slate-700">
                         <div className="pl-4">General Liability Insurance</div>
                         <div className="pl-4 flex items-center gap-1 text-[11px] text-slate-400 mt-0.5">
-                          (wages+tax+benefits+WC) × {rateInp(omGlRate, setOmGlRate)}
+                          (invoice revenue + wages+tax+benefits+WC) × {rateInp(omGlRate, setOmGlRate)}
                         </div>
+                        {invRevenue > 0 && (
+                          <div className="pl-4 text-[10px] text-slate-400 mt-0.5">
+                            Revenue base: ${invRevenue.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-2 text-right font-mono text-slate-800">{show ? fmtN(gl) : "—"}</td>
                       <td className="px-4 py-2 text-right font-mono text-slate-400 text-xs">{gpct(gl)}</td>
@@ -3799,10 +3864,11 @@ export default function BillingPage() {
         {/* ── Summary panel ── */}
         {extraTab === "summary" && (() => {
           const group        = getCurrentGroup();
-          const omSubsidy    = calcStlAlloc(omWages, omAllocPct, { wcGrossRate: (parseFloat(omWcGrossRate)||0)/100, wcDiscount: (parseFloat(omWcDiscount)||0)/100, glRate: (parseFloat(omGlRate)||0)/100, dental: parseFloat(omDentalFixed)||0, medical: parseFloat(omMedicalFixed)||0 });
           const subleaseRent = (parseFloat(subleaseRentQty) || 0) * SUBLEASE_RENT_RATE;
           const subleaseOp   = (parseFloat(subleaseOpQty)   || 0) * SUBLEASE_OP_RATE;
           const subleaseAmt  = subleaseRent + subleaseOp;
+          const invoiceRevTotal = group.reduce((s, inv) => s + inv.total, 0) + subleaseAmt;
+          const omSubsidy    = calcStlAlloc(omWages, omAllocPct, { wcGrossRate: (parseFloat(omWcGrossRate)||0)/100, wcDiscount: (parseFloat(omWcDiscount)||0)/100, glRate: (parseFloat(omGlRate)||0)/100, dental: parseFloat(omDentalFixed)||0, medical: parseFloat(omMedicalFixed)||0 }, invoiceRevTotal);
           const fmt          = formatUSD;
 
           // ── Aggregate line items across all invoices (same as Excel Summary sheet) ──
