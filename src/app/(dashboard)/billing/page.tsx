@@ -950,12 +950,71 @@ function addB2CDetailSheet(
   return { sheetName, rowCount: orders.length };
 }
 
+type StorageRawLoc = { loc: string; type: string };
+
+/** Add a raw-location sheet (evidence) for one storage snapshot */
+function addStorageRawSheet(
+  wb: ExcelJS.Workbook,
+  date: string,
+  rawLocs: StorageRawLoc[]
+): string {
+  const name = `StorageRaw_${date}`.slice(0, 31);
+  const ws = wb.addWorksheet(name);
+  ws.columns = [{ width: 6 }, { width: 24 }, { width: 18 }];
+
+  // Date label row
+  const dateRow = ws.addRow([date]);
+  ws.mergeCells(`A${dateRow.number}:C${dateRow.number}`);
+  dateRow.getCell(1).font = { bold: true, size: 10, color: { argb: C.navy } };
+  dateRow.getCell(1).alignment = { horizontal: "center" };
+  dateRow.height = 14;
+
+  // Column header
+  const hdr = ws.addRow(["#", "Location", "Type"]);
+  hdr.height = 16;
+  hdr.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: C.white }, size: 10 };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
+    cell.alignment = { vertical: "middle", horizontal: "center" };
+    applyBorder(cell, "medium");
+  });
+
+  // Sort by type, then location
+  const sorted = [...rawLocs].sort(
+    (a, b) => a.type.localeCompare(b.type) || a.loc.localeCompare(b.loc)
+  );
+  sorted.forEach((item, i) => {
+    const r = ws.addRow([i + 1, item.loc, item.type]);
+    r.height = 14;
+    r.eachCell((cell, col) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: i % 2 === 0 ? C.white : C.rowAlt } };
+      cell.font = { size: 10 };
+      cell.alignment = { vertical: "middle", horizontal: col === 1 ? "center" : "left" };
+      applyBorder(cell);
+    });
+  });
+
+  // Total row
+  const totRow = ws.addRow(["", `Total: ${sorted.length}`, ""]);
+  ws.mergeCells(`B${totRow.number}:C${totRow.number}`);
+  totRow.height = 15;
+  totRow.eachCell((cell) => {
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.subtotalBg } };
+    cell.font = { bold: true, size: 10 };
+    applyBorder(cell, "medium");
+  });
+
+  return name;
+}
+
 /** Add Storage snapshot sheets to the workbook, labeled with the actual dates used */
 function addInventoryDetailSheets(
   wb: ExcelJS.Workbook,
   storageRows: StorageRow[],
   date1 = "Date 1",
-  date2 = "Date 2"
+  date2 = "Date 2",
+  rawLocs15?: StorageRawLoc[],
+  rawLocsLast?: StorageRawLoc[]
 ): { avgSheetName: string; snap1SheetName: string; snap2SheetName: string } {
   // Truncate date labels to fit Excel 31-char sheet name limit
   const snap1Name = `Storage_${date1}`.slice(0, 31);
@@ -1073,6 +1132,10 @@ function addInventoryDetailSheets(
     applyBorder(cell, "medium");
   });
   [2, 3, 4].forEach(c => { wsAvg.getRow(totAvg.number).getCell(c).numFmt = "#,##0.00"; });
+
+  // Raw location sheets (근거 데이터)
+  if (rawLocs15 && rawLocs15.length > 0)   addStorageRawSheet(wb, date1, rawLocs15);
+  if (rawLocsLast && rawLocsLast.length > 0) addStorageRawSheet(wb, date2, rawLocsLast);
 
   return { avgSheetName, snap1SheetName: snap1Name, snap2SheetName: snap2Name };
 }
@@ -1312,7 +1375,9 @@ async function exportInvoiceToExcel(
   orderEdits?: Record<string, Record<string, number>>,
   storageRows?: StorageRow[],
   snapDate1?: string,
-  snapDate2?: string
+  snapDate2?: string,
+  rawLocs15?: StorageRawLoc[],
+  rawLocsLast?: StorageRawLoc[]
 ) {
   const wb = new ExcelJS.Workbook();
   const custCode = invoice.customer;
@@ -1334,7 +1399,7 @@ async function exportInvoiceToExcel(
     }
   }
   if (storageRows && storageRows.length > 0) {
-    const { avgSheetName } = addInventoryDetailSheets(wb, storageRows, snapDate1, snapDate2);
+    const { avgSheetName } = addInventoryDetailSheets(wb, storageRows, snapDate1, snapDate2, rawLocs15, rawLocsLast);
     refs.storageAvgSheet = avgSheetName;
   }
 
@@ -1362,7 +1427,9 @@ async function exportAllToExcel(
   omSubsidy?: number,
   subleaseTotal?: number,
   snapDate1?: string,
-  snapDate2?: string
+  snapDate2?: string,
+  rawLocs15?: StorageRawLoc[],
+  rawLocsLast?: StorageRawLoc[]
 ) {
   if (invoices.length === 0) return;
   const wb = new ExcelJS.Workbook();
@@ -1629,7 +1696,7 @@ async function exportAllToExcel(
   // ── Inventory storage sheets (shared across all customers) ──
   let sharedStorageAvg: string | undefined;
   if (storageRows && storageRows.length > 0) {
-    const { avgSheetName } = addInventoryDetailSheets(wb, storageRows, snapDate1, snapDate2);
+    const { avgSheetName } = addInventoryDetailSheets(wb, storageRows, snapDate1, snapDate2, rawLocs15, rawLocsLast);
     sharedStorageAvg = avgSheetName;
   }
 
@@ -1864,8 +1931,12 @@ export default function BillingPage() {
   const [isMultiSelect, setIsMultiSelect] = useState(false);
   const [selectedCustomers, setSelectedCustomers] = useState<string[]>([]);
 
+  // ── Export loading state ──
+  const [exportingNow, setExportingNow] = useState(false);
+
   // ── Storage import ──
-  type StorageSnap = { data: Record<string, number>; file: string };
+  type StorageRawLoc = { loc: string; type: string };
+  type StorageSnap = { data: Record<string, number>; file: string; rawLocs?: StorageRawLoc[] };
   const [storage15, setStorage15] = useState<StorageSnap | null>(null);
   const [storageLast, setStorageLast] = useState<StorageSnap | null>(null);
   const [storageUploading15, setStorageUploading15] = useState(false);
@@ -1969,8 +2040,8 @@ export default function BillingPage() {
         snap15:   (StorageSnap & { date: string }) | null;
         snapLast: (StorageSnap & { date: string }) | null;
       };
-      setStorage15(snap15   ? { data: snap15.data,   file: snap15.file   } : null);
-      setStorageLast(snapLast ? { data: snapLast.data, file: snapLast.file } : null);
+      setStorage15(snap15   ? { data: snap15.data,   file: snap15.file,   rawLocs: snap15.rawLocs   } : null);
+      setStorageLast(snapLast ? { data: snapLast.data, file: snapLast.file, rawLocs: snapLast.rawLocs } : null);
       if (snap15?.date)   setSnapDate15(snap15.date);
       if (snapLast?.date) setSnapDateLast(snapLast.date);
     } catch {
@@ -2042,7 +2113,7 @@ export default function BillingPage() {
       const occupancyLookup = buildLocationOccupancyLookup(locArr);
 
       // 2. Query inventory_history via server API (uses service-role key, bypasses RLS)
-      const fetchSnap = async (date: string): Promise<{ data: Record<string, number>; totalRows: number; matchedRows: number; actualDate: string }> => {
+      const fetchSnap = async (date: string): Promise<{ data: Record<string, number>; totalRows: number; matchedRows: number; actualDate: string; rawLocs: StorageRawLoc[] }> => {
         const url = `/api/billing/storage-snapshot?warehouseCode=${encodeURIComponent(whCode)}&customerCode=${encodeURIComponent(editing!.customer)}&date=${encodeURIComponent(date)}`;
         const res = await fetch(url);
         if (!res.ok) {
@@ -2050,10 +2121,11 @@ export default function BillingPage() {
           throw new Error(`Snapshot fetch error (${date}): ${err.error ?? res.status}`);
         }
         const json: { date: string; rows: number; locations: string[] } = await res.json();
-        if (json.rows === 0) return { data: {}, totalRows: 0, matchedRows: 0, actualDate: date };
+        if (json.rows === 0) return { data: {}, totalRows: 0, matchedRows: 0, actualDate: date, rawLocs: [] };
 
-        // Count distinct locations per storage type using the same wms.ts lookup
+        // Count distinct locations per storage type + collect raw rows
         const locSets: Record<string, Set<string>> = {};
+        const rawLocs: StorageRawLoc[] = [];
         let matchedRows = 0;
         for (const loc of json.locations) {
           if (!loc) continue;
@@ -2063,12 +2135,13 @@ export default function BillingPage() {
           const typeLabel = getLocationOccupancyInfo(occupancyLookup, fakeRow);
           const key = STORAGE_LABEL_MAP[typeLabel.toLowerCase()];
           if (!key) continue;
+          rawLocs.push({ loc, type: typeLabel });
           matchedRows++;
           (locSets[key] ??= new Set()).add(loc);
         }
         const result: Record<string, number> = {};
         for (const [k, s] of Object.entries(locSets)) result[k] = s.size;
-        return { data: result, totalRows: json.rows, matchedRows, actualDate: date };
+        return { data: result, totalRows: json.rows, matchedRows, actualDate: date, rawLocs };
       };
 
       const [snap15, snapLast] = await Promise.all([
@@ -2094,8 +2167,8 @@ export default function BillingPage() {
           `The WMS location list returned ${locArr.length} locations (${occupancyLookup.size} with occupancyInfo).`
         );
       } else {
-        const s15  = { data: snap15.data,   file: `WMS History · ${date15}` };
-        const sLst = { data: snapLast.data, file: `WMS History · ${dateLast}` };
+        const s15  = { data: snap15.data,   file: `WMS History · ${date15}`,   rawLocs: snap15.rawLocs };
+        const sLst = { data: snapLast.data, file: `WMS History · ${dateLast}`, rawLocs: snapLast.rawLocs };
         setStorage15(s15);
         setStorageLast(sLst);
         // Persist to localStorage so re-opening the invoice restores snap data
@@ -2624,6 +2697,50 @@ export default function BillingPage() {
     }
   }
 
+  // ── Export with auto-fetch: re-fetch any missing WMS source data before exporting ──
+  async function handleExportWithFetch(
+    group: BillingInvoice[],
+    period: string,
+    omSubsidyAmt: number,
+    subleaseAmt: number
+  ) {
+    if (exportingNow) return;
+    setExportingNow(true);
+    try {
+      // Merge current editing customer into source/edits maps
+      const sourceMap: Record<string, WmsSource> = {
+        ...wmsSourceMap,
+        ...(editing && wmsSource ? { [editing.customer]: wmsSource } : {}),
+      };
+      const editsMap: Record<string, Record<string, Record<string, number>>> = {
+        ...orderEditsMap,
+        ...(editing ? { [editing.customer]: orderEdits } : {}),
+      };
+
+      // Auto-fetch WMS order data for any customer not yet in sourceMap
+      for (const inv of group) {
+        if (!sourceMap[inv.customer]) {
+          try {
+            const { source } = await fetchWmsQty(inv.customer, period);
+            sourceMap[inv.customer] = source;
+            setWmsSourceMap(prev => ({ ...prev, [inv.customer]: source }));
+          } catch (e) {
+            console.warn(`Auto-fetch failed for ${inv.customer}:`, e);
+          }
+        }
+      }
+
+      await exportAllToExcel(
+        group, period, sourceMap, editsMap,
+        storageRows, omSubsidyAmt, subleaseAmt,
+        snapDate15 || undefined, snapDateLast || undefined,
+        storage15?.rawLocs, storageLast?.rawLocs
+      );
+    } finally {
+      setExportingNow(false);
+    }
+  }
+
   // ── "All Customers" export: fetch all + multi-sheet Excel ──
   async function exportAllCustomers() {
     if (customers.length === 0) return;
@@ -2784,10 +2901,14 @@ export default function BillingPage() {
 
     function doExport() {
       if (exportPreview!.mode === "single") {
-        exportInvoiceToExcel(exportPreview!.invoice as BillingInvoice).catch(console.error);
+        exportInvoiceToExcel(
+          exportPreview!.invoice as BillingInvoice, wmsSource, orderEdits,
+          storageRows, snapDate15 || undefined, snapDateLast || undefined,
+          storage15?.rawLocs, storageLast?.rawLocs
+        ).catch(console.error);
       } else if (exportPreview!.mode === "multi") {
         const ep = exportPreview as Extract<typeof exportPreview, { mode: "multi" }>;
-        exportAllToExcel(ep.invoices, ep.period, wmsSourceMap, { [editing?.customer ?? ""]: orderEdits }, storageRows, ep.omSubsidy, ep.subleaseTotal, snapDate15 || undefined, snapDateLast || undefined).catch(console.error);
+        handleExportWithFetch(ep.invoices, ep.period, ep.omSubsidy, ep.subleaseTotal).catch(console.error);
       } else {
         const ep = exportPreview as Extract<typeof exportPreview, { mode: "list" }>;
         exportAllToExcel(ep.invoices, ep.period, null, null, undefined, undefined, subleaseAmt).catch(console.error);
@@ -3472,15 +3593,15 @@ export default function BillingPage() {
               {/* Download button */}
               <div className="flex justify-end">
                 <button
-                  onClick={() => {
-                    const mergedEditsMap  = { ...orderEditsMap,  ...(editing ? { [editing.customer]: orderEdits }  : {}) };
-                    const mergedSourceMap = { ...wmsSourceMap,   ...(editing && wmsSource ? { [editing.customer]: wmsSource } : {}) };
-                    exportAllToExcel(group, editing!.period, mergedSourceMap, mergedEditsMap, storageRows, omSubsidy, subleaseAmt, snapDate15 || undefined, snapDateLast || undefined).catch(console.error);
-                  }}
-                  className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-sm"
+                  disabled={exportingNow}
+                  onClick={() => handleExportWithFetch(group, editing!.period, omSubsidy, subleaseAmt).catch(console.error)}
+                  className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-sm disabled:opacity-60"
                 >
-                  <Download className="w-4 h-4" />
-                  Download Excel
+                  {exportingNow ? (
+                    <><RefreshCw className="w-4 h-4 animate-spin" />Preparing...</>
+                  ) : (
+                    <><Download className="w-4 h-4" />Download Excel</>
+                  )}
                 </button>
               </div>
 
