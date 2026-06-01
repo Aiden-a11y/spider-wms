@@ -952,14 +952,16 @@ function addB2CDetailSheet(
 
 /** Full raw inventory_history row, enriched with occupancy type */
 type StorageRawRow = {
-  location:     string;
-  locationType: string;    // computed from occupancy lookup
-  sku:          string;
-  product_name: string | null;
-  qty:          number;
+  location:      string;
+  locationType:  string;    // computed from occupancy lookup
+  sku:           string;
+  product_name:  string | null;
+  qty:           number;
   available_qty: number | null;
-  lot:          string | null;
-  expire_date:  string | null;
+  lot:           string | null;
+  expire_date:   string | null;
+  customer_code?:  string;
+  warehouse_code?: string;
 };
 
 /** Add a raw-inventory sheet (SKU/qty evidence) for one storage snapshot */
@@ -970,27 +972,33 @@ function addStorageRawSheet(
 ): string {
   const name = `StorageRaw_${date}`.slice(0, 31);
   const ws = wb.addWorksheet(name);
+  // 11 columns: # | Customer | Warehouse | Location | Type | SKU | Product Name | Qty | Avail Qty | Lot | Expire Date
   ws.columns = [
-    { width: 6 },  // #
+    { width: 5  }, // #
+    { width: 14 }, // Customer
+    { width: 12 }, // Warehouse
     { width: 22 }, // Location
     { width: 18 }, // Type
-    { width: 20 }, // SKU
-    { width: 28 }, // Product Name
+    { width: 22 }, // SKU
+    { width: 30 }, // Product Name
     { width: 8  }, // Qty
     { width: 10 }, // Avail Qty
     { width: 14 }, // Lot
     { width: 14 }, // Expire Date
   ];
 
-  // Date label row (merged)
+  // Date label row (merged A:K)
   const dateRow = ws.addRow([date]);
-  ws.mergeCells(`A${dateRow.number}:I${dateRow.number}`);
+  ws.mergeCells(`A${dateRow.number}:K${dateRow.number}`);
   dateRow.getCell(1).font = { bold: true, size: 10, color: { argb: C.navy } };
   dateRow.getCell(1).alignment = { horizontal: "center" };
   dateRow.height = 14;
 
   // Column headers
-  const hdr = ws.addRow(["#", "Location", "Type", "SKU", "Product Name", "Qty", "Avail Qty", "Lot", "Expire Date"]);
+  const hdr = ws.addRow([
+    "#", "Customer", "Warehouse", "Location", "Type",
+    "SKU", "Product Name", "Qty", "Avail Qty", "Lot", "Expire Date",
+  ]);
   hdr.height = 16;
   hdr.eachCell((cell) => {
     cell.font = { bold: true, color: { argb: C.white }, size: 10 };
@@ -999,13 +1007,19 @@ function addStorageRawSheet(
     applyBorder(cell, "medium");
   });
 
-  // Sort by type → location → SKU
+  // Sort: customer → type → location → SKU
   const sorted = [...rawRows].sort(
-    (a, b) => a.locationType.localeCompare(b.locationType) || a.location.localeCompare(b.location) || a.sku.localeCompare(b.sku)
+    (a, b) =>
+      (a.customer_code ?? "").localeCompare(b.customer_code ?? "") ||
+      a.locationType.localeCompare(b.locationType) ||
+      a.location.localeCompare(b.location) ||
+      a.sku.localeCompare(b.sku)
   );
   sorted.forEach((item, i) => {
     const r = ws.addRow([
       i + 1,
+      item.customer_code  ?? "",
+      item.warehouse_code ?? "",
       item.location,
       item.locationType,
       item.sku,
@@ -1019,21 +1033,21 @@ function addStorageRawSheet(
     r.eachCell((cell, col) => {
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: i % 2 === 0 ? C.white : C.rowAlt } };
       cell.font = { size: 10 };
-      cell.alignment = { vertical: "middle", horizontal: col <= 3 || col >= 4 ? "left" : "right" };
+      cell.alignment = { vertical: "middle", horizontal: "left" };
       if (col === 1) cell.alignment = { horizontal: "center" };
-      if (col === 6 || col === 7) { cell.alignment = { horizontal: "right" }; cell.numFmt = "#,##0"; }
+      if (col === 8 || col === 9) { cell.alignment = { horizontal: "right" }; cell.numFmt = "#,##0"; }
       applyBorder(cell);
     });
   });
 
   // Total row
   const totQty = sorted.reduce((s, r) => s + r.qty, 0);
-  const totRow = ws.addRow(["", `Total: ${sorted.length} rows`, "", "", "", totQty, "", "", ""]);
+  const totRow = ws.addRow(["", `Total: ${sorted.length} rows`, "", "", "", "", "", totQty, "", "", ""]);
   totRow.height = 15;
   totRow.eachCell((cell, col) => {
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.subtotalBg } };
     cell.font = { bold: true, size: 10 };
-    if (col === 6) { cell.numFmt = "#,##0"; cell.alignment = { horizontal: "right" }; }
+    if (col === 8) { cell.numFmt = "#,##0"; cell.alignment = { horizontal: "right" }; }
     applyBorder(cell, "medium");
   });
 
@@ -2186,13 +2200,15 @@ export default function BillingPage() {
             location: string; sku: string; product_name: string | null;
             qty: number; available_qty: number | null;
             lot: string | null; expire_date: string | null;
+            customer_code?: string; warehouse_code?: string;
           }>;
         } = await res.json();
         if (json.rows === 0) return { data: {}, totalRows: 0, matchedRows: 0, actualDate: date, rawRows: [] };
 
         // Use rawRows from API (full SKU/qty data); fall back to locations[] for older API
         const apiRows = json.rawRows ?? json.locations.map(loc => ({
-          location: loc, sku: "", product_name: null, qty: 1, available_qty: null, lot: null, expire_date: null
+          location: loc, sku: "", product_name: null, qty: 1, available_qty: null, lot: null, expire_date: null,
+          customer_code: undefined, warehouse_code: undefined,
         }));
 
         const locSets: Record<string, Set<string>> = {};
@@ -2209,19 +2225,26 @@ export default function BillingPage() {
           };
           const typeLabel = getLocationOccupancyInfo(occupancyLookup, fakeRow);
           const key = STORAGE_LABEL_MAP[typeLabel.toLowerCase()];
-          if (!key) continue;
+
+          // Always add to rawRows (evidence sheet shows ALL inventory)
           rawRows.push({
-            location:     row.location,
-            locationType: typeLabel,
-            sku:          row.sku,
-            product_name: row.product_name,
-            qty:          row.qty,
-            available_qty: row.available_qty,
-            lot:          row.lot,
-            expire_date:  row.expire_date,
+            location:       row.location,
+            locationType:   typeLabel || "Unknown",
+            sku:            row.sku,
+            product_name:   row.product_name,
+            qty:            row.qty,
+            available_qty:  row.available_qty,
+            lot:            row.lot,
+            expire_date:    row.expire_date,
+            customer_code:  row.customer_code,
+            warehouse_code: row.warehouse_code,
           });
-          matchedRows++;
-          (locSets[key] ??= new Set()).add(row.location);
+
+          // Only matched types contribute to billing calculation
+          if (key) {
+            matchedRows++;
+            (locSets[key] ??= new Set()).add(row.location);
+          }
         }
         const result: Record<string, number> = {};
         for (const [k, s] of Object.entries(locSets)) result[k] = s.size;
