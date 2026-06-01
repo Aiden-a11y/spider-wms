@@ -1943,13 +1943,51 @@ export default function BillingPage() {
     return result;
   }
 
+  // Helper: save current storage snaps to localStorage for a period
+  function persistStorageToLocal(
+    period: string,
+    snap15: StorageSnap | null,
+    snapLast: StorageSnap | null,
+    date1?: string,
+    date2?: string
+  ) {
+    if (!snap15 && !snapLast) return;
+    try {
+      localStorage.setItem(`billing_storage_${period}`, JSON.stringify({
+        snap15:   snap15   ? { ...snap15,   date: date1 ?? "" } : null,
+        snapLast: snapLast ? { ...snapLast, date: date2 ?? "" } : null,
+      }));
+    } catch { /* quota exceeded — ignore */ }
+  }
+
+  // Helper: restore storage snaps from localStorage for a period
+  function restoreStorageFromLocal(period: string) {
+    try {
+      const raw = localStorage.getItem(`billing_storage_${period}`);
+      if (!raw) { setStorage15(null); setStorageLast(null); return; }
+      const { snap15, snapLast } = JSON.parse(raw) as {
+        snap15:   (StorageSnap & { date: string }) | null;
+        snapLast: (StorageSnap & { date: string }) | null;
+      };
+      setStorage15(snap15   ? { data: snap15.data,   file: snap15.file   } : null);
+      setStorageLast(snapLast ? { data: snapLast.data, file: snapLast.file } : null);
+      if (snap15?.date)   setSnapDate15(snap15.date);
+      if (snapLast?.date) setSnapDateLast(snapLast.date);
+    } catch {
+      setStorage15(null); setStorageLast(null);
+    }
+  }
+
   async function handleUpload15(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file || !editing) return;
     setStorageUploading15(true);
     try {
       const data = await parseInventoryFile(file, editing.customer);
-      setStorage15({ data, file: file.name });
+      const snap = { data, file: file.name };
+      setStorage15(snap);
+      // Persist both snaps; snapLast may already be in localStorage
+      persistStorageToLocal(editing.period, snap, storageLast, snapDate15, snapDateLast);
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to parse file.");
     } finally {
@@ -1964,7 +2002,9 @@ export default function BillingPage() {
     setStorageUploadingLast(true);
     try {
       const data = await parseInventoryFile(file, editing.customer);
-      setStorageLast({ data, file: file.name });
+      const snap = { data, file: file.name };
+      setStorageLast(snap);
+      persistStorageToLocal(editing.period, storage15, snap, snapDate15, snapDateLast);
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to parse file.");
     } finally {
@@ -2054,8 +2094,17 @@ export default function BillingPage() {
           `The WMS location list returned ${locArr.length} locations (${occupancyLookup.size} with occupancyInfo).`
         );
       } else {
-        setStorage15({ data: snap15.data,   file: `WMS History · ${date15}` });
-        setStorageLast({ data: snapLast.data, file: `WMS History · ${dateLast}` });
+        const s15  = { data: snap15.data,   file: `WMS History · ${date15}` };
+        const sLst = { data: snapLast.data, file: `WMS History · ${dateLast}` };
+        setStorage15(s15);
+        setStorageLast(sLst);
+        // Persist to localStorage so re-opening the invoice restores snap data
+        try {
+          localStorage.setItem(`billing_storage_${editing.period}`, JSON.stringify({
+            snap15:    { ...s15,   date: date15 },
+            snapLast:  { ...sLst,  date: dateLast },
+          }));
+        } catch { /* quota exceeded — ignore */ }
       }
     } catch (e) {
       setStorageHistoryError(e instanceof Error ? e.message : "Failed to load history data");
@@ -2193,7 +2242,7 @@ export default function BillingPage() {
     setEditGroup(cloned);
     setActiveIdx(0);
     setEditing(cloned[0]);
-    setStorage15(null); setStorageLast(null);
+    restoreStorageFromLocal(cloned[0].period); // restore previously loaded snap data if any
     setFetchMsg(""); setWmsSource(null); setShowSource(false);
   }
 
@@ -2272,7 +2321,7 @@ export default function BillingPage() {
     setEditing(merged);
     setEditGroup([merged]);
     setActiveIdx(0);
-    setStorage15(null); setStorageLast(null);
+    restoreStorageFromLocal(merged.period); // restore previously loaded snap data if any
     setFetchMsg("");
     setWmsSource(null);
     setShowSource(false);
