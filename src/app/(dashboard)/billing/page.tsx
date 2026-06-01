@@ -777,6 +777,27 @@ async function downloadWorkbook(wb: ExcelJS.Workbook, filename: string) {
 
 // ─── Per-customer WMS detail sheets ──────────────────────────────────────────
 
+/** Detect default billing quantities from a raw WMS inbound order */
+function getInboundDefs(o: Record<string, unknown>): Record<string, number> {
+  const type = String(o.inboundType ?? o.receiveType ?? "").toLowerCase();
+  const isContainer = /container|cont/i.test(type);
+  if (!isContainer) {
+    const v = o.cartonQty ?? o.boxQty ?? o.packageQty ?? o.cartonCount;
+    return { inbound_carton: v != null ? Number(v) : 1 };
+  }
+  const is40hc  = /40.*hc|hc.*40|40hc/i.test(type);
+  const is40    = /\b40\b/.test(type) && !is40hc;
+  const is20    = /\b20\b/.test(type);
+  const isFloor = /floor/i.test(type);
+  if (is40hc && isFloor)  return { inbound_40hc_floor: 1 };
+  if (is40hc)             return { inbound_40hc_palletized: 1 };
+  if (is40 && isFloor)    return { inbound_40ft_floor: 1 };
+  if (is40)               return { inbound_40ft_palletized: 1 };
+  if (is20 && isFloor)    return { inbound_20ft_floor: 1 };
+  if (is20)               return { inbound_20ft_palletized: 1 };
+  return { inbound_40ft_palletized: 1 };
+}
+
 /** Add a [CustCode]_B2B sheet and return { sheetName, rowCount } */
 function addB2BDetailSheet(
   wb: ExcelJS.Workbook,
@@ -857,7 +878,13 @@ function addB2BDetailSheet(
   return { sheetName, rowCount: orders.length };
 }
 
-/** Add a [CustCode]_Inbound sheet */
+/**
+ * Add a [CustCode]_Inbound sheet — mirrors the UI editing table exactly.
+ * Columns: A=OrderCode  B=PO/Ref  C=InDate  D=Status  E=Type  F=ItemQty
+ *          G=Carton  H=Pallet  I=20'Pal  J=40'Pal  K=40HC'Pal
+ *          L=20'Flr  M=40'Flr  N=40HC'Flr  O=LaborHrs
+ * The invoice qty cells reference SUM() of the corresponding column.
+ */
 function addInboundDetailSheet(
   wb: ExcelJS.Workbook,
   custCode: string,
@@ -866,39 +893,126 @@ function addInboundDetailSheet(
 ): { sheetName: string; rowCount: number } {
   const sheetName = `${custCode}_Inbound`.slice(0, 31);
   const ws = wb.addWorksheet(sheetName);
+
+  // Column widths: A–F info, G–O billing quantities
   ws.columns = [
-    { width: 20 }, // A: Order Code
-    { width: 14 }, // B: Date
-    { width: 22 }, // C: Type
-    { width: 10 }, // D: Qty
+    { width: 22 }, // A: Order Code
+    { width: 14 }, // B: PO / Ref
+    { width: 12 }, // C: In Date
+    { width: 8  }, // D: Status
+    { width: 20 }, // E: Type
+    { width: 10 }, // F: Item Qty
+    { width: 9  }, // G: Carton
+    { width: 8  }, // H: Pallet
+    { width: 8  }, // I: 20'Pal
+    { width: 8  }, // J: 40'Pal
+    { width: 9  }, // K: 40HC'Pal
+    { width: 8  }, // L: 20'Flr
+    { width: 8  }, // M: 40'Flr
+    { width: 9  }, // N: 40HC'Flr
+    { width: 9  }, // O: Labor Hrs
   ];
-  const hdrRow = ws.addRow(["Order Code", "Date", "Type", "Qty"]);
-  hdrRow.height = 16;
-  hdrRow.eachCell((cell) => {
+
+  // ── Header row ──
+  const headers = [
+    "Order Code","PO / Ref","In Date","Status","Type","Item Qty",
+    "Carton","Pallet","20'Pal","40'Pal","40HC'Pal","20'Flr","40'Flr","40HC'Flr","Labor Hrs",
+  ];
+  const hdr = ws.addRow(headers);
+  hdr.height = 17;
+  hdr.eachCell((cell, col) => {
+    const isBilling = col >= 7;
     cell.font = { bold: true, color: { argb: C.white }, size: 10 };
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
-    cell.alignment = { vertical: "middle", horizontal: "center" };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: isBilling ? C.blue : "FF374151" } };
+    cell.alignment = { vertical: "middle", horizontal: col <= 6 ? "left" : "center" };
     applyBorder(cell, "medium");
   });
 
+  // ── Data rows ──
+  const IB_KEYS = [
+    "inbound_carton","inbound_pallet",
+    "inbound_20ft_palletized","inbound_40ft_palletized","inbound_40hc_palletized",
+    "inbound_20ft_floor","inbound_40ft_floor","inbound_40hc_floor",
+    "inbound_labor",
+  ] as const;
+
   let rowIdx = 0;
   for (const order of orders) {
-    const code = String(order.receiveOrderCode ?? order.orderCode ?? "");
-    const date = String(order.inDate ?? order.receiveDate ?? order.orderDate ?? "");
-    const type = String(order.inboundType ?? order.receiveType ?? "");
-    const cartonQty = order.cartonQty ?? order.boxQty ?? order.packageQty ?? order.cartonCount;
-    const rawQty = cartonQty != null ? Number(cartonQty) : 1;
-    const qty = orderEdits[code]?.["inbound_carton"] ?? rawQty;
-    const r = ws.addRow([code, date, type, qty]);
+    const code    = String(order.receiveOrderCode ?? order.orderCode ?? "");
+    const poRef   = String(order.poNo ?? order.poNumber ?? order.referenceNo ?? "");
+    const inDate  = String(order.inDate ?? order.receiveDate ?? order.orderDate ?? "");
+    const status  = String(order.status ?? order.orderStatus ?? "");
+    const type    = String(order.inboundType ?? order.receiveType ?? "");
+    const itemQty = Number(order.totalQty ?? order.itemCount ?? 0);
+
+    const ov   = orderEdits[code] ?? {};
+    const defs = getInboundDefs(order);
+    const val  = (key: string) => ov[key] ?? defs[key] ?? 0;
+
+    const r = ws.addRow([
+      code, poRef, inDate, status, type,
+      itemQty || null,
+      val("inbound_carton")          || null,
+      val("inbound_pallet")          || null,
+      val("inbound_20ft_palletized") || null,
+      val("inbound_40ft_palletized") || null,
+      val("inbound_40hc_palletized") || null,
+      val("inbound_20ft_floor")      || null,
+      val("inbound_40ft_floor")      || null,
+      val("inbound_40hc_floor")      || null,
+      val("inbound_labor")           || null,
+    ]);
     r.height = 15;
-    r.eachCell((cell, col) => {
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowIdx % 2 === 0 ? C.white : C.rowAlt } };
+
+    const isContainer = /container|cont/i.test(type);
+    const rowBg = rowIdx % 2 === 0 ? C.white : C.rowAlt;
+    const containerBg = "FFF8F9FA";
+
+    r.eachCell({ includeEmpty: true }, (cell, col) => {
       cell.font = { size: 10 };
-      cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: isContainer ? containerBg : rowBg } };
+      if (col <= 6) {
+        cell.alignment = { vertical: "middle", horizontal: col === 6 ? "right" : "left" };
+        cell.font = { size: 10, color: { argb: col === 1 ? "FF2563EB" : "FF374151" } };
+      } else {
+        cell.alignment = { vertical: "middle", horizontal: "right" };
+        // Highlight user-overridden cells yellow, blue for carton/pallet
+        const key = IB_KEYS[col - 7];
+        const isOverridden = key && key in ov;
+        const isBlue = col <= 8; // Carton (G) and Pallet (H)
+        if (isOverridden) {
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEF9C3" } }; // yellow
+          cell.font = { size: 10, bold: true, color: { argb: isBlue ? "FF1D4ED8" : "FF92400E" } };
+        } else if (cell.value != null && cell.value !== 0) {
+          cell.font = { size: 10, color: { argb: isBlue ? "FF2563EB" : col === 15 ? "FFC2410C" : "FF374151" } };
+        } else {
+          cell.font = { size: 10, color: { argb: "FFCBD5E1" } }; // dim zero/null
+        }
+      }
       applyBorder(cell);
     });
     rowIdx++;
   }
+
+  // ── Total row ──
+  const lastDataRow = 1 + orders.length; // header is row 1
+  const totalRow = ws.addRow([
+    "TOTAL (billed)", "", "", "", "", "",
+    ...IB_KEYS.map((_, i) => ({
+      formula: `=SUM(${String.fromCharCode(71 + i)}2:${String.fromCharCode(71 + i)}${lastDataRow})`,
+      result: 0,
+    })),
+  ]);
+  totalRow.height = 16;
+  totalRow.eachCell({ includeEmpty: true }, (cell, col) => {
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDBEAFE" } };
+    cell.font = { bold: true, size: 10, color: { argb: col >= 7 ? "FF1E40AF" : "FF374151" } };
+    cell.alignment = { vertical: "middle", horizontal: col <= 6 ? (col === 1 ? "right" : "left") : "right" };
+    applyBorder(cell, "medium");
+  });
+  // Merge label cells A–F in total row
+  ws.mergeCells(totalRow.number, 1, totalRow.number, 6);
+
   return { sheetName, rowCount: orders.length };
 }
 
@@ -1220,8 +1334,21 @@ function getQtyFormula(
   if (itemId === "b2b_order" && b) {
     return { formula: `=COUNTA('${b}'!A2:A9999)`, result: fallbackQty };
   }
-  if (itemId === "inbound_carton" && ib) {
-    return { formula: `=SUMIF('${ib}'!C2:C9999,"<>*container*",'${ib}'!D2:D9999)`, result: fallbackQty };
+  // Inbound columns: G=Carton H=Pallet I=20'Pal J=40'Pal K=40HC'Pal L=20'Flr M=40'Flr N=40HC'Flr O=Labor
+  const ibColMap: Record<string, string> = {
+    inbound_carton:           "G",
+    inbound_pallet:           "H",
+    inbound_20ft_palletized:  "I",
+    inbound_40ft_palletized:  "J",
+    inbound_40hc_palletized:  "K",
+    inbound_20ft_floor:       "L",
+    inbound_40ft_floor:       "M",
+    inbound_40hc_floor:       "N",
+    inbound_labor:            "O",
+  };
+  if (ibColMap[itemId] && ib) {
+    const col = ibColMap[itemId];
+    return { formula: `=SUM('${ib}'!${col}2:${col}9999)`, result: fallbackQty };
   }
   if (itemId === "b2c_order" && c) {
     return { formula: `=COUNTA('${c}'!A2:A9999)`, result: fallbackQty };
@@ -4323,26 +4450,7 @@ export default function BillingPage() {
                     wmsSource.receiving.length === 0 ? (
                       <p className="text-center text-sm text-slate-400 py-8">No inbound orders this period</p>
                     ) : (() => {
-                      // Helper: detect default billing quantities from WMS order data
-                      const getInboundDefs = (o: Record<string, unknown>): Record<string, number> => {
-                        const type = String(o.inboundType ?? o.receiveType ?? "").toLowerCase();
-                        const isContainer = /container|cont/i.test(type);
-                        if (!isContainer) {
-                          const v = o.cartonQty ?? o.boxQty ?? o.packageQty ?? o.cartonCount;
-                          return { inbound_carton: v != null ? Number(v) : 1 };
-                        }
-                        const is40hc = /40.*hc|hc.*40|40hc/i.test(type);
-                        const is40   = /\b40\b/.test(type) && !is40hc;
-                        const is20   = /\b20\b/.test(type);
-                        const isFloor = /floor/i.test(type);
-                        if (is40hc && isFloor)  return { inbound_40hc_floor: 1 };
-                        if (is40hc)             return { inbound_40hc_palletized: 1 };
-                        if (is40 && isFloor)    return { inbound_40ft_floor: 1 };
-                        if (is40)               return { inbound_40ft_palletized: 1 };
-                        if (is20 && isFloor)    return { inbound_20ft_floor: 1 };
-                        if (is20)               return { inbound_20ft_palletized: 1 };
-                        return { inbound_40ft_palletized: 1 };
-                      };
+                      // getInboundDefs is defined as a module-level function above the component
 
                       const IB_KEYS = [
                         "inbound_carton","inbound_pallet",
