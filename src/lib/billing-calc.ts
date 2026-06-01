@@ -31,6 +31,15 @@ export type BillingInvoice = {
   updatedAt: string;
   groupId?: string;        // shared ID for combined invoices created together
   orderEdits?: Record<string, Record<string, number>>; // per-order qty overrides (inbound carton, B2B picks, etc.)
+  omSettings?: {           // OM Subsidy panel inputs — persisted per invoice/group
+    wages:       string;
+    allocPct:    string;
+    wcGrossRate: string;
+    wcDiscount:  string;
+    glRate:      string;
+    dental:      string;
+    medical:     string;
+  };
 };
 
 // ─── Calculation ──────────────────────────────────────────────────────────────

@@ -2678,6 +2678,17 @@ export default function BillingPage() {
     }
     setOrderEditsMap(restoredEditsMap);
     setOrderEdits(cloned[0].orderEdits ?? {});
+    // Restore OM Subsidy settings from first invoice in group that has them
+    const omSaved = cloned.find(inv => inv.omSettings)?.omSettings;
+    if (omSaved) {
+      setOmWages(omSaved.wages);
+      setOmAllocPct(omSaved.allocPct);
+      setOmWcGrossRate(omSaved.wcGrossRate);
+      setOmWcDiscount(omSaved.wcDiscount);
+      setOmGlRate(omSaved.glRate);
+      setOmDentalFixed(omSaved.dental);
+      setOmMedicalFixed(omSaved.medical);
+    }
 
     // Restore per-customer storage from localStorage for all customers in group
     const newStorageMap: Record<string, CustomerStorageState> = {};
@@ -2749,6 +2760,12 @@ export default function BillingPage() {
     // Flush current customer's orderEdits into the map before saving
     const flushedEditsMap = { ...orderEditsMap, [editing.customer]: orderEdits };
     const group = getCurrentGroup();
+    // Snapshot current OM settings to attach to every invoice in the group
+    const omSnap = {
+      wages: omWages, allocPct: omAllocPct,
+      wcGrossRate: omWcGrossRate, wcDiscount: omWcDiscount,
+      glRate: omGlRate, dental: omDentalFixed, medical: omMedicalFixed,
+    };
     try {
       const now = new Date().toISOString();
       for (const inv of group) {
@@ -2757,6 +2774,7 @@ export default function BillingPage() {
           status,
           updatedAt: now,
           orderEdits: flushedEditsMap[inv.customer] ?? {},
+          omSettings: omSnap,
         };
         const res = await fetch("/api/billing/invoices", {
           method: "POST",
@@ -2801,6 +2819,17 @@ export default function BillingPage() {
     // Restore saved orderEdits
     setOrderEdits(merged.orderEdits ?? {});
     setOrderEditsMap({ [merged.customer]: merged.orderEdits ?? {} });
+    // Restore OM Subsidy settings
+    if (merged.omSettings) {
+      const s = merged.omSettings;
+      setOmWages(s.wages);
+      setOmAllocPct(s.allocPct);
+      setOmWcGrossRate(s.wcGrossRate);
+      setOmWcDiscount(s.wcDiscount);
+      setOmGlRate(s.glRate);
+      setOmDentalFixed(s.dental);
+      setOmMedicalFixed(s.medical);
+    }
     // Restore storage for this customer
     const cs = getStorageFromLocal(merged.period, merged.customer);
     setStorageMap(cs ? { [merged.customer]: cs } : {});
@@ -3354,6 +3383,11 @@ export default function BillingPage() {
         status,
         updatedAt: now,
         orderEdits,   // persist per-order qty overrides
+        omSettings: {
+          wages: omWages, allocPct: omAllocPct,
+          wcGrossRate: omWcGrossRate, wcDiscount: omWcDiscount,
+          glRate: omGlRate, dental: omDentalFixed, medical: omMedicalFixed,
+        },
       };
       const res = await fetch("/api/billing/invoices", {
         method: "POST",
