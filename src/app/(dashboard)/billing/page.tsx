@@ -2876,18 +2876,22 @@ export default function BillingPage() {
         ...(editing ? { [editing.customer]: { snap15: storage15, snapLast: storageLast, date15: snapDate15, dateLast: snapDateLast } } : {}),
       };
 
-      // Use first customer's storage for shared Storage_Avg formula sheet
-      const firstCustStorage = fullStorageMap[group[0]?.customer ?? ""];
-      const effectiveStorageRows = firstCustStorage
+      // Aggregate storage across ALL customers for the Storage snapshot / avg sheets
+      const allCustStorages = group.map(inv => fullStorageMap[inv.customer]).filter(Boolean);
+      const hasAnyStorage   = allCustStorages.length > 0;
+
+      const effectiveStorageRows = hasAnyStorage
         ? STORAGE_TEMPLATE_ROWS
             .map(r => {
-              const qty15   = firstCustStorage.snap15?.data[r.key]   ?? 0;
-              const qtyLast = firstCustStorage.snapLast?.data[r.key] ?? 0;
+              // Sum qty from every customer for each storage type
+              const qty15   = allCustStorages.reduce((s, cs) => s + (cs!.snap15?.data[r.key]   ?? 0), 0);
+              const qtyLast = allCustStorages.reduce((s, cs) => s + (cs!.snapLast?.data[r.key] ?? 0), 0);
               return { key: r.key, label: r.label, qty15, qtyLast, avg: (qty15 + qtyLast) / 2 };
             })
             .filter(r => r.qty15 > 0 || r.qtyLast > 0)
         : storageRows;
 
+      const firstCustStorage  = allCustStorages[0];
       const effectiveDate15   = firstCustStorage?.date15   || snapDate15   || undefined;
       const effectiveDateLast = firstCustStorage?.dateLast || snapDateLast || undefined;
 
@@ -2946,14 +2950,22 @@ export default function BillingPage() {
         } catch { /* skip on error */ }
       }
 
-      // Storage: load each customer's storage from localStorage, concatenate rawRows
-      const storagePerCust = invoices.map(inv => getStorageRowsFromLocal(period, inv.customer));
-      const firstStorage   = storagePerCust[0];
-      // Use first customer's aggregated rows for the Storage_Avg billing sheet
-      const storageRows    = firstStorage.rows;
+      // Storage: load each customer's storage from localStorage, aggregate + concatenate rawRows
+      const storagePerCust = invoices.map(inv => getStorageFromLocal(period, inv.customer)).filter(Boolean);
+      const firstStorageLoc = storagePerCust[0];
+
+      // Sum storage quantities across all customers for the snapshot/avg sheets
+      const storageRows: StorageRow[] = STORAGE_TEMPLATE_ROWS
+        .map(r => {
+          const qty15   = storagePerCust.reduce((s, cs) => s + (cs!.snap15?.data[r.key]   ?? 0), 0);
+          const qtyLast = storagePerCust.reduce((s, cs) => s + (cs!.snapLast?.data[r.key] ?? 0), 0);
+          return { key: r.key, label: r.label, qty15, qtyLast, avg: (qty15 + qtyLast) / 2 };
+        })
+        .filter(r => r.qty15 > 0 || r.qtyLast > 0);
+
       // Concatenate ALL customers' rawRows for evidence sheets
-      const allRawRows15   = storagePerCust.flatMap(s => s.rawRows15 ?? []);
-      const allRawRowsLast = storagePerCust.flatMap(s => s.rawRowsLast ?? []);
+      const allRawRows15   = storagePerCust.flatMap(s => s!.snap15?.rawRows   ?? []);
+      const allRawRowsLast = storagePerCust.flatMap(s => s!.snapLast?.rawRows ?? []);
 
       const listSubleaseAmt = (parseFloat(subleaseRentQty) || 0) * SUBLEASE_RENT_RATE
                             + (parseFloat(subleaseOpQty)   || 0) * SUBLEASE_OP_RATE;
@@ -2961,7 +2973,7 @@ export default function BillingPage() {
       if (invoices.length === 1) {
         await exportInvoiceToExcel(
           invoices[0], sourceMap[invoices[0].customer] ?? null, {},
-          storageRows, firstStorage.date15 || undefined, firstStorage.dateLast || undefined,
+          storageRows, firstStorageLoc?.date15 || undefined, firstStorageLoc?.dateLast || undefined,
           allRawRows15.length > 0 ? allRawRows15 : undefined,
           allRawRowsLast.length > 0 ? allRawRowsLast : undefined,
         );
@@ -2969,7 +2981,7 @@ export default function BillingPage() {
         await exportAllToExcel(
           invoices, period, sourceMap, {},
           storageRows, 0, listSubleaseAmt,
-          firstStorage.date15 || undefined, firstStorage.dateLast || undefined,
+          firstStorageLoc?.date15 || undefined, firstStorageLoc?.dateLast || undefined,
           allRawRows15.length > 0 ? allRawRows15 : undefined,
           allRawRowsLast.length > 0 ? allRawRowsLast : undefined,
         );
@@ -3003,16 +3015,23 @@ export default function BillingPage() {
         inv.total = calcTotal(inv.lineItems);
         invoiceList.push(inv);
       }
-      // Storage: load each customer's storage, concatenate rawRows
-      const storagePerCust2 = customers.map(c => getStorageRowsFromLocal(period, c.code));
+      // Storage: load each customer's storage, aggregate counts + concatenate rawRows
+      const storagePerCust2 = customers.map(c => getStorageFromLocal(period, c.code)).filter(Boolean);
       const firstStorage2   = storagePerCust2[0];
-      const allRawRows15b   = storagePerCust2.flatMap(s => s.rawRows15   ?? []);
-      const allRawRowsLastb = storagePerCust2.flatMap(s => s.rawRowsLast ?? []);
+      const aggStorageRows2: StorageRow[] = STORAGE_TEMPLATE_ROWS
+        .map(r => {
+          const qty15   = storagePerCust2.reduce((s, cs) => s + (cs!.snap15?.data[r.key]   ?? 0), 0);
+          const qtyLast = storagePerCust2.reduce((s, cs) => s + (cs!.snapLast?.data[r.key] ?? 0), 0);
+          return { key: r.key, label: r.label, qty15, qtyLast, avg: (qty15 + qtyLast) / 2 };
+        })
+        .filter(r => r.qty15 > 0 || r.qtyLast > 0);
+      const allRawRows15b   = storagePerCust2.flatMap(s => s!.snap15?.rawRows   ?? []);
+      const allRawRowsLastb = storagePerCust2.flatMap(s => s!.snapLast?.rawRows ?? []);
       const allCustSubleaseAmt = (parseFloat(subleaseRentQty) || 0) * SUBLEASE_RENT_RATE
                                + (parseFloat(subleaseOpQty)   || 0) * SUBLEASE_OP_RATE;
       await exportAllToExcel(
         invoiceList, period, sourceMap, {},
-        firstStorage2?.rows ?? [], 0, allCustSubleaseAmt,
+        aggStorageRows2, 0, allCustSubleaseAmt,
         firstStorage2?.date15 || undefined, firstStorage2?.dateLast || undefined,
         allRawRows15b.length > 0 ? allRawRows15b : undefined,
         allRawRowsLastb.length > 0 ? allRawRowsLastb : undefined,
