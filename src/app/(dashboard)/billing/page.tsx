@@ -2881,6 +2881,68 @@ export default function BillingPage() {
     }
   }
 
+  // ── Shared helper: build storage rows from localStorage for a customer ──
+  function getStorageRowsFromLocal(period: string, customerCode: string): {
+    rows: StorageRow[];
+    date15: string;
+    dateLast: string;
+    rawRows15: StorageRawRow[] | undefined;
+    rawRowsLast: StorageRawRow[] | undefined;
+  } {
+    const cs = getStorageFromLocal(period, customerCode);
+    if (!cs || (!cs.snap15 && !cs.snapLast)) {
+      return { rows: [], date15: "", dateLast: "", rawRows15: undefined, rawRowsLast: undefined };
+    }
+    const rows = STORAGE_TEMPLATE_ROWS
+      .map(r => {
+        const qty15   = cs.snap15?.data[r.key]   ?? 0;
+        const qtyLast = cs.snapLast?.data[r.key] ?? 0;
+        return { key: r.key, label: r.label, qty15, qtyLast, avg: (qty15 + qtyLast) / 2 };
+      })
+      .filter(r => r.qty15 > 0 || r.qtyLast > 0);
+    return { rows, date15: cs.date15, dateLast: cs.dateLast, rawRows15: cs.snap15?.rawRows, rawRowsLast: cs.snapLast?.rawRows };
+  }
+
+  // ── Export invoices from the list view (auto-fetch all WMS + storage data) ──
+  async function handleExportFromList(invoices: BillingInvoice[], period: string) {
+    if (exportingNow || invoices.length === 0) return;
+    setExportingNow(true);
+    try {
+      const sourceMap: Record<string, WmsSource> = {};
+      // Auto-fetch WMS order data for all customers
+      for (const inv of invoices) {
+        try {
+          const { source } = await fetchWmsQty(inv.customer, period);
+          sourceMap[inv.customer] = source;
+        } catch { /* skip on error */ }
+      }
+
+      // Storage: use first customer's data (shared warehouse-level)
+      const firstInv = invoices[0];
+      const storage = getStorageRowsFromLocal(period, firstInv.customer);
+
+      const listSubleaseAmt = (parseFloat(subleaseRentQty) || 0) * SUBLEASE_RENT_RATE
+                            + (parseFloat(subleaseOpQty)   || 0) * SUBLEASE_OP_RATE;
+
+      if (invoices.length === 1) {
+        await exportInvoiceToExcel(
+          invoices[0], sourceMap[invoices[0].customer] ?? null, {},
+          storage.rows, storage.date15 || undefined, storage.dateLast || undefined,
+          storage.rawRows15, storage.rawRowsLast
+        );
+      } else {
+        await exportAllToExcel(
+          invoices, period, sourceMap, {},
+          storage.rows, 0, listSubleaseAmt,
+          storage.date15 || undefined, storage.dateLast || undefined,
+          storage.rawRows15, storage.rawRowsLast
+        );
+      }
+    } finally {
+      setExportingNow(false);
+    }
+  }
+
   // ── "All Customers" export: fetch all + multi-sheet Excel ──
   async function exportAllCustomers() {
     if (customers.length === 0) return;
@@ -2889,10 +2951,12 @@ export default function BillingPage() {
     setAllExportMsg(`Fetching data for ${customers.length} customers...`);
     try {
       const invoiceList: BillingInvoice[] = [];
+      const sourceMap: Record<string, WmsSource> = {};
       for (let i = 0; i < customers.length; i++) {
         const c = customers[i];
         setAllExportMsg(`Fetching ${c.code} (${i + 1}/${customers.length})...`);
-        const { updates } = await fetchWmsQty(c.code, period);
+        const { updates, source } = await fetchWmsQty(c.code, period);
+        sourceMap[c.code] = source;
         const inv = buildNewInvoice(c.code, c.name, period);
         if (Object.keys(updates).length > 0) {
           inv.lineItems = inv.lineItems.map((item) =>
@@ -2903,7 +2967,17 @@ export default function BillingPage() {
         inv.total = calcTotal(inv.lineItems);
         invoiceList.push(inv);
       }
-      exportAllToExcel(invoiceList, period);
+      // Storage: use first customer's data from localStorage
+      const firstCust = customers[0]?.code ?? "";
+      const storage = getStorageRowsFromLocal(period, firstCust);
+      const allCustSubleaseAmt = (parseFloat(subleaseRentQty) || 0) * SUBLEASE_RENT_RATE
+                               + (parseFloat(subleaseOpQty)   || 0) * SUBLEASE_OP_RATE;
+      await exportAllToExcel(
+        invoiceList, period, sourceMap, {},
+        storage.rows, 0, allCustSubleaseAmt,
+        storage.date15 || undefined, storage.dateLast || undefined,
+        storage.rawRows15, storage.rawRowsLast
+      );
       setAllExportMsg(`✓ Exported ${invoiceList.length} customers to Invoice_ALL_${period}.xlsx`);
     } catch {
       setAllExportMsg("Export failed. Please try again.");
@@ -3041,17 +3115,25 @@ export default function BillingPage() {
 
     function doExport() {
       if (exportPreview!.mode === "single") {
-        exportInvoiceToExcel(
-          exportPreview!.invoice as BillingInvoice, wmsSource, orderEdits,
-          storageRows, snapDate15 || undefined, snapDateLast || undefined,
-          storage15?.rawRows, storageLast?.rawRows
-        ).catch(console.error);
+        const inv = exportPreview!.invoice as BillingInvoice;
+        if (editing && editing.id === inv.id && wmsSource) {
+          // Inside the editor — use live state
+          exportInvoiceToExcel(
+            inv, wmsSource, orderEdits,
+            storageRows, snapDate15 || undefined, snapDateLast || undefined,
+            storage15?.rawRows, storageLast?.rawRows
+          ).catch(console.error);
+        } else {
+          // Outside editor (list view) — auto-fetch WMS + load storage from localStorage
+          handleExportFromList([inv], inv.period).catch(console.error);
+        }
       } else if (exportPreview!.mode === "multi") {
         const ep = exportPreview as Extract<typeof exportPreview, { mode: "multi" }>;
         handleExportWithFetch(ep.invoices, ep.period, ep.omSubsidy, ep.subleaseTotal).catch(console.error);
       } else {
+        // "list" mode — from list view
         const ep = exportPreview as Extract<typeof exportPreview, { mode: "list" }>;
-        exportAllToExcel(ep.invoices, ep.period, null, null, undefined, undefined, subleaseAmt).catch(console.error);
+        handleExportFromList(ep.invoices, ep.period).catch(console.error);
       }
       setExportPreview(null);
     }
