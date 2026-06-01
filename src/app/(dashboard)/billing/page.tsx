@@ -1623,10 +1623,32 @@ async function exportAllToExcel(
     sub.getCell(7).numFmt = "$#,##0.00";
   }
 
-  // ── OM Subsidy row (if provided) ──
+  // ── OM Subsidy section (if provided) ──
+  let omSubtotalRowNum = -1;
   if (omSubsidy && omSubsidy > 0) {
     grandTotal += omSubsidy;
-    const omRow = ws.addRow(["", "OM Subsidy", "OM Subsidy — STL Allocation", "", "monthly", 1, omSubsidy]);
+
+    // Section header — purple
+    const omSec = ws.addRow([`${sectionNo}. OM Subsidy`]);
+    omSec.height = 16; merge(omSec.number);
+    Object.assign(omSec.getCell(1), {
+      font: { bold: true, size: 10, color: { argb: "FFFFFFFF" } },
+      fill: { type: "pattern", pattern: "solid", fgColor: { argb: "FF7C3AED" } },
+      alignment: { vertical: "middle", indent: 1 },
+    }); applyBorder(omSec.getCell(1), "medium");
+    sectionNo++;
+
+    // Item row — show wages & allocation % when available
+    const omWagesDisp  = omInputs?.wages    ? `$${omInputs.wages.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "";
+    const omAllocDisp  = omInputs?.allocPct ? `${omInputs.allocPct.toFixed(1)}%` : "";
+    const omRow = ws.addRow([
+      lineNo, "OM Subsidy",
+      "Operations Manager Salary Subsidy (per MSA Section 4)",
+      omWagesDisp,
+      "of monthly cost",
+      omAllocDisp,
+      omSubsidy,
+    ]);
     omRow.height = 15;
     omRow.eachCell((cell, col) => {
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF5F3FF" } };
@@ -1634,22 +1656,36 @@ async function exportAllToExcel(
       cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
       applyBorder(cell);
     });
-    omRow.getCell(6).numFmt = "#,##0";
     omRow.getCell(7).numFmt = "$#,##0.00";
+    lineNo++;
+
+    // Subtotal row
+    const omSub = ws.addRow(["", "", "", "", "", "Subtotal — OM Subsidy", omSubsidy]);
+    omSubtotalRowNum = omSub.number;
+    omSub.height = 15;
+    omSub.eachCell((cell, col) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEDE9FE" } };
+      cell.font = { bold: col >= 6, size: 10, color: { argb: "FF6D28D9" } };
+      cell.alignment = { vertical: "middle", horizontal: "right" };
+      applyBorder(cell);
+    });
+    omSub.getCell(7).numFmt = "$#,##0.00";
   }
 
-  // ── Office Sublease rows (if provided) ──
+  // ── Office Sublease section (if provided) ──
+  let slSubtotalRowNum = -1;
   if (subleaseTotal && subleaseTotal > 0) {
     grandTotal += subleaseTotal;
-    // Section header
-    const slSec = ws.addRow(["Office Sublease"]);
-    slSec.height = 16;
-    mergeRow(ws, slSec.number);
-    const slSecCell = slSec.getCell(1);
-    slSecCell.font = { bold: true, size: 10, color: { argb: C.sectionFont } };
-    slSecCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF3CD" } };
-    slSecCell.alignment = { vertical: "middle", indent: 1 };
-    applyBorder(slSecCell, "medium");
+
+    // Section header — amber
+    const slSec = ws.addRow([`${sectionNo}. Office Sublease`]);
+    slSec.height = 16; merge(slSec.number);
+    Object.assign(slSec.getCell(1), {
+      font: { bold: true, size: 10, color: { argb: C.sectionFont } },
+      fill: { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF3CD" } },
+      alignment: { vertical: "middle", indent: 1 },
+    }); applyBorder(slSec.getCell(1), "medium");
+    sectionNo++;
 
     const slStyle = (row: ExcelJS.Row) => {
       row.height = 15;
@@ -1665,7 +1701,7 @@ async function exportAllToExcel(
       // Row 1: Monthly Office Rent
       const rentAmt = subleaseBreakdown.rentQty * subleaseBreakdown.rentRate;
       const r1 = ws.addRow([
-        "", "Monthly Office Rent",
+        lineNo++, "Rent",
         "Monthly Office Rent (per MSA Section 3.2)",
         `$${subleaseBreakdown.rentRate.toLocaleString()} / month`,
         "month",
@@ -1679,9 +1715,9 @@ async function exportAllToExcel(
       // Row 2: Operating Cost Reimbursement
       const opAmt = subleaseBreakdown.opQty * subleaseBreakdown.opRate;
       const r2 = ws.addRow([
-        "", "Operating Cost Reimbursement",
+        lineNo++, "Rent",
         "Operating Cost Reimbursement (per MSA Section 3.3)",
-        `$${subleaseBreakdown.opRate.toFixed(2)} / sq ft / month`,
+        `$${subleaseBreakdown.opRate.toFixed(2)} per sq ft / month`,
         "sq ft",
         subleaseBreakdown.opQty,
         opAmt,
@@ -1690,18 +1726,33 @@ async function exportAllToExcel(
       r2.getCell(6).numFmt = "#,##0";
       r2.getCell(7).numFmt = "$#,##0.00";
     } else {
-      // Fallback: single combined row (no breakdown available)
-      const slRow = ws.addRow(["", "Office Sublease", "Office Sublease — Monthly Fixed Charges", "", "monthly", 1, subleaseTotal]);
+      const slRow = ws.addRow([lineNo++, "Rent", "Office Sublease — Monthly Fixed Charges", "", "monthly", 1, subleaseTotal]);
       slStyle(slRow);
       slRow.getCell(6).numFmt = "#,##0";
       slRow.getCell(7).numFmt = "$#,##0.00";
     }
+
+    // Subtotal row
+    const slSub = ws.addRow(["", "", "", "", "", "Subtotal — Office Sublease", subleaseTotal]);
+    slSubtotalRowNum = slSub.number;
+    slSub.height = 15;
+    slSub.eachCell((cell, col) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF8E1" } };
+      cell.font = { bold: col >= 6, size: 10, color: { argb: "FFB45309" } };
+      cell.alignment = { vertical: "middle", horizontal: "right" };
+      applyBorder(cell);
+    });
+    slSub.getCell(7).numFmt = "$#,##0.00";
   }
 
-  // ── Grand Total — formula summing all subtotals ──
-  const gtSubtotalRefs = Object.values(summaryCatSubtotalRows).map(r => `G${r}`).join("+");
+  // ── Grand Total — formula summing all category subtotals + OM Subsidy + Sublease ──
+  const allSubtotalRefs = [
+    ...Object.values(summaryCatSubtotalRows).map(r => `G${r}`),
+    ...(omSubtotalRowNum > 0 ? [`G${omSubtotalRowNum}`] : []),
+    ...(slSubtotalRowNum > 0 ? [`G${slSubtotalRowNum}`] : []),
+  ].join("+");
   const gt = ws.addRow(["", "", "", "", "", "GRAND TOTAL",
-    gtSubtotalRefs ? { formula: `=${gtSubtotalRefs}`, result: grandTotal } : grandTotal
+    allSubtotalRefs ? { formula: `=${allSubtotalRefs}`, result: grandTotal } : grandTotal
   ]);
   gt.height = 22;
   gt.eachCell((cell, col) => {
