@@ -453,39 +453,46 @@ function addRateTableSheet(wb: ExcelJS.Workbook) {
 // ── OM Subsidy sheet ──────────────────────────────────────────────────────────
 // Constants (update annually)
 const OM_SUBSIDY = {
-  employerTaxRate:   0.0765,   // FICA
-  dental:            31.39,    // fixed monthly
-  medical:           542.55,   // fixed monthly
-  wcRate:            0.1185,   // workers comp rate (warehouse)
-  // Company-wide WC to derive discount rate
+  employerTaxRate:   0.0765,   // FICA — only % item
+  dental:            31.39,    // fixed monthly default
+  medical:           542.55,   // fixed monthly default
+  wcDefault:         262.63,   // fixed monthly default (Workers Comp)
+  glDefault:         254.05,   // fixed monthly default (GL Insurance)
+  // Reference rates (for info display only)
+  wcRate:            0.1185,
   wcWarehouseExp:    750685,
   wcOfficeExp:       480438,
   wcSalesExp:        52548,
   wcOfficeRate:      0.0046,
   wcSalesRate:       0.0069,
-  wcActualPremium:   52482,    // actual premium paid (for discount calc)
+  wcActualPremium:   52482,
   glAnnualPremium:   122889.91,
   glRevenueBase:     6600000,
   allocToSTL:        0.40,
 } as const;
 
-/** Calculate STL OM-subsidy allocation amount from raw state strings */
-function calcStlAlloc(omWages: string, omAllocPct: string): number {
+type OmFixedOverhead = { wc: number; gl: number; dental: number; medical: number };
+
+/** Calculate STL OM-subsidy allocation amount from raw state strings.
+ *  STL Subsidy = (wages + overhead) × allocPct%
+ *  FICA is the only % item; WC/GL/Dental/Medical are fixed dollar amounts. */
+function calcStlAlloc(
+  omWages: string,
+  omAllocPct: string,
+  fixed?: OmFixedOverhead,
+): number {
   const S = OM_SUBSIDY;
   const wages = parseFloat(omWages) || 0;
   if (wages <= 0) return 0;
   const fica = wages * S.employerTaxRate;
-  const wcExpected =
-    S.wcWarehouseExp * S.wcRate +
-    S.wcOfficeExp * S.wcOfficeRate +
-    S.wcSalesExp * S.wcSalesRate;
-  const wcDiscount = 1 - S.wcActualPremium / wcExpected;
-  const wcNetRate = S.wcRate * (1 - wcDiscount);
-  const wc = wages * wcNetRate;
-  const gl = wages * (S.glAnnualPremium / S.glRevenueBase);
-  const totalOverhead = fica + wc + gl + S.dental + S.medical;
+  const wc     = fixed?.wc     ?? S.wcDefault;
+  const gl     = fixed?.gl     ?? S.glDefault;
+  const dental = fixed?.dental ?? S.dental;
+  const medical= fixed?.medical?? S.medical;
+  const totalOverhead = fica + wc + gl + dental + medical;
+  const totalCost = wages + totalOverhead;
   const allocPct = Math.max(0, Math.min(100, parseFloat(omAllocPct) || 0));
-  return totalOverhead * (allocPct / 100);
+  return totalCost * (allocPct / 100);
 }
 
 function addOmSubsidySheet(wb: ExcelJS.Workbook) {
@@ -2000,6 +2007,11 @@ export default function BillingPage() {
   const [extraTab, setExtraTab] = useState<"none" | "rate-table" | "om-subsidy" | "sublease" | "summary">("none");
   const [omWages, setOmWages] = useState<string>("");
   const [omAllocPct, setOmAllocPct] = useState<string>("40");
+  const S_OM = OM_SUBSIDY;
+  const [omWcFixed,      setOmWcFixed]      = useState<string>(() => typeof window !== "undefined" ? (localStorage.getItem("billing_om_wc")      ?? String(S_OM.wcDefault))  : String(S_OM.wcDefault));
+  const [omGlFixed,      setOmGlFixed]      = useState<string>(() => typeof window !== "undefined" ? (localStorage.getItem("billing_om_gl")      ?? String(S_OM.glDefault))  : String(S_OM.glDefault));
+  const [omDentalFixed,  setOmDentalFixed]  = useState<string>(() => typeof window !== "undefined" ? (localStorage.getItem("billing_om_dental")  ?? String(S_OM.dental))     : String(S_OM.dental));
+  const [omMedicalFixed, setOmMedicalFixed] = useState<string>(() => typeof window !== "undefined" ? (localStorage.getItem("billing_om_medical") ?? String(S_OM.medical))    : String(S_OM.medical));
   // Office Sublease (top-level, not per-customer) — persisted to localStorage
   const SUBLEASE_RENT_RATE   = 1490;    // per month
   const SUBLEASE_OP_RATE     = 1.01;    // per sq ft / month
@@ -2380,6 +2392,10 @@ export default function BillingPage() {
   // ── persist sublease values to localStorage ──
   useEffect(() => { localStorage.setItem("billing_sublease_rent_qty", subleaseRentQty); }, [subleaseRentQty]);
   useEffect(() => { localStorage.setItem("billing_sublease_op_qty",   subleaseOpQty);   }, [subleaseOpQty]);
+  useEffect(() => { localStorage.setItem("billing_om_wc",      omWcFixed);      }, [omWcFixed]);
+  useEffect(() => { localStorage.setItem("billing_om_gl",      omGlFixed);      }, [omGlFixed]);
+  useEffect(() => { localStorage.setItem("billing_om_dental",  omDentalFixed);  }, [omDentalFixed]);
+  useEffect(() => { localStorage.setItem("billing_om_medical", omMedicalFixed); }, [omMedicalFixed]);
 
   // ── reset snapshot dates when editing period changes ──
   useEffect(() => {
@@ -3425,7 +3441,7 @@ export default function BillingPage() {
                     mode: "multi",
                     invoices: group,
                     period: editing.period,
-                    omSubsidy: calcStlAlloc(omWages, omAllocPct),
+                    omSubsidy: calcStlAlloc(omWages, omAllocPct, { wc: parseFloat(omWcFixed)||0, gl: parseFloat(omGlFixed)||0, dental: parseFloat(omDentalFixed)||0, medical: parseFloat(omMedicalFixed)||0 }),
                     subleaseTotal: (parseFloat(subleaseRentQty)||0)*SUBLEASE_RENT_RATE + (parseFloat(subleaseOpQty)||0)*SUBLEASE_OP_RATE,
                   });
                 } else {
@@ -3610,150 +3626,145 @@ export default function BillingPage() {
         {/* ── OM Subsidy panel ── */}
         {extraTab === "om-subsidy" && (() => {
           const S = OM_SUBSIDY;
-          const wages = parseFloat(omWages) || 0;
-          // FICA
+          const wages   = parseFloat(omWages)       || 0;
+          const wc      = parseFloat(omWcFixed)      || 0;
+          const gl      = parseFloat(omGlFixed)      || 0;
+          const dental  = parseFloat(omDentalFixed)  || 0;
+          const medical = parseFloat(omMedicalFixed) || 0;
+          // FICA — only % item
           const ficaRate = S.employerTaxRate;
           const fica = wages * ficaRate;
-          // Workers Comp
-          const wcExpected = S.wcWarehouseExp * S.wcRate + S.wcOfficeExp * S.wcOfficeRate + S.wcSalesExp * S.wcSalesRate;
-          const wcDiscount = 1 - S.wcActualPremium / wcExpected;
-          const wcNetRate = S.wcRate * (1 - wcDiscount);
-          const wc = wages * wcNetRate;
-          // GL Insurance
-          const glRate = S.glAnnualPremium / S.glRevenueBase;
-          const gl = wages * glRate;
-          // Dental + Medical (fixed, no pct of wages)
-          const dental = S.dental;
-          const medical = S.medical;
-          // Total overhead (monthly)
+          // Total overhead
           const totalOverhead = fica + wc + gl + dental + medical;
-          // STL allocation — user-editable
+          // Total cost = wages + overhead
+          const totalCost = wages + totalOverhead;
+          // STL allocation
           const allocPct = Math.max(0, Math.min(100, parseFloat(omAllocPct) || 0));
-          const stlAlloc = totalOverhead * (allocPct / 100);
+          const stlAlloc = totalCost * (allocPct / 100);
 
-          const fmt = (v: number) => wages > 0 ? `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—";
-          const fmtPct = (r: number) => `${(r * 100).toFixed(4).replace(/\.?0+$/, "")}%`;
+          const fmtAmt = (v: number) => `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+          const fmtPct = (v: number, base: number) =>
+            base > 0 ? <span className="text-slate-400 text-xs ml-1">({(v / base * 100).toFixed(2)}%)</span> : null;
+
+          const fixedInput = (val: string, setter: (v: string) => void) => (
+            <div className="flex items-center justify-end gap-1">
+              <span className="text-slate-400 text-xs">$</span>
+              <input type="number" step="0.01" min="0" value={val}
+                onChange={e => setter(e.target.value)}
+                className="w-28 text-right border border-slate-300 bg-slate-50 focus:bg-white focus:border-blue-400 rounded px-2 py-1 text-sm font-mono outline-none" />
+            </div>
+          );
 
           return (
-            <div className="space-y-6 pb-8 max-w-2xl">
+            <div className="space-y-6 pb-8 max-w-xl">
               <div className="rounded-xl border border-slate-200 overflow-hidden">
                 <div className="bg-purple-700 text-white text-sm font-semibold px-4 py-2.5">OM Subsidy Calculator</div>
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-slate-200 bg-slate-50 text-xs text-slate-400 uppercase tracking-wide">
                       <th className="px-4 py-2 text-left font-medium">Description</th>
-                      <th className="px-4 py-2 text-right font-medium">Rate</th>
                       <th className="px-4 py-2 text-right font-medium">Amount</th>
                     </tr>
                   </thead>
                   <tbody>
                     {/* Wages input */}
                     <tr className="border-b border-slate-200 bg-yellow-50">
-                      <td className="px-4 py-3 font-semibold text-slate-800" colSpan={2}>Total Taxable Wages (monthly)</td>
+                      <td className="px-4 py-3 font-semibold text-slate-800">Total Taxable Wages (monthly)</td>
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-1">
                           <span className="text-slate-500 text-sm">$</span>
-                          <input
-                            type="number"
-                            step="0.01"
-                            value={omWages}
-                            onChange={e => setOmWages(e.target.value)}
-                            placeholder="0.00"
-                            className="w-36 text-right border border-yellow-300 bg-yellow-50 focus:bg-white focus:border-blue-400 rounded px-2 py-1 text-sm font-mono outline-none"
-                          />
+                          <input type="number" step="0.01" value={omWages}
+                            onChange={e => setOmWages(e.target.value)} placeholder="0.00"
+                            className="w-36 text-right border border-yellow-300 bg-yellow-50 focus:bg-white focus:border-blue-400 rounded px-2 py-1 text-sm font-mono outline-none" />
                         </div>
                       </td>
                     </tr>
-                    {/* FICA */}
-                    <tr className="border-b border-slate-100">
-                      <td className="px-4 py-2.5 text-slate-700">Employer FICA</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-slate-500 text-xs">{fmtPct(ficaRate)}</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-slate-800">{fmt(fica)}</td>
+                    {/* Section: Overhead */}
+                    <tr className="bg-slate-50 border-b border-slate-200">
+                      <td colSpan={2} className="px-4 py-1.5 text-xs font-semibold text-slate-400 uppercase tracking-wide">Overhead</td>
                     </tr>
-                    {/* WC */}
+                    {/* FICA — % of wages */}
                     <tr className="border-b border-slate-100">
-                      <td className="px-4 py-2.5 text-slate-700">Workers&apos; Comp (net after discount)</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-slate-500 text-xs">{fmtPct(wcNetRate)}</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-slate-800">{fmt(wc)}</td>
+                      <td className="px-4 py-2.5 text-slate-700">
+                        Employer Tax (FICA)
+                        <span className="ml-2 text-xs text-blue-500 font-mono">{(ficaRate*100).toFixed(2)}% of wages</span>
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-mono text-slate-800">
+                        {wages > 0 ? fmtAmt(fica) : "—"}
+                      </td>
                     </tr>
-                    {/* GL */}
+                    {/* Workers Comp — fixed editable */}
                     <tr className="border-b border-slate-100">
-                      <td className="px-4 py-2.5 text-slate-700">GL Insurance</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-slate-500 text-xs">{fmtPct(glRate)}</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-slate-800">{fmt(gl)}</td>
+                      <td className="px-4 py-2.5 text-slate-700">
+                        Workers&apos; Comp
+                        {wages > 0 && fmtPct(wc, wages)}
+                      </td>
+                      <td className="px-4 py-2.5 text-right">{fixedInput(omWcFixed, setOmWcFixed)}</td>
                     </tr>
-                    {/* Dental */}
+                    {/* GL Insurance — fixed editable */}
                     <tr className="border-b border-slate-100">
-                      <td className="px-4 py-2.5 text-slate-700">Dental (fixed)</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-slate-400 text-xs">fixed</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-slate-800">{`$${dental.toLocaleString("en-US", { minimumFractionDigits: 2 })}`}</td>
+                      <td className="px-4 py-2.5 text-slate-700">
+                        General Liability Insurance
+                        {wages > 0 && fmtPct(gl, wages)}
+                      </td>
+                      <td className="px-4 py-2.5 text-right">{fixedInput(omGlFixed, setOmGlFixed)}</td>
                     </tr>
-                    {/* Medical */}
-                    <tr className="border-b border-slate-200">
-                      <td className="px-4 py-2.5 text-slate-700">Medical (fixed)</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-slate-400 text-xs">fixed</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-slate-800">{`$${medical.toLocaleString("en-US", { minimumFractionDigits: 2 })}`}</td>
+                    {/* Dental — fixed editable */}
+                    <tr className="border-b border-slate-100">
+                      <td className="px-4 py-2.5 text-slate-700">
+                        Health Insurance — Dental
+                        {wages > 0 && fmtPct(dental, wages)}
+                      </td>
+                      <td className="px-4 py-2.5 text-right">{fixedInput(omDentalFixed, setOmDentalFixed)}</td>
+                    </tr>
+                    {/* Medical — fixed editable */}
+                    <tr className="border-b border-slate-100">
+                      <td className="px-4 py-2.5 text-slate-700">
+                        Health Insurance — Medical
+                        {wages > 0 && fmtPct(medical, wages)}
+                      </td>
+                      <td className="px-4 py-2.5 text-right">{fixedInput(omMedicalFixed, setOmMedicalFixed)}</td>
                     </tr>
                     {/* Total Overhead */}
                     <tr className="border-b border-slate-200 bg-slate-100">
-                      <td className="px-4 py-2.5 font-semibold text-slate-800" colSpan={2}>Total Overhead</td>
+                      <td className="px-4 py-2.5 font-semibold text-slate-700">Total Overhead</td>
                       <td className="px-4 py-2.5 text-right font-mono font-semibold text-slate-900">
-                        {wages > 0 ? `$${totalOverhead.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+                        {wages > 0 ? fmtAmt(totalOverhead) : "—"}
                       </td>
                     </tr>
-                    {/* STL Allocation — editable % */}
-                    <tr className="bg-purple-50">
-                      <td className="px-4 py-3 font-bold text-purple-900">× STL Allocation</td>
-                      <td className="px-4 py-3 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <input
-                            type="number"
-                            step="1"
-                            min="0"
-                            max="100"
-                            value={omAllocPct}
-                            onChange={e => setOmAllocPct(e.target.value)}
-                            className="w-16 text-right border border-purple-300 bg-purple-50 focus:bg-white focus:border-purple-500 rounded px-2 py-1 text-sm font-mono outline-none text-purple-800 font-semibold"
-                          />
-                          <span className="text-purple-700 font-semibold text-sm">%</span>
-                        </div>
+                    {/* Total Cost = Wages + Overhead */}
+                    <tr className="border-b border-slate-200 bg-slate-200">
+                      <td className="px-4 py-2.5 font-bold text-slate-800">Total Cost (Wages + Overhead)</td>
+                      <td className="px-4 py-2.5 text-right font-mono font-bold text-slate-900">
+                        {wages > 0 ? fmtAmt(totalCost) : "—"}
                       </td>
-                      <td className="px-4 py-3 text-right font-mono font-bold text-purple-900 text-base">
-                        {wages > 0 ? `$${stlAlloc.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+                    </tr>
+                    {/* STL Allocation */}
+                    <tr className="bg-purple-50">
+                      <td className="px-4 py-3 font-bold text-purple-900">
+                        × STL Allocation
+                        <span className="ml-2 text-xs text-purple-500 font-normal">(% of Total Cost)</span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <input type="number" step="1" min="0" max="100" value={omAllocPct}
+                            onChange={e => setOmAllocPct(e.target.value)}
+                            className="w-16 text-right border border-purple-300 bg-purple-50 focus:bg-white focus:border-purple-500 rounded px-2 py-1 text-sm font-mono outline-none text-purple-800 font-semibold" />
+                          <span className="text-purple-700 font-semibold text-sm">%</span>
+                          <span className="font-mono font-bold text-purple-900 text-base min-w-24 text-right">
+                            {wages > 0 ? fmtAmt(stlAlloc) : "—"}
+                          </span>
+                        </div>
                       </td>
                     </tr>
                   </tbody>
                 </table>
               </div>
 
-              {/* Reference rates */}
-              <div className="rounded-xl border border-slate-200 overflow-hidden">
-                <div className="bg-slate-700 text-white text-sm font-semibold px-4 py-2.5">Reference Rates</div>
-                <table className="w-full text-sm">
-                  <tbody>
-                    <tr className="border-b border-slate-100">
-                      <td className="px-4 py-2 text-slate-500">WC Warehouse Rate</td>
-                      <td className="px-4 py-2 text-right font-mono text-slate-700">{(S.wcRate * 100).toFixed(2)}%</td>
-                    </tr>
-                    <tr className="border-b border-slate-100">
-                      <td className="px-4 py-2 text-slate-500">WC Discount (company-wide)</td>
-                      <td className="px-4 py-2 text-right font-mono text-slate-700">{(wcDiscount * 100).toFixed(2)}%</td>
-                    </tr>
-                    <tr className="border-b border-slate-100">
-                      <td className="px-4 py-2 text-slate-500">WC Net Rate (after discount)</td>
-                      <td className="px-4 py-2 text-right font-mono text-slate-700">{(wcNetRate * 100).toFixed(4)}%</td>
-                    </tr>
-                    <tr className="border-b border-slate-100">
-                      <td className="px-4 py-2 text-slate-500">GL Insurance Rate (annual premium / revenue)</td>
-                      <td className="px-4 py-2 text-right font-mono text-slate-700">{(glRate * 100).toFixed(4)}%</td>
-                    </tr>
-                    <tr>
-                      <td className="px-4 py-2 text-slate-500">STL Allocation</td>
-                      <td className="px-4 py-2 text-right font-mono text-slate-700">{allocPct.toFixed(0)}%</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
+              {/* Reference: Employer Tax rate note */}
+              <p className="text-xs text-slate-400 px-1">
+                Employer FICA rate: {(S.employerTaxRate * 100).toFixed(2)}% (fixed by law) · All other overhead items are fixed monthly amounts — edit as needed.
+              </p>
             </div>
           );
         })()}
@@ -3841,7 +3852,7 @@ export default function BillingPage() {
         {/* ── Summary panel ── */}
         {extraTab === "summary" && (() => {
           const group        = getCurrentGroup();
-          const omSubsidy    = calcStlAlloc(omWages, omAllocPct);
+          const omSubsidy    = calcStlAlloc(omWages, omAllocPct, { wc: parseFloat(omWcFixed)||0, gl: parseFloat(omGlFixed)||0, dental: parseFloat(omDentalFixed)||0, medical: parseFloat(omMedicalFixed)||0 });
           const subleaseRent = (parseFloat(subleaseRentQty) || 0) * SUBLEASE_RENT_RATE;
           const subleaseOp   = (parseFloat(subleaseOpQty)   || 0) * SUBLEASE_OP_RATE;
           const subleaseAmt  = subleaseRent + subleaseOp;
