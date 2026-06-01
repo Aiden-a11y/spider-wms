@@ -2046,7 +2046,7 @@ async function exportAllToExcel(
     // The breakdown table starts after gt row + 2 blank/header rows
     // Row positions: bkHdr, bkColHdr, then one row per customer
     // We need to find those rows. Track bkFirstDataRow using a known offset.
-    const bkFirstDataRow = gt.number + 3; // gt → blank → bkHdr → bkColHdr → first data row
+    const bkFirstDataRow = gt.number + 4; // gt → blank → bkHdr → bkColHdr → first data row
     for (let i = 0; i < invoices.length; i++) {
       const meta = customerMetas[i];
       if (!meta || meta.totalRowNum <= 0) continue;
