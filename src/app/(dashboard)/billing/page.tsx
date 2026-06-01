@@ -861,7 +861,8 @@ function addB2BDetailSheet(
 function addInboundDetailSheet(
   wb: ExcelJS.Workbook,
   custCode: string,
-  orders: Record<string, unknown>[]
+  orders: Record<string, unknown>[],
+  orderEdits: Record<string, Record<string, number>> = {}
 ): { sheetName: string; rowCount: number } {
   const sheetName = `${custCode}_Inbound`.slice(0, 31);
   const ws = wb.addWorksheet(sheetName);
@@ -886,7 +887,8 @@ function addInboundDetailSheet(
     const date = String(order.inDate ?? order.receiveDate ?? order.orderDate ?? "");
     const type = String(order.inboundType ?? order.receiveType ?? "");
     const cartonQty = order.cartonQty ?? order.boxQty ?? order.packageQty ?? order.cartonCount;
-    const qty = cartonQty != null ? Number(cartonQty) : 1;
+    const rawQty = cartonQty != null ? Number(cartonQty) : 1;
+    const qty = orderEdits[code]?.["inbound_carton"] ?? rawQty;
     const r = ws.addRow([code, date, type, qty]);
     r.height = 15;
     r.eachCell((cell, col) => {
@@ -1431,7 +1433,7 @@ async function exportInvoiceToExcel(
       refs.b2bSheet = sheetName;
     }
     if (source.receiving.length > 0) {
-      const { sheetName } = addInboundDetailSheet(wb, custCode, source.receiving);
+      const { sheetName } = addInboundDetailSheet(wb, custCode, source.receiving, orderEdits ?? {});
       refs.inboundSheet = sheetName;
     }
     if (source.b2c.length > 0) {
@@ -1848,7 +1850,7 @@ async function exportAllToExcel(
         refs.b2bSheet = sheetName;
       }
       if (source.receiving.length > 0) {
-        const { sheetName } = addInboundDetailSheet(wb, custCode, source.receiving);
+        const { sheetName } = addInboundDetailSheet(wb, custCode, source.receiving, custOrderEdits);
         refs.inboundSheet = sheetName;
       }
       if (source.b2c.length > 0) {
