@@ -1476,7 +1476,8 @@ async function exportAllToExcel(
   snapDate1?: string,
   snapDate2?: string,
   rawRows15?: StorageRawRow[],
-  rawRowsLast?: StorageRawRow[]
+  rawRowsLast?: StorageRawRow[],
+  subleaseBreakdown?: { rentQty: number; rentRate: number; opQty: number; opRate: number }
 ) {
   if (invoices.length === 0) return;
   const wb = new ExcelJS.Workbook();
@@ -1643,17 +1644,52 @@ async function exportAllToExcel(
     slSecCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF3CD" } };
     slSecCell.alignment = { vertical: "middle", indent: 1 };
     applyBorder(slSecCell, "medium");
-    // Single combined row
-    const slRow = ws.addRow(["", "Office Sublease", "Office Sublease — Monthly Fixed Charges", "", "monthly", 1, subleaseTotal]);
-    slRow.height = 15;
-    slRow.eachCell((cell, col) => {
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF8E1" } };
-      cell.font = { size: 10, color: { argb: "FFB45309" } };
-      cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
-      applyBorder(cell);
-    });
-    slRow.getCell(6).numFmt = "#,##0";
-    slRow.getCell(7).numFmt = "$#,##0.00";
+
+    const slStyle = (row: ExcelJS.Row) => {
+      row.height = 15;
+      row.eachCell((cell, col) => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF8E1" } };
+        cell.font = { size: 10, color: { argb: "FFB45309" } };
+        cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
+        applyBorder(cell);
+      });
+    };
+
+    if (subleaseBreakdown) {
+      // Row 1: Monthly Office Rent
+      const rentAmt = subleaseBreakdown.rentQty * subleaseBreakdown.rentRate;
+      const r1 = ws.addRow([
+        "", "Monthly Office Rent",
+        "Monthly Office Rent (per MSA Section 3.2)",
+        `$${subleaseBreakdown.rentRate.toLocaleString()} / month`,
+        "month",
+        subleaseBreakdown.rentQty,
+        rentAmt,
+      ]);
+      slStyle(r1);
+      r1.getCell(6).numFmt = "#,##0";
+      r1.getCell(7).numFmt = "$#,##0.00";
+
+      // Row 2: Operating Cost Reimbursement
+      const opAmt = subleaseBreakdown.opQty * subleaseBreakdown.opRate;
+      const r2 = ws.addRow([
+        "", "Operating Cost Reimbursement",
+        "Operating Cost Reimbursement (per MSA Section 3.3)",
+        `$${subleaseBreakdown.opRate.toFixed(2)} / sq ft / month`,
+        "sq ft",
+        subleaseBreakdown.opQty,
+        opAmt,
+      ]);
+      slStyle(r2);
+      r2.getCell(6).numFmt = "#,##0";
+      r2.getCell(7).numFmt = "$#,##0.00";
+    } else {
+      // Fallback: single combined row (no breakdown available)
+      const slRow = ws.addRow(["", "Office Sublease", "Office Sublease — Monthly Fixed Charges", "", "monthly", 1, subleaseTotal]);
+      slStyle(slRow);
+      slRow.getCell(6).numFmt = "#,##0";
+      slRow.getCell(7).numFmt = "$#,##0.00";
+    }
   }
 
   // ── Grand Total — formula summing all subtotals ──
@@ -2903,11 +2939,17 @@ export default function BillingPage() {
         fullStorageMap[inv.customer]?.snapLast?.rawRows ?? []
       );
 
+      const slBreakdown = subleaseAmt > 0 ? {
+        rentQty: parseFloat(subleaseRentQty) || 0, rentRate: SUBLEASE_RENT_RATE,
+        opQty:   parseFloat(subleaseOpQty)   || 0, opRate:   SUBLEASE_OP_RATE,
+      } : undefined;
+
       await exportAllToExcel(
         group, period, sourceMap, editsMap,
         effectiveStorageRows, omSubsidyAmt, subleaseAmt,
         effectiveDate15, effectiveDateLast,
-        effectiveRawRows15, effectiveRawRowsLast
+        effectiveRawRows15, effectiveRawRowsLast,
+        slBreakdown
       );
     } finally {
       setExportingNow(false);
@@ -2967,8 +3009,13 @@ export default function BillingPage() {
       const allRawRows15   = storagePerCust.flatMap(s => s!.snap15?.rawRows   ?? []);
       const allRawRowsLast = storagePerCust.flatMap(s => s!.snapLast?.rawRows ?? []);
 
-      const listSubleaseAmt = (parseFloat(subleaseRentQty) || 0) * SUBLEASE_RENT_RATE
-                            + (parseFloat(subleaseOpQty)   || 0) * SUBLEASE_OP_RATE;
+      const listRentQty     = parseFloat(subleaseRentQty) || 0;
+      const listOpQty       = parseFloat(subleaseOpQty)   || 0;
+      const listSubleaseAmt = listRentQty * SUBLEASE_RENT_RATE + listOpQty * SUBLEASE_OP_RATE;
+      const listSlBreakdown = listSubleaseAmt > 0 ? {
+        rentQty: listRentQty, rentRate: SUBLEASE_RENT_RATE,
+        opQty:   listOpQty,   opRate:   SUBLEASE_OP_RATE,
+      } : undefined;
 
       if (invoices.length === 1) {
         await exportInvoiceToExcel(
@@ -2984,6 +3031,7 @@ export default function BillingPage() {
           firstStorageLoc?.date15 || undefined, firstStorageLoc?.dateLast || undefined,
           allRawRows15.length > 0 ? allRawRows15 : undefined,
           allRawRowsLast.length > 0 ? allRawRowsLast : undefined,
+          listSlBreakdown,
         );
       }
     } finally {
@@ -3027,14 +3075,20 @@ export default function BillingPage() {
         .filter(r => r.qty15 > 0 || r.qtyLast > 0);
       const allRawRows15b   = storagePerCust2.flatMap(s => s!.snap15?.rawRows   ?? []);
       const allRawRowsLastb = storagePerCust2.flatMap(s => s!.snapLast?.rawRows ?? []);
-      const allCustSubleaseAmt = (parseFloat(subleaseRentQty) || 0) * SUBLEASE_RENT_RATE
-                               + (parseFloat(subleaseOpQty)   || 0) * SUBLEASE_OP_RATE;
+      const allRentQty2       = parseFloat(subleaseRentQty) || 0;
+      const allOpQty2         = parseFloat(subleaseOpQty)   || 0;
+      const allCustSubleaseAmt = allRentQty2 * SUBLEASE_RENT_RATE + allOpQty2 * SUBLEASE_OP_RATE;
+      const allSlBreakdown2 = allCustSubleaseAmt > 0 ? {
+        rentQty: allRentQty2, rentRate: SUBLEASE_RENT_RATE,
+        opQty:   allOpQty2,   opRate:   SUBLEASE_OP_RATE,
+      } : undefined;
       await exportAllToExcel(
         invoiceList, period, sourceMap, {},
         aggStorageRows2, 0, allCustSubleaseAmt,
         firstStorage2?.date15 || undefined, firstStorage2?.dateLast || undefined,
         allRawRows15b.length > 0 ? allRawRows15b : undefined,
         allRawRowsLastb.length > 0 ? allRawRowsLastb : undefined,
+        allSlBreakdown2,
       );
       setAllExportMsg(`✓ Exported ${invoiceList.length} customers to Invoice_ALL_${period}.xlsx`);
     } catch {
