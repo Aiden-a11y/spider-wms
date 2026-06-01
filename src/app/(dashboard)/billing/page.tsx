@@ -4159,91 +4159,175 @@ export default function BillingPage() {
                   {sourceTab === "receiving" && (
                     wmsSource.receiving.length === 0 ? (
                       <p className="text-center text-sm text-slate-400 py-8">No inbound orders this period</p>
-                    ) : (
-                      <table className="w-full text-xs">
-                        <thead className="bg-slate-50 sticky top-0 z-10">
-                          <tr>
-                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">Order Code</th>
-                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">PO / Ref</th>
-                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">In Date</th>
-                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">Status</th>
-                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">Type</th>
-                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">Item Qty</th>
-                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">Carton Field</th>
-                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">Carton Value</th>
-                            <th className="px-3 py-2 text-right text-slate-500 font-semibold text-blue-600">Counted</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {wmsSource.receiving.map((o, i) => {
-                            const type = String(o.inboundType ?? o.receiveType ?? "");
-                            const isContainer = /container|cont/i.test(type);
-                            const itemQty = Number(o.totalQty ?? o.itemCount ?? 0);
-                            // Determine which field provides the carton count
-                            const cartonFieldName =
-                              o.cartonQty != null ? "cartonQty" :
-                              o.boxQty != null ? "boxQty" :
-                              o.packageQty != null ? "packageQty" :
-                              o.cartonCount != null ? "cartonCount" :
-                              "default";
-                            const cartonFieldVal =
-                              o.cartonQty ?? o.boxQty ?? o.packageQty ?? o.cartonCount;
-                            const counted = isContainer ? 0 : (cartonFieldVal != null ? Number(cartonFieldVal) : 1);
-                            const isDefault = cartonFieldName === "default";
-                            const inDateVal = String(o.inDate ?? o.receiveDate ?? o.orderDate ?? "");
-                            const missingDate = !inDateVal || inDateVal.length < 6;
-                            return (
-                              <tr key={i} className={`border-b border-slate-50 ${missingDate ? "bg-yellow-50" : isContainer ? "bg-red-50/40" : "hover:bg-slate-50"}`}>
-                                <td className="px-3 py-1.5 font-mono text-blue-600 whitespace-nowrap">{String(o.receiveOrderCode ?? o.orderCode ?? "—")}</td>
-                                <td className="px-3 py-1.5 text-slate-400 font-mono text-[10px]">{String(o.poNo ?? o.poNumber ?? o.referenceNo ?? "—")}</td>
-                                <td className={`px-3 py-1.5 whitespace-nowrap font-semibold ${missingDate ? "text-yellow-600" : "text-slate-500"}`}>
-                                  {missingDate ? "⚠ No date" : inDateVal}
-                                </td>
-                                <td className="px-3 py-1.5">
-                                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
-                                    String(o.status ?? o.orderStatus ?? "") === "DA"
-                                      ? "bg-green-100 text-green-700"
-                                      : "bg-slate-100 text-slate-500"
-                                  }`}>{String(o.status ?? o.orderStatus ?? "—")}</span>
-                                </td>
-                                <td className="px-3 py-1.5 text-slate-500">
-                                  {type || "—"}
-                                  {isContainer && <span className="ml-1 text-[10px] text-red-500 font-medium">(excl.)</span>}
-                                </td>
-                                <td className="px-3 py-1.5 text-right text-slate-500">{itemQty > 0 ? itemQty.toLocaleString() : "—"}</td>
-                                <td className="px-3 py-1.5 text-right">
-                                  {isContainer ? (
-                                    <span className="text-slate-300">—</span>
-                                  ) : (
-                                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${
-                                      isDefault ? "bg-amber-50 text-amber-600" : "bg-blue-50 text-blue-600"
-                                    }`}>{cartonFieldName}</span>
-                                  )}
-                                </td>
-                                <td className="px-3 py-1.5 text-right text-slate-500">
-                                  {isContainer ? "—" : (cartonFieldVal != null ? Number(cartonFieldVal).toLocaleString() : <span className="text-amber-500">1 (default)</span>)}
-                                </td>
-                                <td className={`px-3 py-1.5 text-right font-bold ${isContainer ? "text-slate-300" : "text-blue-600"}`}>
-                                  {isContainer ? "—" : counted.toLocaleString()}
-                                </td>
-                              </tr>
+                    ) : (() => {
+                      // Helper: detect default billing quantities from WMS order data
+                      const getInboundDefs = (o: Record<string, unknown>): Record<string, number> => {
+                        const type = String(o.inboundType ?? o.receiveType ?? "").toLowerCase();
+                        const isContainer = /container|cont/i.test(type);
+                        if (!isContainer) {
+                          const v = o.cartonQty ?? o.boxQty ?? o.packageQty ?? o.cartonCount;
+                          return { inbound_carton: v != null ? Number(v) : 1 };
+                        }
+                        const is40hc = /40.*hc|hc.*40|40hc/i.test(type);
+                        const is40   = /\b40\b/.test(type) && !is40hc;
+                        const is20   = /\b20\b/.test(type);
+                        const isFloor = /floor/i.test(type);
+                        if (is40hc && isFloor)  return { inbound_40hc_floor: 1 };
+                        if (is40hc)             return { inbound_40hc_palletized: 1 };
+                        if (is40 && isFloor)    return { inbound_40ft_floor: 1 };
+                        if (is40)               return { inbound_40ft_palletized: 1 };
+                        if (is20 && isFloor)    return { inbound_20ft_floor: 1 };
+                        if (is20)               return { inbound_20ft_palletized: 1 };
+                        return { inbound_40ft_palletized: 1 };
+                      };
+
+                      const IB_KEYS = [
+                        "inbound_carton","inbound_pallet",
+                        "inbound_20ft_palletized","inbound_40ft_palletized","inbound_40hc_palletized",
+                        "inbound_20ft_floor","inbound_40ft_floor","inbound_40hc_floor",
+                        "inbound_labor",
+                      ] as const;
+
+                      const setOvIb = (orderCode: string, key: string, val: string) => {
+                        const num = val === "" ? undefined : Number(val);
+                        setOrderEdits(prev => {
+                          const next = { ...prev, [orderCode]: { ...(prev[orderCode] ?? {}) } };
+                          if (num === undefined) delete next[orderCode][key];
+                          else next[orderCode][key] = num;
+                          // recalculate totals across all inbound orders
+                          const totals: Record<string, number> = {};
+                          IB_KEYS.forEach(k => { totals[k] = 0; });
+                          wmsSource.receiving.forEach((ord, idx) => {
+                            const ordCode = String(ord.receiveOrderCode ?? ord.orderCode ?? idx);
+                            const ordOv   = next[ordCode] ?? {};
+                            const defs    = getInboundDefs(ord as Record<string,unknown>);
+                            IB_KEYS.forEach(k => { totals[k] += ordOv[k] ?? defs[k] ?? 0; });
+                          });
+                          setEditing(ep => {
+                            if (!ep) return ep;
+                            const items = ep.lineItems.map(item =>
+                              (totals as Record<string,number>)[item.id] !== undefined
+                                ? { ...item, qty: (totals as Record<string,number>)[item.id], autoFetched: false }
+                                : item
                             );
-                          })}
-                          <tr className="bg-blue-50 border-t-2 border-blue-200 font-bold text-blue-700 sticky bottom-0">
-                            <td colSpan={8} className="px-3 py-2 text-right pr-4">Total Cartons (non-container)</td>
-                            <td className="px-3 py-2 text-right text-blue-700">
-                              {wmsSource.receiving
-                                .filter((o) => !/container|cont/i.test(String(o.inboundType ?? o.receiveType ?? "")))
-                                .reduce((s, o) => {
-                                  const v = o.cartonQty ?? o.boxQty ?? o.packageQty ?? o.cartonCount;
-                                  return s + (v != null ? Number(v) : 1);
-                                }, 0)
-                                .toLocaleString()}
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    )
+                            return { ...ep, lineItems: items, subtotals: calcSubtotals(items), total: calcTotal(items) };
+                          });
+                          return next;
+                        });
+                      };
+
+                      const inputCls = (color?: string, modified?: boolean) =>
+                        `w-14 text-right text-xs font-semibold rounded px-1 py-0.5 border ${
+                          modified
+                            ? "border-yellow-400 bg-yellow-100 hover:bg-yellow-50 focus:border-yellow-500"
+                            : "border-slate-300 bg-slate-50 hover:bg-white"
+                        } focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200 transition-colors placeholder:text-slate-300 ${color ?? "text-slate-800"}`;
+
+                      // Column totals
+                      const totals: Record<string, number> = {};
+                      IB_KEYS.forEach(k => { totals[k] = 0; });
+                      wmsSource.receiving.forEach((o, idx) => {
+                        const code = String(o.receiveOrderCode ?? o.orderCode ?? idx);
+                        const ov   = orderEdits[code] ?? {};
+                        const defs = getInboundDefs(o as Record<string,unknown>);
+                        IB_KEYS.forEach(k => { totals[k] += ov[k] ?? defs[k] ?? 0; });
+                      });
+
+                      return (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs min-w-max">
+                            <thead className="bg-slate-50 sticky top-0 z-10">
+                              <tr>
+                                <th className="px-3 py-2 text-left text-slate-500 font-semibold">Order Code</th>
+                                <th className="px-3 py-2 text-left text-slate-500 font-semibold">PO / Ref</th>
+                                <th className="px-3 py-2 text-left text-slate-500 font-semibold">In Date</th>
+                                <th className="px-3 py-2 text-left text-slate-500 font-semibold">Status</th>
+                                <th className="px-3 py-2 text-left text-slate-500 font-semibold">Type</th>
+                                <th className="px-3 py-2 text-right text-slate-500 font-semibold">Item Qty</th>
+                                <th className="px-2 py-2 text-right text-blue-600 font-semibold">Carton</th>
+                                <th className="px-2 py-2 text-right text-blue-600 font-semibold">Pallet</th>
+                                <th className="px-2 py-2 text-right text-slate-500 font-semibold">20&apos;Pal</th>
+                                <th className="px-2 py-2 text-right text-slate-500 font-semibold">40&apos;Pal</th>
+                                <th className="px-2 py-2 text-right text-slate-500 font-semibold">40HC&apos;Pal</th>
+                                <th className="px-2 py-2 text-right text-slate-500 font-semibold">20&apos;Flr</th>
+                                <th className="px-2 py-2 text-right text-slate-500 font-semibold">40&apos;Flr</th>
+                                <th className="px-2 py-2 text-right text-slate-500 font-semibold">40HC&apos;Flr</th>
+                                <th className="px-2 py-2 text-right text-orange-500 font-semibold">Labor Hrs</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {wmsSource.receiving.map((o, i) => {
+                                const code       = String(o.receiveOrderCode ?? o.orderCode ?? i);
+                                const ov         = orderEdits[code] ?? {};
+                                const defs       = getInboundDefs(o as Record<string,unknown>);
+                                const type       = String(o.inboundType ?? o.receiveType ?? "");
+                                const isContainer = /container|cont/i.test(type);
+                                const itemQty    = Number(o.totalQty ?? o.itemCount ?? 0);
+                                const inDateVal  = String(o.inDate ?? o.receiveDate ?? o.orderDate ?? "");
+                                const missingDate = !inDateVal || inDateVal.length < 6;
+                                const cartonFieldVal = o.cartonQty ?? o.boxQty ?? o.packageQty ?? o.cartonCount;
+                                const isDefaultCarton = cartonFieldVal == null && !isContainer;
+
+                                const val = (key: string) => ov[key] ?? defs[key] ?? 0;
+
+                                return (
+                                  <tr key={i} className={`border-b border-slate-50 ${missingDate ? "bg-yellow-50" : isContainer ? "bg-slate-50/60" : "hover:bg-slate-50"}`}>
+                                    <td className="px-3 py-1 font-mono text-blue-600 whitespace-nowrap text-xs">{code}</td>
+                                    <td className="px-3 py-1 text-slate-400 font-mono text-[10px]">{String(o.poNo ?? o.poNumber ?? o.referenceNo ?? "—")}</td>
+                                    <td className={`px-3 py-1 whitespace-nowrap font-semibold ${missingDate ? "text-yellow-600" : "text-slate-500"}`}>
+                                      {missingDate ? "⚠ No date" : inDateVal}
+                                    </td>
+                                    <td className="px-3 py-1">
+                                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                                        String(o.status ?? o.orderStatus ?? "") === "DA"
+                                          ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-500"
+                                      }`}>{String(o.status ?? o.orderStatus ?? "—")}</span>
+                                    </td>
+                                    <td className="px-3 py-1 text-slate-500">
+                                      {type || "—"}
+                                      {isContainer && <span className="ml-1 px-1 py-0.5 rounded text-[10px] bg-slate-100 text-slate-500 font-medium">container</span>}
+                                    </td>
+                                    <td className="px-3 py-1 text-right text-slate-500">{itemQty > 0 ? itemQty.toLocaleString() : "—"}</td>
+                                    {/* Editable billing columns */}
+                                    <td className="px-1 py-1 text-right">
+                                      <div className="flex flex-col items-end gap-0.5">
+                                        <input type="number" min={0} value={val("inbound_carton") || ""} placeholder="—"
+                                          onChange={e => setOvIb(code, "inbound_carton", e.target.value)}
+                                          className={inputCls("text-blue-700", "inbound_carton" in ov)} />
+                                        {isDefaultCarton && !("inbound_carton" in ov) && (
+                                          <span className="text-[9px] text-amber-500 leading-none">default</span>
+                                        )}
+                                      </div>
+                                    </td>
+                                    <td className="px-1 py-1 text-right"><input type="number" min={0} value={val("inbound_pallet") || ""} placeholder="—" onChange={e => setOvIb(code, "inbound_pallet", e.target.value)} className={inputCls("text-blue-700", "inbound_pallet" in ov)} /></td>
+                                    <td className="px-1 py-1 text-right"><input type="number" min={0} value={val("inbound_20ft_palletized") || ""} placeholder="—" onChange={e => setOvIb(code, "inbound_20ft_palletized", e.target.value)} className={inputCls(undefined, "inbound_20ft_palletized" in ov)} /></td>
+                                    <td className="px-1 py-1 text-right"><input type="number" min={0} value={val("inbound_40ft_palletized") || ""} placeholder="—" onChange={e => setOvIb(code, "inbound_40ft_palletized", e.target.value)} className={inputCls(undefined, "inbound_40ft_palletized" in ov)} /></td>
+                                    <td className="px-1 py-1 text-right"><input type="number" min={0} value={val("inbound_40hc_palletized") || ""} placeholder="—" onChange={e => setOvIb(code, "inbound_40hc_palletized", e.target.value)} className={inputCls(undefined, "inbound_40hc_palletized" in ov)} /></td>
+                                    <td className="px-1 py-1 text-right"><input type="number" min={0} value={val("inbound_20ft_floor") || ""} placeholder="—" onChange={e => setOvIb(code, "inbound_20ft_floor", e.target.value)} className={inputCls(undefined, "inbound_20ft_floor" in ov)} /></td>
+                                    <td className="px-1 py-1 text-right"><input type="number" min={0} value={val("inbound_40ft_floor") || ""} placeholder="—" onChange={e => setOvIb(code, "inbound_40ft_floor", e.target.value)} className={inputCls(undefined, "inbound_40ft_floor" in ov)} /></td>
+                                    <td className="px-1 py-1 text-right"><input type="number" min={0} value={val("inbound_40hc_floor") || ""} placeholder="—" onChange={e => setOvIb(code, "inbound_40hc_floor", e.target.value)} className={inputCls(undefined, "inbound_40hc_floor" in ov)} /></td>
+                                    <td className="px-1 py-1 text-right"><input type="number" min={0} value={val("inbound_labor") || ""} placeholder="—" onChange={e => setOvIb(code, "inbound_labor", e.target.value)} className={inputCls("text-orange-700", "inbound_labor" in ov)} /></td>
+                                  </tr>
+                                );
+                              })}
+                              {/* Total row */}
+                              <tr className="bg-blue-50 border-t-2 border-blue-200 font-bold text-blue-700 sticky bottom-0 text-xs">
+                                <td colSpan={6} className="px-3 py-2 text-right pr-4 text-slate-500">TOTAL (billed)</td>
+                                <td className="px-2 py-2 text-right">{totals["inbound_carton"] || "—"}</td>
+                                <td className="px-2 py-2 text-right">{totals["inbound_pallet"] || "—"}</td>
+                                <td className="px-2 py-2 text-right">{totals["inbound_20ft_palletized"] || "—"}</td>
+                                <td className="px-2 py-2 text-right">{totals["inbound_40ft_palletized"] || "—"}</td>
+                                <td className="px-2 py-2 text-right">{totals["inbound_40hc_palletized"] || "—"}</td>
+                                <td className="px-2 py-2 text-right">{totals["inbound_20ft_floor"] || "—"}</td>
+                                <td className="px-2 py-2 text-right">{totals["inbound_40ft_floor"] || "—"}</td>
+                                <td className="px-2 py-2 text-right">{totals["inbound_40hc_floor"] || "—"}</td>
+                                <td className="px-2 py-2 text-right text-orange-700">{totals["inbound_labor"] || "—"}</td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                      );
+                    })()
                   )}
 
                   {/* ── B2B ── */}
