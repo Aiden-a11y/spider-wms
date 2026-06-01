@@ -950,18 +950,32 @@ function addB2CDetailSheet(
   return { sheetName, rowCount: orders.length };
 }
 
-/** Add Storage_15th, Storage_Last, Storage_Avg sheets to the workbook */
+/** Add Storage snapshot sheets to the workbook, labeled with the actual dates used */
 function addInventoryDetailSheets(
   wb: ExcelJS.Workbook,
-  storageRows: StorageRow[]
-): { avgSheetName: string } {
+  storageRows: StorageRow[],
+  date1 = "Date 1",
+  date2 = "Date 2"
+): { avgSheetName: string; snap1SheetName: string; snap2SheetName: string } {
+  // Truncate date labels to fit Excel 31-char sheet name limit
+  const snap1Name = `Storage_${date1}`.slice(0, 31);
+  const snap2Name = `Storage_${date2}`.slice(0, 31);
   const avgSheetName = "Storage_Avg";
 
-  // Helper to add a simple 2-column storage snapshot sheet
+  // Helper: add a snapshot sheet with totals row
   function addSnapSheet(name: string, colHeader: string, getQty: (r: StorageRow) => number) {
     const ws = wb.addWorksheet(name);
-    ws.columns = [{ width: 20 }, { width: 12 }];
-    const hdr = ws.addRow(["Type", colHeader]);
+    ws.columns = [{ width: 24 }, { width: 14 }];
+
+    // Date label header row
+    const dateRow = ws.addRow([colHeader]);
+    dateRow.height = 14;
+    ws.mergeCells(`A${dateRow.number}:B${dateRow.number}`);
+    dateRow.getCell(1).font = { bold: true, size: 10, color: { argb: C.navy } };
+    dateRow.getCell(1).alignment = { horizontal: "center" };
+
+    // Column header
+    const hdr = ws.addRow(["Location Type", "Qty"]);
     hdr.height = 16;
     hdr.eachCell((cell) => {
       cell.font = { bold: true, color: { argb: C.white }, size: 10 };
@@ -969,28 +983,49 @@ function addInventoryDetailSheets(
       cell.alignment = { vertical: "middle", horizontal: "center" };
       applyBorder(cell, "medium");
     });
-    // Always emit all 7 template rows in fixed order for consistent row positions
+
+    let total = 0;
     STORAGE_TEMPLATE_ROWS.forEach((tmpl, i) => {
       const found = storageRows.find(r => r.key === tmpl.key);
       const qty = found ? getQty(found) : 0;
+      total += qty;
       const r = ws.addRow([tmpl.label, qty]);
       r.height = 15;
       r.eachCell((cell, col) => {
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: i % 2 === 0 ? C.white : C.rowAlt } };
-        cell.font = { size: 10 };
+        cell.font = { size: 10, color: { argb: qty === 0 ? C.border : C.black } };
         cell.alignment = { vertical: "middle", horizontal: col === 1 ? "left" : "right" };
         applyBorder(cell);
       });
+      r.getCell(2).numFmt = "#,##0";
     });
+
+    // Total row
+    const totRow = ws.addRow(["TOTAL", total]);
+    totRow.height = 16;
+    totRow.eachCell((cell, col) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.subtotalBg } };
+      cell.font = { bold: true, size: 10 };
+      cell.alignment = { vertical: "middle", horizontal: col === 1 ? "left" : "right" };
+      applyBorder(cell, "medium");
+    });
+    totRow.getCell(2).numFmt = "#,##0";
   }
 
-  addSnapSheet("Storage_15th", "15th Qty", r => r.qty15);
-  addSnapSheet("Storage_Last", "Last Qty", r => r.qtyLast);
+  addSnapSheet(snap1Name, date1, r => r.qty15);
+  addSnapSheet(snap2Name, date2, r => r.qtyLast);
 
-  // Storage_Avg: A=Type, B=15th (formula ref Storage_15th), C=Last (formula ref Storage_Last), D=Average
+  // Storage_Avg: references snap sheets + total row
   const wsAvg = wb.addWorksheet(avgSheetName);
-  wsAvg.columns = [{ width: 20 }, { width: 12 }, { width: 12 }, { width: 14 }];
-  const hdrAvg = wsAvg.addRow(["Type", "15th", "Last", "Average"]);
+  wsAvg.columns = [{ width: 24 }, { width: 14 }, { width: 14 }, { width: 16 }];
+
+  const dateHdr = wsAvg.addRow([`${date1}  vs  ${date2}`]);
+  dateHdr.height = 14;
+  wsAvg.mergeCells(`A${dateHdr.number}:D${dateHdr.number}`);
+  dateHdr.getCell(1).font = { bold: true, size: 10, color: { argb: C.navy } };
+  dateHdr.getCell(1).alignment = { horizontal: "center" };
+
+  const hdrAvg = wsAvg.addRow(["Location Type", date1, date2, "Average (Billed)"]);
   hdrAvg.height = 16;
   hdrAvg.eachCell((cell) => {
     cell.font = { bold: true, color: { argb: C.white }, size: 10 };
@@ -998,28 +1033,48 @@ function addInventoryDetailSheets(
     cell.alignment = { vertical: "middle", horizontal: "center" };
     applyBorder(cell, "medium");
   });
+
   STORAGE_TEMPLATE_ROWS.forEach((tmpl, i) => {
-    const dataRow = i + 2; // Row 2 = first data row
-    const found = storageRows.find(r => r.key === tmpl.key);
+    const dataRow = i + 3; // row 1 = date label, row 2 = col hdr, row 3 = first data
+    const found   = storageRows.find(r => r.key === tmpl.key);
     const qty15   = found?.qty15   ?? 0;
     const qtyLast = found?.qtyLast ?? 0;
     const avg     = found?.avg     ?? 0;
     const r = wsAvg.addRow([
       tmpl.label,
-      { formula: `='Storage_15th'!B${dataRow}`, result: qty15 },
-      { formula: `='Storage_Last'!B${dataRow}`, result: qtyLast },
+      { formula: `='${snap1Name}'!B${dataRow}`, result: qty15 },
+      { formula: `='${snap2Name}'!B${dataRow}`, result: qtyLast },
       { formula: `=AVERAGE(B${dataRow},C${dataRow})`, result: avg },
     ]);
     r.height = 15;
     r.eachCell((cell, col) => {
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: i % 2 === 0 ? C.white : C.rowAlt } };
-      cell.font = { size: 10 };
+      cell.font = { size: 10, color: { argb: (qty15 === 0 && qtyLast === 0) ? C.border : C.black } };
       cell.alignment = { vertical: "middle", horizontal: col === 1 ? "left" : "right" };
       applyBorder(cell);
     });
+    [2, 3, 4].forEach(c => { wsAvg.getRow(r.number).getCell(c).numFmt = "#,##0.00"; });
   });
 
-  return { avgSheetName };
+  // Avg total row
+  const totRowNum = STORAGE_TEMPLATE_ROWS.length + 3;
+  const snap1TotRow = STORAGE_TEMPLATE_ROWS.length + 3; // same offset in snap sheets (1 date hdr + 1 col hdr + 7 data)
+  const totAvg = wsAvg.addRow([
+    "TOTAL",
+    { formula: `='${snap1Name}'!B${snap1TotRow}`, result: storageRows.reduce((s, r) => s + r.qty15, 0) },
+    { formula: `='${snap2Name}'!B${snap1TotRow}`, result: storageRows.reduce((s, r) => s + r.qtyLast, 0) },
+    { formula: `=AVERAGE(B${totRowNum},C${totRowNum})`, result: storageRows.reduce((s, r) => s + r.avg, 0) },
+  ]);
+  totAvg.height = 16;
+  totAvg.eachCell((cell, col) => {
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.subtotalBg } };
+    cell.font = { bold: true, size: 10 };
+    cell.alignment = { vertical: "middle", horizontal: col === 1 ? "left" : "right" };
+    applyBorder(cell, "medium");
+  });
+  [2, 3, 4].forEach(c => { wsAvg.getRow(totAvg.number).getCell(c).numFmt = "#,##0.00"; });
+
+  return { avgSheetName, snap1SheetName: snap1Name, snap2SheetName: snap2Name };
 }
 
 /** Sheet-name refs for formula generation */
@@ -1069,15 +1124,15 @@ function getQtyFormula(
   if (itemId === "b2c_pick_piece" && c) {
     return { formula: `=SUM('${c}'!E2:E9999)`, result: fallbackQty };
   }
-  // Storage → Storage_Avg!D{row} (rows 2–8 in STORAGE_TEMPLATE_ROWS order)
+  // Storage → Storage_Avg!D{row} (rows 3–9: row 1=date label, row 2=col header, rows 3+ = data)
   const storageRowMap: Record<string, number> = {
-    storage_bin:            2,
-    storage_shelf:          3,
-    storage_carton:         4,
-    storage_pallet_short:   5,
-    storage_pallet_regular: 6,
-    storage_pallet_tall:    7,
-    storage_open_floor:     8,
+    storage_bin:            3,
+    storage_shelf:          4,
+    storage_carton:         5,
+    storage_pallet_short:   6,
+    storage_pallet_regular: 7,
+    storage_pallet_tall:    8,
+    storage_open_floor:     9,
   };
   if (storageRowMap[itemId] !== undefined && s) {
     const row = storageRowMap[itemId];
@@ -1255,7 +1310,9 @@ async function exportInvoiceToExcel(
   invoice: BillingInvoice,
   source?: WmsSource | null,
   orderEdits?: Record<string, Record<string, number>>,
-  storageRows?: StorageRow[]
+  storageRows?: StorageRow[],
+  snapDate1?: string,
+  snapDate2?: string
 ) {
   const wb = new ExcelJS.Workbook();
   const custCode = invoice.customer;
@@ -1277,7 +1334,7 @@ async function exportInvoiceToExcel(
     }
   }
   if (storageRows && storageRows.length > 0) {
-    const { avgSheetName } = addInventoryDetailSheets(wb, storageRows);
+    const { avgSheetName } = addInventoryDetailSheets(wb, storageRows, snapDate1, snapDate2);
     refs.storageAvgSheet = avgSheetName;
   }
 
@@ -1303,7 +1360,9 @@ async function exportAllToExcel(
   orderEditsMap?: Record<string, Record<string, Record<string, number>>> | null,
   storageRows?: StorageRow[],
   omSubsidy?: number,
-  subleaseTotal?: number
+  subleaseTotal?: number,
+  snapDate1?: string,
+  snapDate2?: string
 ) {
   if (invoices.length === 0) return;
   const wb = new ExcelJS.Workbook();
@@ -1570,7 +1629,7 @@ async function exportAllToExcel(
   // ── Inventory storage sheets (shared across all customers) ──
   let sharedStorageAvg: string | undefined;
   if (storageRows && storageRows.length > 0) {
-    const { avgSheetName } = addInventoryDetailSheets(wb, storageRows);
+    const { avgSheetName } = addInventoryDetailSheets(wb, storageRows, snapDate1, snapDate2);
     sharedStorageAvg = avgSheetName;
   }
 
@@ -2679,7 +2738,7 @@ export default function BillingPage() {
         exportInvoiceToExcel(exportPreview!.invoice as BillingInvoice).catch(console.error);
       } else if (exportPreview!.mode === "multi") {
         const ep = exportPreview as Extract<typeof exportPreview, { mode: "multi" }>;
-        exportAllToExcel(ep.invoices, ep.period, wmsSourceMap, { [editing?.customer ?? ""]: orderEdits }, storageRows, ep.omSubsidy, ep.subleaseTotal).catch(console.error);
+        exportAllToExcel(ep.invoices, ep.period, wmsSourceMap, { [editing?.customer ?? ""]: orderEdits }, storageRows, ep.omSubsidy, ep.subleaseTotal, snapDate15 || undefined, snapDateLast || undefined).catch(console.error);
       } else {
         const ep = exportPreview as Extract<typeof exportPreview, { mode: "list" }>;
         exportAllToExcel(ep.invoices, ep.period, null, null, undefined, undefined, subleaseAmt).catch(console.error);
@@ -3367,7 +3426,7 @@ export default function BillingPage() {
                   onClick={() => {
                     const mergedEditsMap  = { ...orderEditsMap,  ...(editing ? { [editing.customer]: orderEdits }  : {}) };
                     const mergedSourceMap = { ...wmsSourceMap,   ...(editing && wmsSource ? { [editing.customer]: wmsSource } : {}) };
-                    exportAllToExcel(group, editing!.period, mergedSourceMap, mergedEditsMap, storageRows, omSubsidy, subleaseAmt).catch(console.error);
+                    exportAllToExcel(group, editing!.period, mergedSourceMap, mergedEditsMap, storageRows, omSubsidy, subleaseAmt, snapDate15 || undefined, snapDateLast || undefined).catch(console.error);
                   }}
                   className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-sm"
                 >
