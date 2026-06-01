@@ -507,28 +507,31 @@ type InvoiceSheetRef = { sheetName: string; catSubtotalRowNums: Record<string, n
 
 /** Values entered by the user in the OM Subsidy Calculator UI */
 type OmSheetInputs = {
-  wages:       number;   // Total Taxable Wages
-  allocPct:    number;   // % Allocated to STL (0–100)
-  dental:      number;   // fixed dental insurance amount
-  medical:     number;   // fixed medical insurance amount
-  wcGrossRate: number;   // WC gross rate (0–1, e.g. 0.1185)
-  wcDiscount:  number;   // WC discount  (0–1, e.g. 0.4266)
-  glRate:      number;   // GL rate       (0–1, e.g. 0.0186)
+  wages:          number;   // Total Taxable Wages
+  allocPct:       number;   // % Allocated to STL (0–100)
+  dental:         number;   // fixed dental insurance amount
+  medical:        number;   // fixed medical insurance amount
+  wcGrossRate:    number;   // WC gross rate (0–1, e.g. 0.1185)
+  wcDiscount:     number;   // WC discount  (0–1, e.g. 0.4266)
+  glRate:         number;   // GL rate       (0–1, e.g. 0.0186)
+  invoiceRevenue: number;   // pre-computed invoice revenue base for GL (UI-calculated)
 };
 
-function addOmSubsidySheet(wb: ExcelJS.Workbook, invoiceRefs?: InvoiceSheetRef[], omInputs?: OmSheetInputs) {
+function addOmSubsidySheet(wb: ExcelJS.Workbook, _invoiceRefs?: InvoiceSheetRef[], omInputs?: OmSheetInputs) {
   const ws = wb.addWorksheet("OM Subsidy");
   ws.columns = [{ width: 32 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 12 }, { width: 18 }, { width: 14 }];
 
   const S = OM_SUBSIDY;
   // Resolve values: use user inputs when provided, fall back to constants
-  const iWages       = omInputs?.wages       ?? 0;
-  const iAllocPct    = omInputs?.allocPct     ?? 0;
-  const iDental      = omInputs?.dental       ?? S.dental;
-  const iMedical     = omInputs?.medical      ?? S.medical;
-  const iWcGrossRate = omInputs?.wcGrossRate  ?? S.wcGrossRate;
-  const iWcDiscount  = omInputs?.wcDiscount   ?? S.wcDiscount;
-  const iGlRate      = omInputs?.glRate       ?? S.glRate;
+  const iWages          = omInputs?.wages          ?? 0;
+  const iAllocPct       = omInputs?.allocPct        ?? 0;
+  const iDental         = omInputs?.dental          ?? S.dental;
+  const iMedical        = omInputs?.medical         ?? S.medical;
+  const iWcGrossRate    = omInputs?.wcGrossRate     ?? S.wcGrossRate;
+  const iWcDiscount     = omInputs?.wcDiscount      ?? S.wcDiscount;
+  const iGlRate         = omInputs?.glRate          ?? S.glRate;
+  // Pre-computed invoice revenue base for GL (matches UI exactly)
+  const iInvoiceRevenue = omInputs?.invoiceRevenue  ?? 0;
 
   // Helpers
   const title = (text: string) => {
@@ -659,28 +662,16 @@ function addOmSubsidySheet(wb: ExcelJS.Workbook, invoiceRefs?: InvoiceSheetRef[]
   const wcRowNum = wcRow.number;
 
   // General Liability: (invoiceRevenue + wages + FICA + dental + medical + WC) × glRate
-  // Build cross-sheet reference to invoice subtotals
-  const invRevParts: string[] = [];
-  if (invoiceRefs && invoiceRefs.length > 0) {
-    for (const ref of invoiceRefs) {
-      const safeName = ref.sheetName.includes(" ") || ref.sheetName.includes("'")
-        ? `'${ref.sheetName.replace(/'/g, "''")}'`
-        : ref.sheetName;
-      for (const rowNum of Object.values(ref.catSubtotalRowNums)) {
-        invRevParts.push(`${safeName}!G${rowNum}`);
-      }
-    }
-  }
-
-  // "Applicable Revenue" info row (invoice subtotals linked from invoice sheets)
+  // Use pre-computed invoiceRevenue (same value as UI) — kept static so Excel matches UI exactly
   let appRevRowNum = -1;
-  if (invRevParts.length > 0) {
+  if (iInvoiceRevenue > 0) {
     ws.addRow([]); // spacer
     const appRevInfoRow = ws.addRow(["  ↳ GL Insurance Base includes:"]);
     appRevInfoRow.getCell(1).font = { italic: true, size: 9, color: { argb: "FF888888" } };
 
-    const appRevRow = ws.addRow([`    Applicable Revenue (Inbound+Storage+Fulfillment+Labor+Sublease)`,
-      { formula: invRevParts.join("+") },
+    const appRevRow = ws.addRow([
+      `    Applicable Revenue (Inbound+Storage+Fulfillment+Labor+Sublease)`,
+      iInvoiceRevenue,
     ]);
     appRevRow.height = 14;
     appRevRow.getCell(1).font = { size: 9, italic: true, color: { argb: "FF444444" } };
@@ -2064,15 +2055,17 @@ export default function BillingPage() {
   const [omDentalFixed,  setOmDentalFixed]  = useState<string>(() => typeof window !== "undefined" ? (localStorage.getItem("billing_om_dental")      ?? String(S_OM.dental))            : String(S_OM.dental));
   const [omMedicalFixed, setOmMedicalFixed] = useState<string>(() => typeof window !== "undefined" ? (localStorage.getItem("billing_om_medical")     ?? String(S_OM.medical))           : String(S_OM.medical));
 
-  /** Collect current OM Subsidy UI state into an OmSheetInputs object for Excel export */
-  const getOmInputs = (): OmSheetInputs => ({
-    wages:       parseFloat(omWages)       || 0,
-    allocPct:    parseFloat(omAllocPct)    || 0,
-    dental:      parseFloat(omDentalFixed) || 0,
-    medical:     parseFloat(omMedicalFixed)|| 0,
-    wcGrossRate: (parseFloat(omWcGrossRate)|| 0) / 100,
-    wcDiscount:  (parseFloat(omWcDiscount) || 0) / 100,
-    glRate:      (parseFloat(omGlRate)     || 0) / 100,
+  /** Collect current OM Subsidy UI state into an OmSheetInputs object for Excel export.
+   *  invoiceRevenue is optional — caller should pass the group's total when available */
+  const getOmInputs = (invoiceRevenue = 0): OmSheetInputs => ({
+    wages:          parseFloat(omWages)       || 0,
+    allocPct:       parseFloat(omAllocPct)    || 0,
+    dental:         parseFloat(omDentalFixed) || 0,
+    medical:        parseFloat(omMedicalFixed)|| 0,
+    wcGrossRate:    (parseFloat(omWcGrossRate)|| 0) / 100,
+    wcDiscount:     (parseFloat(omWcDiscount) || 0) / 100,
+    glRate:         (parseFloat(omGlRate)     || 0) / 100,
+    invoiceRevenue,
   });
 
   // Office Sublease (top-level, not per-customer) — persisted to localStorage
@@ -3024,12 +3017,13 @@ export default function BillingPage() {
         opQty:   parseFloat(subleaseOpQty)   || 0, opRate:   SUBLEASE_OP_RATE,
       } : undefined;
 
+      const groupInvRev = group.reduce((s, inv) => s + inv.total, 0) + subleaseAmt;
       await exportAllToExcel(
         group, period, sourceMap, editsMap,
         effectiveStorageRows, omSubsidyAmt, subleaseAmt,
         effectiveDate15, effectiveDateLast,
         effectiveRawRows15, effectiveRawRowsLast,
-        slBreakdown, getOmInputs()
+        slBreakdown, getOmInputs(groupInvRev)
       );
     } finally {
       setExportingNow(false);
@@ -3097,7 +3091,8 @@ export default function BillingPage() {
         opQty:   listOpQty,   opRate:   SUBLEASE_OP_RATE,
       } : undefined;
 
-      const listOmInputs = getOmInputs();
+      const listInvRev = invoices.reduce((s, inv) => s + inv.total, 0) + listSubleaseAmt;
+      const listOmInputs = getOmInputs(listInvRev);
       if (invoices.length === 1) {
         await exportInvoiceToExcel(
           invoices[0], sourceMap[invoices[0].customer] ?? null, {},
@@ -3312,10 +3307,11 @@ export default function BillingPage() {
         const inv = exportPreview!.invoice as BillingInvoice;
         if (editing && editing.id === inv.id && wmsSource) {
           // Inside the editor — use live state
+          const singleInvRev = inv.total + ((parseFloat(subleaseRentQty)||0)*SUBLEASE_RENT_RATE + (parseFloat(subleaseOpQty)||0)*SUBLEASE_OP_RATE);
           exportInvoiceToExcel(
             inv, wmsSource, orderEdits,
             storageRows, snapDate15 || undefined, snapDateLast || undefined,
-            storage15?.rawRows, storageLast?.rawRows, getOmInputs()
+            storage15?.rawRows, storageLast?.rawRows, getOmInputs(singleInvRev)
           ).catch(console.error);
         } else {
           // Outside editor (list view) — auto-fetch WMS + load storage from localStorage
@@ -3513,6 +3509,7 @@ export default function BillingPage() {
                       const _rev = _grp.reduce((s, inv) => s + inv.total, 0) + _sl;
                       return calcStlAlloc(omWages, omAllocPct, { wcGrossRate: (parseFloat(omWcGrossRate)||0)/100, wcDiscount: (parseFloat(omWcDiscount)||0)/100, glRate: (parseFloat(omGlRate)||0)/100, dental: parseFloat(omDentalFixed)||0, medical: parseFloat(omMedicalFixed)||0 }, _rev);
                     })(),
+                    // note: omInputs with invoiceRevenue is assembled inside handleExportWithFetch via getOmInputs(groupInvRev)
                     subleaseTotal: (parseFloat(subleaseRentQty)||0)*SUBLEASE_RENT_RATE + (parseFloat(subleaseOpQty)||0)*SUBLEASE_OP_RATE,
                   });
                 } else {
