@@ -505,11 +505,30 @@ function calcStlAlloc(
 
 type InvoiceSheetRef = { sheetName: string; catSubtotalRowNums: Record<string, number> };
 
-function addOmSubsidySheet(wb: ExcelJS.Workbook, invoiceRefs?: InvoiceSheetRef[]) {
+/** Values entered by the user in the OM Subsidy Calculator UI */
+type OmSheetInputs = {
+  wages:       number;   // Total Taxable Wages
+  allocPct:    number;   // % Allocated to STL (0–100)
+  dental:      number;   // fixed dental insurance amount
+  medical:     number;   // fixed medical insurance amount
+  wcGrossRate: number;   // WC gross rate (0–1, e.g. 0.1185)
+  wcDiscount:  number;   // WC discount  (0–1, e.g. 0.4266)
+  glRate:      number;   // GL rate       (0–1, e.g. 0.0186)
+};
+
+function addOmSubsidySheet(wb: ExcelJS.Workbook, invoiceRefs?: InvoiceSheetRef[], omInputs?: OmSheetInputs) {
   const ws = wb.addWorksheet("OM Subsidy");
   ws.columns = [{ width: 32 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 12 }, { width: 18 }, { width: 14 }];
 
   const S = OM_SUBSIDY;
+  // Resolve values: use user inputs when provided, fall back to constants
+  const iWages       = omInputs?.wages       ?? 0;
+  const iAllocPct    = omInputs?.allocPct     ?? 0;
+  const iDental      = omInputs?.dental       ?? S.dental;
+  const iMedical     = omInputs?.medical      ?? S.medical;
+  const iWcGrossRate = omInputs?.wcGrossRate  ?? S.wcGrossRate;
+  const iWcDiscount  = omInputs?.wcDiscount   ?? S.wcDiscount;
+  const iGlRate      = omInputs?.glRate       ?? S.glRate;
 
   // Helpers
   const title = (text: string) => {
@@ -575,16 +594,15 @@ function addOmSubsidySheet(wb: ExcelJS.Workbook, invoiceRefs?: InvoiceSheetRef[]
     applyBorder(c, "medium");
   });
 
-  // ── Total Taxable Wages (INPUT) ──
-  // Pre-fill with 0 so formulas don't break; user edits B4
-  const wageRow = ws.addRow(["Total Taxable Wages", 0, "100.00%"]);
+  // ── Total Taxable Wages — pre-filled from UI ──
+  const wageRow = ws.addRow(["Total Taxable Wages", iWages, "100.00%"]);
   wageRow.height = 16;
   wageRow.getCell(1).font = { bold: true, size: 10 };
   wageRow.getCell(2).numFmt = '"$"#,##0.00';
   wageRow.getCell(2).alignment = { horizontal: "right" };
   [1,2,3].forEach(i => applyBorder(wageRow.getCell(i)));
   const wageRowNum = wageRow.number;
-  inputRow(wageRowNum);
+  inputRow(wageRowNum); // keep yellow highlight so user can still override
 
   ws.addRow([]); // blank
   label("Overhead");
@@ -605,8 +623,8 @@ function addOmSubsidySheet(wb: ExcelJS.Workbook, invoiceRefs?: InvoiceSheetRef[]
   label("2. Benefits");
 
   // Dental
-  const dentalRow = ws.addRow(["    Health Insurance — Dental", S.dental,
-    { formula: `IF(B${wageRowNum}>0,${S.dental}/B${wageRowNum},0)` }]);
+  const dentalRow = ws.addRow(["    Health Insurance — Dental", iDental,
+    { formula: `IF(B${wageRowNum}>0,${iDental}/B${wageRowNum},0)` }]);
   dentalRow.height = 14; dentalRow.getCell(2).numFmt = '"$"#,##0.00';
   dentalRow.getCell(2).alignment = { horizontal: "right" };
   dentalRow.getCell(3).numFmt = "0.00%"; dentalRow.getCell(3).alignment = { horizontal: "right" };
@@ -615,8 +633,8 @@ function addOmSubsidySheet(wb: ExcelJS.Workbook, invoiceRefs?: InvoiceSheetRef[]
   const dentalRowNum = dentalRow.number;
 
   // Medical
-  const medRow = ws.addRow(["    Health Insurance — Medical", S.medical,
-    { formula: `IF(B${wageRowNum}>0,${S.medical}/B${wageRowNum},0)` }]);
+  const medRow = ws.addRow(["    Health Insurance — Medical", iMedical,
+    { formula: `IF(B${wageRowNum}>0,${iMedical}/B${wageRowNum},0)` }]);
   medRow.height = 14; medRow.getCell(2).numFmt = '"$"#,##0.00';
   medRow.getCell(2).alignment = { horizontal: "right" };
   medRow.getCell(3).numFmt = "0.00%"; medRow.getCell(3).alignment = { horizontal: "right" };
@@ -628,8 +646,8 @@ function addOmSubsidySheet(wb: ExcelJS.Workbook, invoiceRefs?: InvoiceSheetRef[]
   label("3. Insurance");
 
   // Workers Comp: wages × wcGrossRate × (1 - wcDiscount)
-  const wcNetRate = S.wcGrossRate * (1 - S.wcDiscount);
-  const wcRow = ws.addRow([`    Workers Comp (${(S.wcGrossRate*100).toFixed(2)}% × ${((1-S.wcDiscount)*100).toFixed(2)}%)`,
+  const wcNetRate = iWcGrossRate * (1 - iWcDiscount);
+  const wcRow = ws.addRow([`    Workers Comp (${(iWcGrossRate*100).toFixed(2)}% × ${((1-iWcDiscount)*100).toFixed(2)}%)`,
     { formula: `ROUND(B${wageRowNum}*${wcNetRate.toFixed(6)},2)` },
     { formula: `IF(B${wageRowNum}>0,ROUND(B${wageRowNum}*${wcNetRate.toFixed(6)},2)/B${wageRowNum},0)` },
   ]);
@@ -678,12 +696,12 @@ function addOmSubsidySheet(wb: ExcelJS.Workbook, invoiceRefs?: InvoiceSheetRef[]
     : `B${wageRowNum}+B${etRowNum}+B${dentalRowNum}+B${medRowNum}+B${wcRowNum}`;
 
   const glLabel = appRevRowNum > 0
-    ? `    General Liability (${(S.glRate*100).toFixed(2)}% of revenue+wages+tax+benefits+WC)`
-    : `    General Liability (${(S.glRate*100).toFixed(2)}% of wages+tax+benefits+WC)`;
+    ? `    General Liability (${(iGlRate*100).toFixed(2)}% of revenue+wages+tax+benefits+WC)`
+    : `    General Liability (${(iGlRate*100).toFixed(2)}% of wages+tax+benefits+WC)`;
 
   const glRow = ws.addRow([glLabel,
-    { formula: `ROUND((${glBaseFormula})*${S.glRate.toFixed(6)},2)` },
-    { formula: `IF(B${wageRowNum}>0,ROUND((${glBaseFormula})*${S.glRate.toFixed(6)},2)/B${wageRowNum},0)` },
+    { formula: `ROUND((${glBaseFormula})*${iGlRate.toFixed(6)},2)` },
+    { formula: `IF(B${wageRowNum}>0,ROUND((${glBaseFormula})*${iGlRate.toFixed(6)},2)/B${wageRowNum},0)` },
   ]);
   glRow.height = 14; glRow.getCell(2).numFmt = '"$"#,##0.00';
   glRow.getCell(2).alignment = { horizontal: "right" };
@@ -721,8 +739,8 @@ function addOmSubsidySheet(wb: ExcelJS.Workbook, invoiceRefs?: InvoiceSheetRef[]
   [1,2].forEach(i => applyBorder(tcRow.getCell(i)));
   const tcRowNum = tcRow.number;
 
-  // % Allocated to STL (input cell)
-  const pctRow = ws.addRow(["% Allocated to STL", 0]);
+  // % Allocated to STL — pre-filled from UI (user can still override in Excel)
+  const pctRow = ws.addRow(["% Allocated to STL", iAllocPct / 100]);
   pctRow.height = 14;
   pctRow.getCell(2).numFmt = "0%"; pctRow.getCell(2).alignment = { horizontal: "right" };
   pctRow.getCell(2).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
@@ -730,7 +748,7 @@ function addOmSubsidySheet(wb: ExcelJS.Workbook, invoiceRefs?: InvoiceSheetRef[]
   [1,2].forEach(i => applyBorder(pctRow.getCell(i)));
   const pctRowNum = pctRow.number;
   const pctNote = ws.getCell(`C${pctRowNum}`);
-  pctNote.value = "← Enter allocation % here";
+  pctNote.value = iAllocPct > 0 ? `← Pre-filled: ${iAllocPct}% (editable)` : "← Enter allocation % here";
   pctNote.font = { italic: true, size: 9, color: { argb: "FFDD6600" } };
   ws.mergeCells(`C${pctRowNum}:G${pctRowNum}`);
 
@@ -1408,7 +1426,8 @@ async function exportInvoiceToExcel(
   snapDate1?: string,
   snapDate2?: string,
   rawRows15?: StorageRawRow[],
-  rawRowsLast?: StorageRawRow[]
+  rawRowsLast?: StorageRawRow[],
+  omInputs?: OmSheetInputs
 ) {
   const wb = new ExcelJS.Workbook();
   const custCode = invoice.customer;
@@ -1446,7 +1465,7 @@ async function exportInvoiceToExcel(
   }
 
   addRateTableSheet(wb);
-  addOmSubsidySheet(wb, invoiceSheetRefs);
+  addOmSubsidySheet(wb, invoiceSheetRefs, omInputs);
   await downloadWorkbook(wb, `Invoice_${invoice.customer}_${invoice.period}.xlsx`);
 }
 
@@ -1463,7 +1482,8 @@ async function exportAllToExcel(
   snapDate2?: string,
   rawRows15?: StorageRawRow[],
   rawRowsLast?: StorageRawRow[],
-  subleaseBreakdown?: { rentQty: number; rentRate: number; opQty: number; opRate: number }
+  subleaseBreakdown?: { rentQty: number; rentRate: number; opQty: number; opRate: number },
+  omInputs?: OmSheetInputs
 ) {
   if (invoices.length === 0) return;
   const wb = new ExcelJS.Workbook();
@@ -1893,7 +1913,7 @@ async function exportAllToExcel(
   }
 
   addRateTableSheet(wb);
-  addOmSubsidySheet(wb, customerMetas.map(m => ({ sheetName: m.sheetName, catSubtotalRowNums: m.catSubtotalRowNums })));
+  addOmSubsidySheet(wb, customerMetas.map(m => ({ sheetName: m.sheetName, catSubtotalRowNums: m.catSubtotalRowNums })), omInputs);
 
   await downloadWorkbook(wb, `Invoice_ALL_${period}.xlsx`);
 }
@@ -1992,6 +2012,18 @@ export default function BillingPage() {
   const [omGlRate,       setOmGlRate]       = useState<string>(() => typeof window !== "undefined" ? (localStorage.getItem("billing_om_gl_rate")     ?? String(S_OM.glRate * 100))      : String(S_OM.glRate * 100));
   const [omDentalFixed,  setOmDentalFixed]  = useState<string>(() => typeof window !== "undefined" ? (localStorage.getItem("billing_om_dental")      ?? String(S_OM.dental))            : String(S_OM.dental));
   const [omMedicalFixed, setOmMedicalFixed] = useState<string>(() => typeof window !== "undefined" ? (localStorage.getItem("billing_om_medical")     ?? String(S_OM.medical))           : String(S_OM.medical));
+
+  /** Collect current OM Subsidy UI state into an OmSheetInputs object for Excel export */
+  const getOmInputs = (): OmSheetInputs => ({
+    wages:       parseFloat(omWages)       || 0,
+    allocPct:    parseFloat(omAllocPct)    || 0,
+    dental:      parseFloat(omDentalFixed) || 0,
+    medical:     parseFloat(omMedicalFixed)|| 0,
+    wcGrossRate: (parseFloat(omWcGrossRate)|| 0) / 100,
+    wcDiscount:  (parseFloat(omWcDiscount) || 0) / 100,
+    glRate:      (parseFloat(omGlRate)     || 0) / 100,
+  });
+
   // Office Sublease (top-level, not per-customer) — persisted to localStorage
   const SUBLEASE_RENT_RATE   = 1490;    // per month
   const SUBLEASE_OP_RATE     = 1.01;    // per sq ft / month
@@ -2946,7 +2978,7 @@ export default function BillingPage() {
         effectiveStorageRows, omSubsidyAmt, subleaseAmt,
         effectiveDate15, effectiveDateLast,
         effectiveRawRows15, effectiveRawRowsLast,
-        slBreakdown
+        slBreakdown, getOmInputs()
       );
     } finally {
       setExportingNow(false);
@@ -3014,12 +3046,14 @@ export default function BillingPage() {
         opQty:   listOpQty,   opRate:   SUBLEASE_OP_RATE,
       } : undefined;
 
+      const listOmInputs = getOmInputs();
       if (invoices.length === 1) {
         await exportInvoiceToExcel(
           invoices[0], sourceMap[invoices[0].customer] ?? null, {},
           storageRows, firstStorageLoc?.date15 || undefined, firstStorageLoc?.dateLast || undefined,
           allRawRows15.length > 0 ? allRawRows15 : undefined,
           allRawRowsLast.length > 0 ? allRawRowsLast : undefined,
+          listOmInputs,
         );
       } else {
         await exportAllToExcel(
@@ -3028,7 +3062,7 @@ export default function BillingPage() {
           firstStorageLoc?.date15 || undefined, firstStorageLoc?.dateLast || undefined,
           allRawRows15.length > 0 ? allRawRows15 : undefined,
           allRawRowsLast.length > 0 ? allRawRowsLast : undefined,
-          listSlBreakdown,
+          listSlBreakdown, listOmInputs,
         );
       }
     } finally {
@@ -3230,7 +3264,7 @@ export default function BillingPage() {
           exportInvoiceToExcel(
             inv, wmsSource, orderEdits,
             storageRows, snapDate15 || undefined, snapDateLast || undefined,
-            storage15?.rawRows, storageLast?.rawRows
+            storage15?.rawRows, storageLast?.rawRows, getOmInputs()
           ).catch(console.error);
         } else {
           // Outside editor (list view) — auto-fetch WMS + load storage from localStorage
