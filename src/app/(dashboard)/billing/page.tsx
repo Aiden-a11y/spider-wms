@@ -2890,8 +2890,14 @@ export default function BillingPage() {
 
       const effectiveDate15   = firstCustStorage?.date15   || snapDate15   || undefined;
       const effectiveDateLast = firstCustStorage?.dateLast || snapDateLast || undefined;
-      const effectiveRawRows15   = firstCustStorage?.snap15?.rawRows;
-      const effectiveRawRowsLast = firstCustStorage?.snapLast?.rawRows;
+
+      // Concatenate rawRows from ALL customers so the evidence sheet shows full warehouse inventory
+      const effectiveRawRows15: StorageRawRow[] = group.flatMap(inv =>
+        fullStorageMap[inv.customer]?.snap15?.rawRows ?? []
+      );
+      const effectiveRawRowsLast: StorageRawRow[] = group.flatMap(inv =>
+        fullStorageMap[inv.customer]?.snapLast?.rawRows ?? []
+      );
 
       await exportAllToExcel(
         group, period, sourceMap, editsMap,
@@ -2940,9 +2946,14 @@ export default function BillingPage() {
         } catch { /* skip on error */ }
       }
 
-      // Storage: use first customer's data (shared warehouse-level)
-      const firstInv = invoices[0];
-      const storage = getStorageRowsFromLocal(period, firstInv.customer);
+      // Storage: load each customer's storage from localStorage, concatenate rawRows
+      const storagePerCust = invoices.map(inv => getStorageRowsFromLocal(period, inv.customer));
+      const firstStorage   = storagePerCust[0];
+      // Use first customer's aggregated rows for the Storage_Avg billing sheet
+      const storageRows    = firstStorage.rows;
+      // Concatenate ALL customers' rawRows for evidence sheets
+      const allRawRows15   = storagePerCust.flatMap(s => s.rawRows15 ?? []);
+      const allRawRowsLast = storagePerCust.flatMap(s => s.rawRowsLast ?? []);
 
       const listSubleaseAmt = (parseFloat(subleaseRentQty) || 0) * SUBLEASE_RENT_RATE
                             + (parseFloat(subleaseOpQty)   || 0) * SUBLEASE_OP_RATE;
@@ -2950,15 +2961,17 @@ export default function BillingPage() {
       if (invoices.length === 1) {
         await exportInvoiceToExcel(
           invoices[0], sourceMap[invoices[0].customer] ?? null, {},
-          storage.rows, storage.date15 || undefined, storage.dateLast || undefined,
-          storage.rawRows15, storage.rawRowsLast
+          storageRows, firstStorage.date15 || undefined, firstStorage.dateLast || undefined,
+          allRawRows15.length > 0 ? allRawRows15 : undefined,
+          allRawRowsLast.length > 0 ? allRawRowsLast : undefined,
         );
       } else {
         await exportAllToExcel(
           invoices, period, sourceMap, {},
-          storage.rows, 0, listSubleaseAmt,
-          storage.date15 || undefined, storage.dateLast || undefined,
-          storage.rawRows15, storage.rawRowsLast
+          storageRows, 0, listSubleaseAmt,
+          firstStorage.date15 || undefined, firstStorage.dateLast || undefined,
+          allRawRows15.length > 0 ? allRawRows15 : undefined,
+          allRawRowsLast.length > 0 ? allRawRowsLast : undefined,
         );
       }
     } finally {
@@ -2990,16 +3003,19 @@ export default function BillingPage() {
         inv.total = calcTotal(inv.lineItems);
         invoiceList.push(inv);
       }
-      // Storage: use first customer's data from localStorage
-      const firstCust = customers[0]?.code ?? "";
-      const storage = getStorageRowsFromLocal(period, firstCust);
+      // Storage: load each customer's storage, concatenate rawRows
+      const storagePerCust2 = customers.map(c => getStorageRowsFromLocal(period, c.code));
+      const firstStorage2   = storagePerCust2[0];
+      const allRawRows15b   = storagePerCust2.flatMap(s => s.rawRows15   ?? []);
+      const allRawRowsLastb = storagePerCust2.flatMap(s => s.rawRowsLast ?? []);
       const allCustSubleaseAmt = (parseFloat(subleaseRentQty) || 0) * SUBLEASE_RENT_RATE
                                + (parseFloat(subleaseOpQty)   || 0) * SUBLEASE_OP_RATE;
       await exportAllToExcel(
         invoiceList, period, sourceMap, {},
-        storage.rows, 0, allCustSubleaseAmt,
-        storage.date15 || undefined, storage.dateLast || undefined,
-        storage.rawRows15, storage.rawRowsLast
+        firstStorage2?.rows ?? [], 0, allCustSubleaseAmt,
+        firstStorage2?.date15 || undefined, firstStorage2?.dateLast || undefined,
+        allRawRows15b.length > 0 ? allRawRows15b : undefined,
+        allRawRowsLastb.length > 0 ? allRawRowsLastb : undefined,
       );
       setAllExportMsg(`✓ Exported ${invoiceList.length} customers to Invoice_ALL_${period}.xlsx`);
     } catch {
