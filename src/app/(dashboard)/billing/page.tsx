@@ -852,8 +852,8 @@ function addB2BDetailSheet(
     const op       = tasks["Out per Pallet"] ?? 0;
     const supplies = tasks["Supplies"]       ?? 0;
 
-    // Packing: oc > 0 && oc !== pc → charge oc; plus supplies qty
-    const packing  = ov["b2b_carton_packing"] ?? ((oc > 0 && oc !== pc ? oc : 0) + (supplies > 0 ? supplies : 0));
+    // Packing: only when oc > 0 && oc !== pc (repacking) → supplies qty (matches UI logic)
+    const packing  = ov["b2b_carton_packing"] ?? ((oc > 0 && oc !== pc) ? supplies : 0);
     // Palletizing: op > 0 && op !== ppl
     const palletize = ov["b2b_palletizing"]  ?? (op > 0 && op !== ppl ? op : 0);
     const labels    = ov["b2b_label"]         ?? ((tasks["Labels"] ?? 0) + (tasks["Amazon Labels"] ?? 0) + (tasks["FBA Labeling"] ?? 0));
