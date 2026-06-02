@@ -4279,24 +4279,23 @@ export default function BillingPage() {
             rows.push({ type: "subtotal", label: `Subtotal — ${cat}`, amount: catTotal });
           }
 
-          // OM Subsidy
+          // GRAND TOTAL = billing categories only (OM Subsidy & Office Sublease excluded)
+          rows.push({ type: "grandTotal", amount: grandTotal });
+
+          // OM Subsidy — shown below grand total, not included in sum
           if (omSubsidy > 0) {
-            grandTotal += omSubsidy;
             rows.push({ type: "extra", label: "OM Subsidy", color: "bg-purple-100 text-purple-900" });
             rows.push({ type: "extraItem", no: lineNo++, description: "Operations Manager Salary Subsidy (per MSA Section 4)", rate: fmt(parseFloat(omWages)||0), unit: "of monthly cost", qty: `${Math.max(0,Math.min(100,parseFloat(omAllocPct)||0)).toFixed(1)}%`, amount: omSubsidy });
             rows.push({ type: "subtotal", label: "Subtotal — OM Subsidy", amount: omSubsidy });
           }
 
-          // Office Sublease
+          // Office Sublease — shown below grand total, not included in sum
           if (subleaseAmt > 0) {
-            grandTotal += subleaseAmt;
             rows.push({ type: "extra", label: "Office Sublease", color: "bg-amber-100 text-amber-900" });
             rows.push({ type: "extraItem", no: lineNo++, description: "Monthly Office Rent (per MSA Section 3.2)",          rate: fmt(SUBLEASE_RENT_RATE), unit: "per month",          qty: String(parseFloat(subleaseRentQty)||0), amount: subleaseRent });
             rows.push({ type: "extraItem", no: lineNo++, description: "Operating Cost Reimbursement (per MSA Section 3.3)", rate: fmt(SUBLEASE_OP_RATE),   unit: "per sq ft / month", qty: Number(parseFloat(subleaseOpQty)||0).toLocaleString(), amount: subleaseOp });
             rows.push({ type: "subtotal", label: "Subtotal — Office Sublease", amount: subleaseAmt });
           }
-
-          rows.push({ type: "grandTotal", amount: grandTotal });
 
           return (
             <div className="pb-8 space-y-4">
