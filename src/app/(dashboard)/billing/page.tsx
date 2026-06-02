@@ -2223,7 +2223,7 @@ export default function BillingPage() {
   const [activeIdx, setActiveIdx] = useState(0);
 
   // ── extra tabs: Rate Table / OM Subsidy / Office Sublease ──
-  const [extraTab, setExtraTab] = useState<"none" | "rate-table" | "om-subsidy" | "sublease" | "summary">("none");
+  const [extraTab, setExtraTab] = useState<"none" | "rate-table" | "om-subsidy" | "sublease" | "summary" | "storage-summary">("none");
   const [omWages, setOmWages] = useState<string>("");
   const [omAllocPct, setOmAllocPct] = useState<string>("40");
   const S_OM = OM_SUBSIDY;
@@ -3900,6 +3900,23 @@ export default function BillingPage() {
             <Table2 className="w-3.5 h-3.5" />
             Summary
           </button>
+
+          {/* Storage Summary tab */}
+          <button
+            onClick={() => setExtraTab(extraTab === "storage-summary" ? "none" : "storage-summary")}
+            className={`px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+              extraTab === "storage-summary"
+                ? "border-sky-600 text-sky-700 bg-sky-50/60"
+                : "border-transparent text-slate-400 hover:text-slate-700 hover:bg-slate-50"
+            }`}
+          >
+            <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6">
+              <rect x="1" y="4" width="14" height="3" rx="0.5"/>
+              <rect x="1" y="9" width="14" height="3" rx="0.5"/>
+              <path d="M4 4V2M12 4V2M4 12v2M12 12v2"/>
+            </svg>
+            Storage
+          </button>
         </div>
 
         {/* ── Rate Table panel ── */}
@@ -4450,6 +4467,243 @@ export default function BillingPage() {
               <p className="text-xs text-slate-400 text-right">
                 Rate Version: {editing?.rateVersion} · Generated {new Date().toLocaleDateString("en-US")}
               </p>
+            </div>
+          );
+        })()}
+
+        {/* ── Storage Summary panel ── */}
+        {extraTab === "storage-summary" && (() => {
+          // Merge current customer's live storage into the map
+          const fullMap: Record<string, { snap15: StorageSnap | null; snapLast: StorageSnap | null; date15: string; dateLast: string }> = {
+            ...storageMap,
+            ...(editing && (storage15 || storageLast) ? {
+              [editing.customer]: { snap15: storage15, snapLast: storageLast, date15: snapDate15, dateLast: snapDateLast }
+            } : {}),
+          };
+
+          // Customers to show: editGroup order (or just editing if single)
+          const customers = editGroup.length > 0 ? editGroup : (editing ? [editing] : []);
+
+          // Only show storage types that have data for at least one customer
+          const activeTypes = STORAGE_TEMPLATE_ROWS.filter(tmpl =>
+            customers.some(inv => {
+              const cs = fullMap[inv.customer];
+              return (cs?.snap15?.data[tmpl.key] ?? 0) > 0 || (cs?.snapLast?.data[tmpl.key] ?? 0) > 0;
+            })
+          );
+
+          const hasAnyData = customers.some(inv => fullMap[inv.customer]);
+
+          return (
+            <div className="pb-8">
+              <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+                  <div>
+                    <h2 className="text-base font-bold text-slate-900">Storage Summary</h2>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Per customer · Per type · Avg = (15th + Last) ÷ 2
+                    </p>
+                  </div>
+                  {hasAnyData && (
+                    <div className="text-xs text-slate-400 text-right">
+                      {customers.map(inv => {
+                        const cs = fullMap[inv.customer];
+                        if (!cs) return null;
+                        return (
+                          <span key={inv.customer} className="mr-4">
+                            <span className="font-semibold text-slate-600">{inv.customer}</span>
+                            {cs.date15 && <span> · {cs.date15} / {cs.dateLast}</span>}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {!hasAnyData ? (
+                  <div className="px-6 py-12 text-center text-slate-400">
+                    <svg className="w-10 h-10 mx-auto mb-3 opacity-30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                      <rect x="2" y="7" width="20" height="5" rx="1"/><rect x="2" y="14" width="20" height="5" rx="1"/>
+                      <path d="M6 7V5a1 1 0 011-1h10a1 1 0 011 1v2M6 19v2a1 1 0 001 1h10a1 1 0 001-1v-2"/>
+                    </svg>
+                    <p className="text-sm font-medium">No storage data loaded yet</p>
+                    <p className="text-xs mt-1">Load WMS History in each customer&apos;s Storage tab first.</p>
+                  </div>
+                ) : activeTypes.length === 0 ? (
+                  <div className="px-6 py-12 text-center text-slate-400 text-sm">All storage quantities are zero.</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200">
+                          <th className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide w-40">Storage Type</th>
+                          {customers.map(inv => {
+                            const cs = fullMap[inv.customer];
+                            if (!cs) return (
+                              <th key={inv.customer} colSpan={3} className="px-3 py-3 text-center text-xs font-semibold text-slate-300 border-l border-slate-100">
+                                {inv.customer}
+                                <div className="font-normal normal-case text-slate-300">no data</div>
+                              </th>
+                            );
+                            return (
+                              <th key={inv.customer} colSpan={3} className="px-3 py-3 text-center text-xs font-semibold text-sky-700 border-l border-slate-100">
+                                {inv.customer}
+                                <div className="font-normal normal-case text-slate-400 mt-0.5">{cs.date15 || "–"} / {cs.dateLast || "–"}</div>
+                              </th>
+                            );
+                          })}
+                          {customers.length > 1 && (
+                            <th colSpan={1} className="px-3 py-3 text-center text-xs font-semibold text-slate-500 border-l border-slate-200">
+                              TOTAL<div className="font-normal normal-case text-slate-400 mt-0.5">avg</div>
+                            </th>
+                          )}
+                        </tr>
+                        <tr className="bg-slate-50/60 border-b border-slate-100">
+                          <th className="px-5 py-1.5 text-left text-xs text-slate-400"></th>
+                          {customers.map(inv => {
+                            const cs = fullMap[inv.customer];
+                            if (!cs) return (
+                              <React.Fragment key={inv.customer}>
+                                <th className="px-3 py-1.5 text-center text-xs text-slate-300 border-l border-slate-100">15th</th>
+                                <th className="px-3 py-1.5 text-center text-xs text-slate-300">Last</th>
+                                <th className="px-3 py-1.5 text-center text-xs text-slate-300">Avg</th>
+                              </React.Fragment>
+                            );
+                            return (
+                              <React.Fragment key={inv.customer}>
+                                <th className="px-3 py-1.5 text-center text-xs text-slate-400 border-l border-slate-100">15th</th>
+                                <th className="px-3 py-1.5 text-center text-xs text-slate-400">Last</th>
+                                <th className="px-3 py-1.5 text-center text-xs font-semibold text-sky-600">Avg</th>
+                              </React.Fragment>
+                            );
+                          })}
+                          {customers.length > 1 && (
+                            <th className="px-3 py-1.5 text-center text-xs font-semibold text-slate-500 border-l border-slate-200">Avg</th>
+                          )}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-50">
+                        {activeTypes.map((tmpl, ri) => {
+                          let totalAvg = 0;
+                          let custWithData = 0;
+                          return (
+                            <tr key={tmpl.key} className={ri % 2 === 0 ? "bg-white" : "bg-slate-50/40"}>
+                              <td className="px-5 py-2.5 text-sm font-medium text-slate-700">{tmpl.label}</td>
+                              {customers.map(inv => {
+                                const cs = fullMap[inv.customer];
+                                const q15   = cs?.snap15?.data[tmpl.key]   ?? 0;
+                                const qLast = cs?.snapLast?.data[tmpl.key] ?? 0;
+                                const avg   = (q15 + qLast) / 2;
+                                if (cs) { totalAvg += avg; custWithData++; }
+                                const hasVal = q15 > 0 || qLast > 0;
+                                return (
+                                  <React.Fragment key={inv.customer}>
+                                    <td className={`px-3 py-2.5 text-right tabular-nums border-l border-slate-100 ${hasVal ? "text-slate-600" : "text-slate-200"}`}>
+                                      {q15 > 0 ? q15.toLocaleString() : "—"}
+                                    </td>
+                                    <td className={`px-3 py-2.5 text-right tabular-nums ${hasVal ? "text-slate-600" : "text-slate-200"}`}>
+                                      {qLast > 0 ? qLast.toLocaleString() : "—"}
+                                    </td>
+                                    <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${hasVal ? "text-sky-700" : "text-slate-200"}`}>
+                                      {hasVal ? (avg % 1 === 0 ? avg.toLocaleString() : avg.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })) : "—"}
+                                    </td>
+                                  </React.Fragment>
+                                );
+                              })}
+                              {customers.length > 1 && (
+                                <td className="px-3 py-2.5 text-right tabular-nums font-bold text-slate-800 border-l border-slate-200">
+                                  {custWithData > 0 ? (totalAvg % 1 === 0 ? totalAvg.toLocaleString() : totalAvg.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })) : "—"}
+                                </td>
+                              )}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t-2 border-slate-200 bg-slate-50">
+                          <td className="px-5 py-3 text-xs font-bold text-slate-500 uppercase tracking-wide">TOTAL</td>
+                          {customers.map(inv => {
+                            const cs = fullMap[inv.customer];
+                            let t15 = 0, tLast = 0, tAvg = 0;
+                            if (cs) {
+                              STORAGE_TEMPLATE_ROWS.forEach(tmpl => {
+                                const q15   = cs.snap15?.data[tmpl.key]   ?? 0;
+                                const qLast = cs.snapLast?.data[tmpl.key] ?? 0;
+                                t15   += q15;
+                                tLast += qLast;
+                                tAvg  += (q15 + qLast) / 2;
+                              });
+                            }
+                            return (
+                              <React.Fragment key={inv.customer}>
+                                <td className="px-3 py-3 text-right tabular-nums font-bold text-slate-700 border-l border-slate-100">
+                                  {cs ? t15.toLocaleString() : "—"}
+                                </td>
+                                <td className="px-3 py-3 text-right tabular-nums font-bold text-slate-700">
+                                  {cs ? tLast.toLocaleString() : "—"}
+                                </td>
+                                <td className="px-3 py-3 text-right tabular-nums font-bold text-sky-700">
+                                  {cs ? (tAvg % 1 === 0 ? tAvg.toLocaleString() : tAvg.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })) : "—"}
+                                </td>
+                              </React.Fragment>
+                            );
+                          })}
+                          {customers.length > 1 && (() => {
+                            let grandAvg = 0;
+                            customers.forEach(inv => {
+                              const cs = fullMap[inv.customer];
+                              if (!cs) return;
+                              STORAGE_TEMPLATE_ROWS.forEach(tmpl => {
+                                const q15   = cs.snap15?.data[tmpl.key]   ?? 0;
+                                const qLast = cs.snapLast?.data[tmpl.key] ?? 0;
+                                grandAvg += (q15 + qLast) / 2;
+                              });
+                            });
+                            return (
+                              <td className="px-3 py-3 text-right tabular-nums font-bold text-slate-900 border-l border-slate-200">
+                                {grandAvg % 1 === 0 ? grandAvg.toLocaleString() : grandAvg.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+                              </td>
+                            );
+                          })()}
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                )}
+
+                {/* Per-customer billed amounts */}
+                {hasAnyData && activeTypes.length > 0 && (
+                  <div className="px-6 py-4 border-t border-slate-100 bg-slate-50/60">
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Billed Storage Amount</p>
+                    <div className="flex flex-wrap gap-4">
+                      {customers.map(inv => {
+                        const cs = fullMap[inv.customer];
+                        if (!cs) return null;
+                        let amt = 0;
+                        inv.lineItems?.filter(it => it.category === "Storage").forEach(it => {
+                          amt += it.qty * it.rate;
+                        });
+                        return (
+                          <div key={inv.customer} className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-4 py-2.5">
+                            <span className="text-xs font-semibold text-slate-700">{inv.customer}</span>
+                            <span className="text-sm font-bold text-sky-700">{formatUSD(amt)}</span>
+                          </div>
+                        );
+                      })}
+                      {customers.length > 1 && (
+                        <div className="flex items-center gap-2 bg-slate-800 rounded-lg px-4 py-2.5">
+                          <span className="text-xs font-semibold text-slate-300">TOTAL</span>
+                          <span className="text-sm font-bold text-white">
+                            {formatUSD(customers.reduce((s, inv) => {
+                              return s + (inv.lineItems?.filter(it => it.category === "Storage").reduce((a, it) => a + it.qty * it.rate, 0) ?? 0);
+                            }, 0))}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           );
         })()}
