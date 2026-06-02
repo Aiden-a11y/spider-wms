@@ -46,6 +46,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     const json = await res.json();
+    // 🔍 TEMP: log full login response to inspect level field name
+    console.log("[AUTH] login response:", JSON.stringify(json, null, 2));
     // Support common token response shapes
     const token =
       json?.data?.token ??
