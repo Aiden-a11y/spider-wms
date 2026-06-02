@@ -2585,16 +2585,21 @@ export default function BillingPage() {
     });
     setEditing(prev => {
       if (!prev) return prev;
-      return {
-        ...prev,
-        lineItems: prev.lineItems.map(item =>
-          updates[item.id] !== undefined
-            ? { ...item, qty: updates[item.id], autoFetched: true }
-            : item
-        ),
-      };
+      const items = prev.lineItems.map(item =>
+        updates[item.id] !== undefined
+          ? { ...item, qty: updates[item.id], autoFetched: true }
+          : item
+      );
+      return { ...prev, lineItems: items, subtotals: calcSubtotals(items), total: calcTotal(items) };
     });
   }
+
+  // Auto-apply storage to invoice whenever storageRows changes (WMS History loaded)
+  useEffect(() => {
+    if (storageRows.length > 0 && editing) {
+      applyStorageToInvoice();
+    }
+  }, [storageRows]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── load invoice list ──
   async function loadList() {
@@ -3042,11 +3047,8 @@ export default function BillingPage() {
           // Inserts → b2b_insert
           insertQty += tasks["Inserts"] ?? 0;
 
-          // Carton Packing:
-          //   1) Out per Carton (when ≠ Picking per Carton — actual repacking)
-          //   2) Supplies used → add that qty as additional carton packing
-          if (oc > 0 && oc !== pc) cartonPacking += oc;
-          if (supplies > 0) cartonPacking += supplies;
+          // Carton Packing: only when oc > 0 && oc !== pc (actual repacking) → charge supplies qty
+          if (oc > 0 && oc !== pc) cartonPacking += supplies;
 
           // Palletizing: Out per Pallet UNLESS equals Picking per Pallet
           if (op > 0 && op !== ppl) palletizing += op;
@@ -4776,9 +4778,11 @@ export default function BillingPage() {
                                   if (num === undefined) delete next[code][key];
                                   else next[code][key] = num;
                                   // recalculate billing totals from all rows
-                                  const colKeys = ["b2b_pick_piece","b2b_pick_carton","b2b_pick_pallet","b2b_carton_packing","b2b_palletizing","b2b_label","b2b_insert","labor_regular","labor_ot_weekday","labor_ot_weekend"];
+                                  const colKeys = ["b2b_order","b2b_pick_piece","b2b_pick_carton","b2b_pick_pallet","b2b_carton_packing","b2b_palletizing","b2b_label","b2b_insert","labor_regular","labor_ot_weekday","labor_ot_weekend"];
                                   const totals: Record<string,number> = {};
                                   colKeys.forEach(k => { totals[k] = 0; });
+                                  // b2b_order = total number of B2B orders in source
+                                  totals["b2b_order"] = wmsSource.b2b.length;
                                   wmsSource.b2b.forEach((ord, idx) => {
                                     const ordCode = String(ord.shippingOrderCode ?? ord.orderCode ?? idx);
                                     const t = parseTaskComment(String(ord.comment ?? ""));
