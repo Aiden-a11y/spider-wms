@@ -2138,6 +2138,7 @@ async function exportAllToExcel(
 // ─── Storage import constants ─────────────────────────────────────────────────
 
 const STORAGE_LABEL_MAP: Record<string, string> = {
+  // Standard types
   "bin": "storage_bin",
   "shelf": "storage_shelf",
   "carton": "storage_carton",
@@ -2145,7 +2146,40 @@ const STORAGE_LABEL_MAP: Record<string, string> = {
   "pallet regular": "storage_pallet_regular",
   "pallet tall": "storage_pallet_tall",
   "open floor": "storage_open_floor",
+  // "Re" prefix variants (returns/rework locations — same storage billing)
+  "re bin": "storage_bin",
+  "re shelf": "storage_shelf",
+  "re carton": "storage_carton",
+  "re pallet short": "storage_pallet_short",
+  "re pallet regular": "storage_pallet_regular",
+  "re pallet tall": "storage_pallet_tall",
+  "re open floor": "storage_open_floor",
+  // Hyphenated / no-space variants
+  "re-bin": "storage_bin",
+  "re-shelf": "storage_shelf",
+  "re-carton": "storage_carton",
+  "re-pallet short": "storage_pallet_short",
+  "re-pallet regular": "storage_pallet_regular",
+  "re-pallet tall": "storage_pallet_tall",
+  "rebin": "storage_bin",
+  "reshelf": "storage_shelf",
+  "recarton": "storage_carton",
 };
+
+/**
+ * Resolve an occupancyInfo/locationType string to a billing storage key.
+ * Tries exact match first, then strips common prefixes (re, rtrn, ret, rtn)
+ * so "Re Bin" / "RE-BIN" / "Return Shelf" all map correctly.
+ */
+function resolveStorageKey(rawType: string): string | undefined {
+  const t = rawType.trim().toLowerCase();
+  // 1. Exact match
+  if (STORAGE_LABEL_MAP[t]) return STORAGE_LABEL_MAP[t];
+  // 2. Strip "re", "rtrn", "ret", "rtn", "return" prefix (with optional space/dash)
+  const stripped = t.replace(/^(re(turn)?|rtrn|ret|rtn)[-\s]*/i, "").trim();
+  if (stripped && STORAGE_LABEL_MAP[stripped]) return STORAGE_LABEL_MAP[stripped];
+  return undefined;
+}
 
 const STORAGE_TEMPLATE_ROWS = [
   { key: "storage_bin",            label: "Bin" },
@@ -2342,7 +2376,7 @@ export default function BillingPage() {
         if (cust && cust !== customerCode.toLowerCase()) continue;
       }
 
-      const key = STORAGE_LABEL_MAP[locType];
+      const key = resolveStorageKey(locType);
       if (!key) continue;
       (locSets[key] ??= new Set()).add(loc);
     }
@@ -2506,7 +2540,7 @@ export default function BillingPage() {
             zoneName: zone, aisleName: aisle, bayName: bay, levelName: level, positionName: position
           };
           const typeLabel = getLocationOccupancyInfo(occupancyLookup, fakeRow);
-          const key = STORAGE_LABEL_MAP[typeLabel.toLowerCase()];
+          const key = resolveStorageKey(typeLabel);
 
           // Always add to rawRows (evidence sheet shows ALL inventory)
           rawRows.push({
