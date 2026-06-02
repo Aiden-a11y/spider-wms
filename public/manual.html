@@ -1,0 +1,1396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spider WMS Billing — User Manual</title>
+<style>
+  :root {
+    --navy: #0f172a;
+    --navy2: #1e293b;
+    --blue: #3b82f6;
+    --blue-dark: #1d4ed8;
+    --emerald: #10b981;
+    --purple: #8b5cf6;
+    --amber: #f59e0b;
+    --sky: #0ea5e9;
+    --slate: #64748b;
+    --slate-light: #f1f5f9;
+    --border: #e2e8f0;
+    --text: #0f172a;
+    --muted: #64748b;
+    --white: #ffffff;
+    --red: #ef4444;
+    --toc-width: 260px;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    color: var(--text);
+    background: #f8fafc;
+    display: flex;
+    min-height: 100vh;
+  }
+
+  /* ── TOC sidebar ── */
+  #toc {
+    width: var(--toc-width);
+    min-width: var(--toc-width);
+    background: var(--navy);
+    color: #cbd5e1;
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    overflow-y: auto;
+    z-index: 100;
+    padding: 0 0 40px;
+  }
+  .toc-logo {
+    padding: 24px 20px 20px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    margin-bottom: 8px;
+  }
+  .toc-logo .brand { font-size: 20px; font-weight: 800; color: #fff; letter-spacing: -0.5px; }
+  .toc-logo .sub { font-size: 11px; color: #94a3b8; margin-top: 2px; }
+  .toc-section { padding: 6px 20px 2px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #475569; margin-top: 12px; }
+  #toc a {
+    display: block; padding: 7px 20px 7px 24px;
+    font-size: 13px; color: #94a3b8; text-decoration: none;
+    border-left: 2px solid transparent;
+    transition: all .15s;
+    line-height: 1.4;
+  }
+  #toc a:hover { color: #e2e8f0; background: rgba(255,255,255,0.04); }
+  #toc a.active { color: #fff; border-left-color: var(--blue); background: rgba(59,130,246,0.12); }
+  #toc a.sub { padding-left: 36px; font-size: 12px; }
+
+  /* ── Main content ── */
+  #main {
+    margin-left: var(--toc-width);
+    flex: 1;
+    max-width: 1200px;
+    padding: 0 56px 120px;
+  }
+
+  /* ── Hero ── */
+  .hero {
+    background: linear-gradient(135deg, var(--navy) 0%, #1e40af 60%, #1d4ed8 100%);
+    color: white;
+    padding: 64px 56px 56px;
+    margin: 0 -56px 56px;
+  }
+  .hero-badge { display: inline-flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2); border-radius: 100px; padding: 4px 14px; font-size: 12px; font-weight: 600; margin-bottom: 20px; }
+  .hero h1 { font-size: 42px; font-weight: 800; letter-spacing: -1px; margin-bottom: 12px; line-height: 1.1; }
+  .hero p { font-size: 17px; color: rgba(255,255,255,0.75); max-width: 560px; line-height: 1.6; }
+  .hero-meta { display: flex; gap: 32px; margin-top: 32px; }
+  .hero-meta-item { font-size: 13px; color: rgba(255,255,255,0.6); }
+  .hero-meta-item strong { display: block; font-size: 15px; color: white; margin-bottom: 2px; }
+
+  /* ── Sections ── */
+  section { margin-bottom: 72px; scroll-margin-top: 24px; }
+  h2 { font-size: 26px; font-weight: 800; letter-spacing: -0.5px; margin-bottom: 6px; padding-top: 40px; }
+  h2 .num { color: var(--blue); margin-right: 10px; font-weight: 300; font-size: 22px; }
+  h3 { font-size: 17px; font-weight: 700; margin: 28px 0 12px; color: var(--navy2); }
+  h4 { font-size: 14px; font-weight: 700; margin: 20px 0 8px; color: var(--slate); text-transform: uppercase; letter-spacing: 0.5px; }
+  p { font-size: 15px; line-height: 1.7; color: #334155; margin-bottom: 12px; }
+  .section-divider { height: 1px; background: var(--border); margin: 48px 0; }
+
+  /* ── Cards ── */
+  .card { background: white; border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin: 16px 0; }
+  .card-grid { display: grid; gap: 16px; }
+  .card-grid.cols-2 { grid-template-columns: 1fr 1fr; }
+  .card-grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .card-grid.cols-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+  .card h4 { margin-top: 0; }
+
+  /* ── Info / tip / warn boxes ── */
+  .box { border-radius: 10px; padding: 16px 20px; margin: 16px 0; font-size: 14px; line-height: 1.6; }
+  .box.info { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; }
+  .box.tip { background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; }
+  .box.warn { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }
+  .box.purple { background: #f5f3ff; border: 1px solid #ddd6fe; color: #4c1d95; }
+  .box strong { font-weight: 700; }
+
+  /* ── Step list ── */
+  .steps { counter-reset: step; list-style: none; margin: 16px 0; }
+  .steps li {
+    counter-increment: step;
+    display: flex; gap: 16px; align-items: flex-start;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px; line-height: 1.6; color: #334155;
+  }
+  .steps li:last-child { border-bottom: none; }
+  .steps li::before {
+    content: counter(step);
+    min-width: 28px; height: 28px;
+    background: var(--blue); color: white;
+    border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; flex-shrink: 0; margin-top: 1px;
+  }
+  .steps li strong { display: block; font-weight: 700; color: var(--navy); margin-bottom: 2px; }
+
+  /* ── Tag / badge ── */
+  .tag { display: inline-flex; align-items: center; gap: 4px; border-radius: 6px; padding: 2px 10px; font-size: 12px; font-weight: 600; }
+  .tag.blue { background: #dbeafe; color: #1d4ed8; }
+  .tag.green { background: #d1fae5; color: #065f46; }
+  .tag.amber { background: #fef3c7; color: #92400e; }
+  .tag.red { background: #fee2e2; color: #991b1b; }
+  .tag.purple { background: #ede9fe; color: #5b21b6; }
+  .tag.sky { background: #e0f2fe; color: #0369a1; }
+  .tag.slate { background: #f1f5f9; color: #475569; }
+
+  /* ── Table ── */
+  .tbl { width: 100%; border-collapse: collapse; font-size: 14px; margin: 16px 0; }
+  .tbl th { background: var(--slate-light); color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; padding: 10px 16px; text-align: left; border-bottom: 2px solid var(--border); }
+  .tbl td { padding: 10px 16px; border-bottom: 1px solid var(--border); color: #334155; vertical-align: top; }
+  .tbl tr:last-child td { border-bottom: none; }
+  .tbl tr:hover td { background: #f8fafc; }
+
+  /* ── UI Mockup components ── */
+  .mockup {
+    background: white; border: 1px solid var(--border); border-radius: 12px;
+    overflow: hidden; margin: 20px 0;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+  }
+  .mockup-bar {
+    background: var(--navy); color: white;
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 20px; font-size: 13px;
+  }
+  .mockup-bar .dots { display: flex; gap: 6px; }
+  .mockup-bar .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .mockup-bar .dot.r { background: #ef4444; }
+  .mockup-bar .dot.y { background: #f59e0b; }
+  .mockup-bar .dot.g { background: #10b981; }
+  .mockup-bar .url { background: rgba(255,255,255,0.1); border-radius: 6px; padding: 4px 14px; font-size: 12px; color: rgba(255,255,255,0.7); flex: 1; }
+
+  .mockup-shell { display: flex; min-height: 320px; }
+  .mockup-sidebar {
+    width: 200px; min-width: 200px; background: var(--navy);
+    padding: 16px 0; display: flex; flex-direction: column; gap: 2px;
+  }
+  .mockup-sidebar .logo { padding: 0 16px 16px; border-bottom: 1px solid rgba(255,255,255,0.08); margin-bottom: 8px; }
+  .mockup-sidebar .logo .l1 { font-size: 14px; font-weight: 800; color: white; }
+  .mockup-sidebar .logo .l2 { font-size: 10px; color: #64748b; }
+  .mockup-sidebar .nav-item { padding: 8px 16px; font-size: 12px; color: #64748b; display: flex; align-items: center; gap: 8px; }
+  .mockup-sidebar .nav-item.active { color: white; background: rgba(59,130,246,0.2); border-left: 2px solid var(--blue); }
+  .mockup-sidebar .nav-item .icon { width: 14px; height: 14px; opacity: 0.7; }
+  .mockup-content { flex: 1; background: #f8fafc; padding: 20px; overflow: auto; }
+
+  /* Invoice list mockup */
+  .inv-row { background: white; border: 1px solid var(--border); border-radius: 8px; padding: 14px 20px; display: flex; align-items: center; gap: 16px; margin-bottom: 8px; }
+  .inv-row .comb { background: #dbeafe; color: #1d4ed8; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 100px; }
+  .inv-row .customer { flex: 1; font-size: 13px; font-weight: 600; color: #0f172a; }
+  .inv-row .period { font-size: 12px; color: var(--muted); min-width: 80px; }
+  .inv-row .total { font-size: 14px; font-weight: 700; color: #0f172a; min-width: 100px; text-align: right; }
+  .inv-row .status { font-size: 11px; font-weight: 600; }
+  .inv-row .updated { font-size: 11px; color: var(--muted); min-width: 90px; text-align: right; }
+
+  /* Editor header mockup */
+  .editor-header { background: white; border-bottom: 1px solid var(--border); padding: 14px 20px; }
+  .editor-header .title { font-size: 16px; font-weight: 800; color: #0f172a; }
+  .editor-header .meta { font-size: 11px; color: var(--muted); margin-top: 2px; display: flex; gap: 12px; align-items: center; }
+  .editor-tabs { background: white; border-bottom: 1px solid var(--border); display: flex; padding: 0 20px; gap: 0; }
+  .editor-tab { padding: 10px 16px; font-size: 12px; font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; }
+  .editor-tab.active { color: var(--blue); border-bottom-color: var(--blue); }
+  .editor-tab.green { color: #059669; border-bottom-color: #059669; }
+  .editor-actions { display: flex; gap: 8px; align-items: center; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; border: 1px solid var(--border); background: white; color: #334155; cursor: pointer; }
+  .btn.primary { background: var(--blue); color: white; border-color: var(--blue); }
+  .btn.green { background: var(--emerald); color: white; border-color: var(--emerald); }
+
+  /* WMS source mockup */
+  .source-panel { background: white; border: 1px solid var(--border); border-radius: 10px; margin: 12px; overflow: hidden; }
+  .source-header { background: #f8fafc; border-bottom: 1px solid var(--border); padding: 10px 16px; display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 600; }
+  .source-tabs { border-bottom: 1px solid var(--border); display: flex; padding: 0 16px; background: white; }
+  .source-tab { padding: 8px 14px; font-size: 12px; color: var(--muted); border-bottom: 2px solid transparent; }
+  .source-tab.active.blue { color: var(--blue); border-bottom-color: var(--blue); }
+  .source-tab.active.green { color: var(--emerald); border-bottom-color: var(--emerald); }
+  .source-tab.active.purple { color: var(--purple); border-bottom-color: var(--purple); }
+
+  .data-table { width: 100%; font-size: 11px; }
+  .data-table th { background: #f8fafc; padding: 6px 10px; text-align: left; font-weight: 700; color: var(--muted); border-bottom: 1px solid var(--border); font-size: 10px; text-transform: uppercase; }
+  .data-table td { padding: 7px 10px; border-bottom: 1px solid #f1f5f9; color: #334155; }
+  .data-table input { width: 60px; border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; font-size: 11px; text-align: right; }
+  .data-table .highlight { border-color: #fbbf24; background: #fefce8; }
+  .data-table .auto-val { color: var(--blue); font-weight: 700; }
+
+  /* Line item section */
+  .li-section { background: white; border: 1px solid var(--border); border-radius: 10px; margin: 8px 12px; overflow: hidden; }
+  .li-header { padding: 12px 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); }
+  .li-cat { border-radius: 100px; padding: 3px 12px; font-size: 11px; font-weight: 700; }
+  .li-cat.inbound { background: #dbeafe; color: #1d4ed8; }
+  .li-cat.storage { background: #e0f2fe; color: #0369a1; }
+  .li-cat.b2b { background: #d1fae5; color: #065f46; }
+  .li-cat.b2c { background: #f0fdf4; color: #166534; }
+  .li-cat.returns { background: #fef3c7; color: #92400e; }
+  .li-cat.labor { background: #ede9fe; color: #5b21b6; }
+  .li-amount { font-size: 14px; font-weight: 700; color: #0f172a; }
+  .li-row { display: grid; grid-template-columns: 1fr auto auto auto auto; gap: 12px; align-items: center; padding: 9px 16px; border-bottom: 1px solid #f8fafc; font-size: 12px; }
+  .li-row:last-child { border-bottom: none; }
+  .li-desc { color: #334155; }
+  .li-auto { background: #dbeafe; color: #1d4ed8; border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: 700; }
+  .li-qty { text-align: right; font-weight: 600; min-width: 50px; }
+  .li-unit { color: var(--muted); min-width: 90px; }
+  .li-rate { color: var(--muted); min-width: 50px; text-align: right; }
+  .li-amt { font-weight: 700; text-align: right; min-width: 70px; }
+
+  /* Extra tabs panels */
+  .tab-panel { background: white; border: 1px solid var(--border); border-radius: 10px; margin: 16px 0; padding: 24px; }
+  .tab-panel h4 { margin-top: 0; margin-bottom: 16px; font-size: 14px; font-weight: 700; color: var(--navy); }
+
+  /* Storage grid */
+  .storage-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .storage-snap { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .storage-snap-header { background: #f8fafc; padding: 10px 16px; font-size: 12px; font-weight: 700; color: var(--muted); border-bottom: 1px solid var(--border); }
+  .storage-snap-body { padding: 16px; }
+  .storage-type-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 13px; border-bottom: 1px solid #f8fafc; }
+  .storage-type-row:last-child { border-bottom: none; }
+  .storage-val { font-weight: 700; color: var(--blue); }
+
+  /* Summary mockup */
+  .summary-row { display: flex; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .summary-row.cat-header { background: var(--slate-light); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
+  .summary-row.subtotal { font-weight: 700; color: #0f172a; }
+  .summary-row.grand-total { background: var(--navy); color: white; font-size: 16px; font-weight: 800; padding: 14px 16px; }
+  .summary-row.extra { background: #f5f3ff; color: #5b21b6; font-weight: 600; }
+  .summary-label { flex: 1; }
+  .summary-amt { font-weight: 700; }
+
+  /* OM subsidy mockup */
+  .om-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .om-field { display: flex; flex-direction: column; gap: 4px; }
+  .om-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .om-input { border: 1px solid var(--border); border-radius: 6px; padding: 7px 12px; font-size: 13px; color: #0f172a; background: #f8fafc; }
+  .om-result { background: var(--navy); color: white; border-radius: 8px; padding: 14px 16px; margin-top: 16px; display: flex; justify-content: space-between; align-items: center; }
+  .om-result .label { font-size: 12px; color: rgba(255,255,255,0.7); }
+  .om-result .value { font-size: 18px; font-weight: 800; }
+
+  /* Rate master */
+  .rate-table-section { margin-bottom: 20px; }
+  .rate-table-section h5 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); margin-bottom: 8px; }
+  .rate-item { display: flex; align-items: center; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 4px; font-size: 13px; background: white; }
+  .rate-item .desc { flex: 1; color: #334155; }
+  .rate-item .rate-val { font-weight: 700; color: #0f172a; margin-right: 8px; }
+  .rate-item .custom-input { border: 1px solid var(--blue); border-radius: 4px; padding: 3px 8px; font-size: 12px; width: 80px; text-align: right; }
+
+  /* Keyboard shortcut */
+  kbd { background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 4px; padding: 2px 6px; font-size: 12px; font-family: monospace; }
+
+  /* ── Responsive ── */
+  @media (max-width: 900px) {
+    #toc { display: none; }
+    #main { margin-left: 0; padding: 0 20px 80px; }
+    .hero { margin: 0 -20px 40px; padding: 40px 20px 36px; }
+    .card-grid.cols-3, .card-grid.cols-4 { grid-template-columns: 1fr 1fr; }
+    .card-grid.cols-2 { grid-template-columns: 1fr; }
+    .storage-grid { grid-template-columns: 1fr; }
+    .om-grid { grid-template-columns: 1fr; }
+  }
+
+  /* Print */
+  @media print {
+    #toc { display: none; }
+    #main { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════ TOC ════════════════════════════════════ -->
+<nav id="toc">
+  <div class="toc-logo">
+    <div class="brand">STL▶ WMS</div>
+    <div class="sub">Billing System Manual</div>
+  </div>
+
+  <div class="toc-section">Getting Started</div>
+  <a href="#overview">Overview</a>
+  <a href="#login">Login</a>
+  <a href="#billing-home">Billing Home</a>
+
+  <div class="toc-section">Invoice Workflow</div>
+  <a href="#create-invoice">Creating an Invoice</a>
+  <a href="#single-invoice">Single Invoice</a>
+  <a href="#combined-invoice">Combined Invoice</a>
+  <a href="#editor-header">Editor Header</a>
+
+  <div class="toc-section">WMS Source Data</div>
+  <a href="#wms-source">WMS Source Panel</a>
+  <a href="#inbound-tab" class="sub">↳ Inbound Tab</a>
+  <a href="#b2b-tab" class="sub">↳ B2B Shipping Tab</a>
+  <a href="#b2c-tab" class="sub">↳ B2C Shipping Tab</a>
+  <a href="#storage-tab" class="sub">↳ Storage Tab</a>
+
+  <div class="toc-section">Invoice Line Items</div>
+  <a href="#inbound-handling">Inbound Handling</a>
+  <a href="#storage-billing">Storage</a>
+  <a href="#fulfillment-b2b">Fulfillment B2B</a>
+  <a href="#fulfillment-b2c">Fulfillment B2C</a>
+  <a href="#returns">Return Management</a>
+  <a href="#labor">Warehouse Labor</a>
+
+  <div class="toc-section">Extra Panels</div>
+  <a href="#rate-table-panel">Rate Table</a>
+  <a href="#om-subsidy">OM Subsidy</a>
+  <a href="#office-sublease">Office Sublease</a>
+  <a href="#summary-panel">Summary</a>
+  <a href="#storage-summary">Storage Summary</a>
+
+  <div class="toc-section">Actions</div>
+  <a href="#save-finalize">Save &amp; Finalize</a>
+  <a href="#excel-export">Excel Export</a>
+  <a href="#rate-master">Rate Master</a>
+
+  <div class="toc-section">Reference</div>
+  <a href="#rate-reference">Rate Reference</a>
+  <a href="#column-glossary">Column Glossary</a>
+</nav>
+
+<!-- ════════════════════════════ MAIN CONTENT ══════════════════════════════ -->
+<main id="main">
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-badge">📋 User Manual · v2026.02</div>
+  <h1>Spider WMS<br>Billing System</h1>
+  <p>Complete guide for creating, editing, and exporting monthly 3PL billing invoices — from WMS data import to finalized Excel output.</p>
+  <div class="hero-meta">
+    <div class="hero-meta-item"><strong>Rate Version</strong>2026-02-17</div>
+    <div class="hero-meta-item"><strong>Supported Modes</strong>Single &amp; Combined Invoices</div>
+    <div class="hero-meta-item"><strong>Export Format</strong>Excel (.xlsx)</div>
+  </div>
+</div>
+
+<!-- ─────────────────── OVERVIEW ─────────────────── -->
+<section id="overview">
+  <h2><span class="num">01</span>Overview</h2>
+  <p>The Spider WMS Billing System allows your team to generate accurate monthly invoices for 3PL customers by automatically pulling order data from the WMS API and organizing charges into six billing categories.</p>
+
+  <div class="card-grid cols-3">
+    <div class="card">
+      <div style="font-size:28px;margin-bottom:10px">📥</div>
+      <h4>Auto-Fill from WMS</h4>
+      <p style="font-size:13px;margin:0">Click <strong>Load WMS Data</strong> to auto-populate inbound, B2B, B2C, and labor quantities directly from the WMS API for the billing period.</p>
+    </div>
+    <div class="card">
+      <div style="font-size:28px;margin-bottom:10px">✏️</div>
+      <h4>Adjust &amp; Override</h4>
+      <p style="font-size:13px;margin:0">All auto-filled quantities can be manually overridden per order in the WMS Source Data table. Edits are saved with the invoice.</p>
+    </div>
+    <div class="card">
+      <div style="font-size:28px;margin-bottom:10px">📊</div>
+      <h4>Export to Excel</h4>
+      <p style="font-size:13px;margin:0">One-click export generates a fully-formatted, formula-linked Excel workbook with per-customer tabs, a summary sheet, rate table, and raw data sheets.</p>
+    </div>
+  </div>
+
+  <h3>Billing Categories</h3>
+  <div class="card-grid cols-3" style="margin-top:12px">
+    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:16px">
+      <div style="font-weight:700;color:#1d4ed8;margin-bottom:4px">📦 Inbound Handling</div>
+      <div style="font-size:13px;color:#1e40af">Cartons, pallets, containers (20'/40'/40HC, palletized or floor-loaded), additional labor</div>
+    </div>
+    <div style="background:#e0f2fe;border:1px solid #7dd3fc;border-radius:10px;padding:16px">
+      <div style="font-weight:700;color:#0369a1;margin-bottom:4px">🗄️ Storage</div>
+      <div style="font-size:13px;color:#0c4a6e">Bin, Shelf, Carton, Pallet Short/Regular/Tall, Open Floor — billed as avg of 15th-day and last-day snapshot</div>
+    </div>
+    <div style="background:#d1fae5;border:1px solid #6ee7b7;border-radius:10px;padding:16px">
+      <div style="font-weight:700;color:#065f46;margin-bottom:4px">🚚 Fulfillment B2B</div>
+      <div style="font-size:13px;color:#065f46">Order processing, pick (piece/carton/pallet), packing, palletizing, labels, inserts</div>
+    </div>
+    <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:10px;padding:16px">
+      <div style="font-weight:700;color:#166534;margin-bottom:4px">🛍️ Fulfillment B2C</div>
+      <div style="font-size:13px;color:#166534">Order processing, pick per piece, fragile handling, labels, inserts</div>
+    </div>
+    <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:10px;padding:16px">
+      <div style="font-weight:700;color:#92400e;margin-bottom:4px">🔄 Return Management</div>
+      <div style="font-size:13px;color:#92400e">Return processing fee, restocking, disposal (cost + 10%)</div>
+    </div>
+    <div style="background:#ede9fe;border:1px solid #c4b5fd;border-radius:10px;padding:16px">
+      <div style="font-weight:700;color:#5b21b6;margin-bottom:4px">👷 Warehouse Labor</div>
+      <div style="font-size:13px;color:#5b21b6">Regular labor hours, OT weekday, OT weekend/holiday</div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ─────────────────── LOGIN ─────────────────── -->
+<section id="login">
+  <h2><span class="num">02</span>Login</h2>
+  <p>Access the Billing System through the WMS Dashboard. Use your WMS account credentials (same as the WMS web portal).</p>
+
+  <!-- Login screen mockup -->
+  <div class="mockup" style="max-width:500px;margin:20px auto">
+    <div class="mockup-bar">
+      <div class="dots"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div>
+      <div class="url">localhost:3000</div>
+    </div>
+    <div style="background: linear-gradient(135deg,#0f172a,#1e3a8a);padding:60px 40px;display:flex;flex-direction:column;align-items:center;gap:24px">
+      <div style="text-align:center">
+        <div style="font-size:28px;font-weight:900;color:white;letter-spacing:-1px">STL▶</div>
+        <div style="font-size:13px;color:#94a3b8;margin-top:4px">Spider WMS · Operations Dashboard</div>
+      </div>
+      <div style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:14px;padding:28px 32px;width:100%;max-width:340px">
+        <div style="font-size:18px;font-weight:800;color:white;margin-bottom:4px">Sign in</div>
+        <div style="font-size:12px;color:#64748b;margin-bottom:24px">Enter your credentials to continue</div>
+        <div style="margin-bottom:14px">
+          <div style="font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">USER ID</div>
+          <div style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:10px 14px;font-size:13px;color:#64748b">Enter your user ID</div>
+        </div>
+        <div style="margin-bottom:20px">
+          <div style="font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">PASSWORD</div>
+          <div style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:10px 14px;font-size:13px;color:#64748b">••••••••</div>
+        </div>
+        <div style="background:#3b82f6;border-radius:8px;padding:11px;text-align:center;font-size:13px;font-weight:700;color:white">Sign In</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="box info">
+    <strong>Note:</strong> Your login session is stored in the browser's sessionStorage and will automatically expire when you close the tab. You will need to log in again in each new session.
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ─────────────────── BILLING HOME ─────────────────── -->
+<section id="billing-home">
+  <h2><span class="num">03</span>Billing Home</h2>
+  <p>Navigate to <strong>Billing → Invoices</strong> in the left sidebar. The Billing home shows all invoices sorted by most recently updated.</p>
+
+  <div class="mockup">
+    <div class="mockup-bar">
+      <div class="dots"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div>
+      <div class="url">localhost:3000/billing</div>
+    </div>
+    <div class="mockup-shell">
+      <div class="mockup-sidebar">
+        <div class="logo"><div class="l1">STL▶</div><div class="l2">WMS Dashboard</div></div>
+        <div class="nav-item">📊 Dashboard</div>
+        <div class="nav-item">📦 Inventory</div>
+        <div class="nav-item">🚚 Shipping</div>
+        <div class="nav-item">📥 Receiving</div>
+        <div class="nav-item">📍 Locations</div>
+        <div class="nav-item">🔄 Returns</div>
+        <div class="nav-item active">💳 Billing</div>
+        <div class="nav-item" style="padding-left:28px;font-size:11px;color:#3b82f6">→ Invoices</div>
+        <div class="nav-item" style="padding-left:28px;font-size:11px">→ Rate Master</div>
+      </div>
+      <div class="mockup-content">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <div>
+            <div style="font-size:18px;font-weight:800;color:#0f172a">Billing</div>
+            <div style="font-size:12px;color:#64748b">Monthly invoice management</div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <div class="btn">⬇ Export All</div>
+            <div class="btn primary">＋ New Invoice</div>
+          </div>
+        </div>
+        <div style="background:white;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+          <div style="display:grid;grid-template-columns:1fr 90px 100px 80px 100px;padding:8px 20px;background:#f8fafc;border-bottom:1px solid var(--border);font-size:10px;font-weight:700;text-transform:uppercase;color:#64748b;gap:12px">
+            <div>Customer</div><div>Period</div><div style="text-align:right">Total</div><div>Status</div><div style="text-align:right">Updated</div>
+          </div>
+          <div class="inv-row">
+            <div class="comb">Combined</div>
+            <div class="customer">Customer A, Customer B, Customer C <span style="font-size:11px;color:#94a3b8;font-weight:400">· 3 customers</span></div>
+            <div class="period">May 2026</div>
+            <div class="total">$18,770.46</div>
+            <div class="status"><span class="tag amber">Draft</span></div>
+            <div class="updated">Jun 2, 2026</div>
+          </div>
+          <div class="inv-row">
+            <div style="width:60px"></div>
+            <div class="customer">Customer D</div>
+            <div class="period">Apr 2026</div>
+            <div class="total">$4,250.00</div>
+            <div class="status"><span class="tag green">Final</span></div>
+            <div class="updated">May 5, 2026</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Invoice List Columns</h3>
+  <table class="tbl">
+    <thead><tr><th>Column</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Customer</strong></td><td>Customer name(s). Combined invoices show all customer names and the "Combined" badge with count.</td></tr>
+      <tr><td><strong>Period</strong></td><td>Billing month in "Month YYYY" format (e.g., May 2026).</td></tr>
+      <tr><td><strong>Total</strong></td><td>Sum of all billing category subtotals for this invoice (or all customers in combined mode).</td></tr>
+      <tr><td><strong>Status</strong></td><td><span class="tag amber">Draft</span> = still editable · <span class="tag green">Final</span> = locked</td></tr>
+      <tr><td><strong>Updated</strong></td><td>Date of the last save.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box info">
+    <strong>Combined invoice:</strong> When multiple customers share the same billing period and are invoiced together, they appear as a single row with the <span class="tag blue">Combined</span> badge. Click the row to open the multi-tab editor.
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ─────────────────── CREATE INVOICE ─────────────────── -->
+<section id="create-invoice">
+  <h2><span class="num">04</span>Creating an Invoice</h2>
+  <p>Click <strong>+ New Invoice</strong> in the top-right corner. A form slides in from the right where you select the customer(s) and billing period.</p>
+
+  <div class="card-grid cols-2" style="margin:20px 0">
+    <div class="card" id="single-invoice">
+      <h4>Single Invoice</h4>
+      <ol class="steps">
+        <li><strong>Select customer</strong> from the dropdown (pulls from WMS customer list)</li>
+        <li><strong>Select year &amp; month</strong> for the billing period</li>
+        <li>Click <strong>Create Invoice</strong></li>
+      </ol>
+      <div class="box tip" style="margin-top:12px">
+        If a <strong>Rate Master</strong> has been configured for this customer, custom rates are automatically applied when the invoice is created.
+      </div>
+    </div>
+    <div class="card" id="combined-invoice">
+      <h4>Combined Invoice (Multi-Customer)</h4>
+      <ol class="steps">
+        <li>Click <strong>Select Multiple</strong> to enter multi-select mode</li>
+        <li><strong>Check</strong> each customer to include</li>
+        <li><strong>Select year &amp; month</strong> (same period for all)</li>
+        <li>Click <strong>Create Combined Invoice</strong></li>
+      </ol>
+      <div class="box info" style="margin-top:12px">
+        All customers in a combined invoice share the same OM Subsidy, Office Sublease, and Summary panels. Each customer has its own WMS source data and billing line items.
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ─────────────────── EDITOR HEADER ─────────────────── -->
+<section id="editor-header">
+  <h2><span class="num">05</span>Invoice Editor — Header &amp; Navigation</h2>
+
+  <div class="mockup">
+    <div class="mockup-bar">
+      <div class="dots"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div>
+      <div class="url">localhost:3000/billing</div>
+    </div>
+    <!-- Editor header -->
+    <div class="editor-header">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div class="title">✕&nbsp;&nbsp;Combined Invoice — May 2026 (3 customers)</div>
+          <div class="meta">
+            <span>Rate ver. 2026-02-17</span>
+            <span style="color:#059669;display:flex;align-items:center;gap:4px">· 💾 Saved Jun 2 09:34 AM</span>
+          </div>
+        </div>
+        <div class="editor-actions">
+          <div class="btn">☁ Load WMS Data</div>
+          <div class="btn">⬇ Export Combined</div>
+          <div class="btn">💾 Save All</div>
+          <div class="btn primary" style="background:#0891b2;border-color:#0891b2">✓ Finalize All</div>
+        </div>
+      </div>
+    </div>
+    <!-- Tab bar -->
+    <div class="editor-tabs">
+      <div class="editor-tab active">Customer A &nbsp;<span style="color:#3b82f6;font-size:11px">$464.53</span></div>
+      <div class="editor-tab">Customer B &nbsp;<span style="color:#64748b;font-size:11px">$16,757.09</span></div>
+      <div class="editor-tab">Customer C &nbsp;<span style="color:#64748b;font-size:11px">$1,548.84</span></div>
+      <div style="flex:1"></div>
+      <div class="editor-tab">📄 Rate Table</div>
+      <div class="editor-tab">🧮 OM Subsidy</div>
+      <div class="editor-tab">🏢 Office Sublease</div>
+      <div class="editor-tab">📊 Summary</div>
+      <div class="editor-tab">🗄️ Storage</div>
+    </div>
+  </div>
+
+  <h3>Header Buttons</h3>
+  <table class="tbl">
+    <thead><tr><th>Button</th><th>Action</th></tr></thead>
+    <tbody>
+      <tr><td>✕ (close)</td><td>Return to the invoice list without losing unsaved changes (data stays until you navigate away).</td></tr>
+      <tr><td>☁ <strong>Load WMS Data</strong></td><td>Re-fetch all order data from WMS API and overwrite current source data. Use this to refresh or reset WMS quantities.</td></tr>
+      <tr><td>⬇ <strong>Export Combined</strong></td><td>Opens the export preview dialog. Generates a multi-tab Excel file for the entire combined invoice group.</td></tr>
+      <tr><td>💾 <strong>Save All</strong></td><td>Saves all customers in the current group to Redis. The page stays open. Last saved time is shown in the header.</td></tr>
+      <tr><td>✓ <strong>Finalize All</strong></td><td>Marks all invoices as <span class="tag green">Final</span>. Finalized invoices are read-only.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Customer Tabs (Left Side)</h3>
+  <p>Each customer in a combined invoice has its own tab showing their name and running total. Click a tab to switch to that customer's invoice. The current customer's data is auto-saved to memory when switching.</p>
+
+  <h3>Extra Tabs (Right Side)</h3>
+  <p>The right side of the tab bar contains panels shared across all customers: <strong>Rate Table</strong>, <strong>OM Subsidy</strong>, <strong>Office Sublease</strong>, <strong>Summary</strong>, and <strong>Storage</strong>. Click any to toggle it open/closed.</p>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ─────────────────── WMS SOURCE DATA ─────────────────── -->
+<section id="wms-source">
+  <h2><span class="num">06</span>WMS Source Data Panel</h2>
+  <p>The WMS Source Data panel appears at the top of each customer's invoice. It shows the raw order data fetched from the WMS API and lets you override individual quantities per order before they're summarized into billing line items.</p>
+
+  <div class="box info">
+    <strong>Auto-persistence:</strong> WMS source data is saved together with the invoice. When you reopen an invoice, the source table is automatically restored — no re-fetch needed. Click <strong>Load WMS Data</strong> to re-fetch and overwrite with fresh data.
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-bar">
+      <div class="dots"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div>
+      <div class="url">WMS Source Data Panel</div>
+    </div>
+    <div style="padding:16px;background:#f8fafc">
+      <div class="source-panel">
+        <div class="source-header">
+          📋 WMS Source Data
+          <span class="tag blue">Inbound 7</span>
+          <span class="tag green">B2B 21</span>
+          <span style="margin-left:auto;color:#64748b;font-size:11px">⌄ collapse</span>
+        </div>
+        <div class="source-tabs">
+          <div class="source-tab active blue">Inbound (7)</div>
+          <div class="source-tab">B2B Shipping (21)</div>
+          <div class="source-tab">B2C Shipping (0)</div>
+          <div class="source-tab">Returns (0)</div>
+          <div class="source-tab active purple" style="margin-left:auto">Storage (3)</div>
+        </div>
+        <div style="padding:16px">
+          <div style="font-size:12px;color:#64748b;text-align:center;padding:20px 0">
+            (Source table with order rows — see Inbound / B2B tabs below)
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── INBOUND TAB ── -->
+  <h3 id="inbound-tab">Inbound Tab</h3>
+  <p>Shows all receiving orders for the billing period. Each row represents one inbound order.</p>
+
+  <div class="mockup" style="margin:16px 0">
+    <div style="overflow-x:auto">
+      <table class="data-table" style="min-width:900px">
+        <thead>
+          <tr>
+            <th>Order Code</th><th>PO / Ref</th><th>In Date</th><th>Status</th><th>Type</th>
+            <th>Item Qty</th><th>Carton</th><th>Pallet</th>
+            <th style="color:#1d4ed8">20'Pal</th><th style="color:#1d4ed8">40'Pal</th><th style="color:#1d4ed8">40HC'Pal</th>
+            <th style="color:#0891b2">20'Flr</th><th style="color:#0891b2">40'Flr</th><th style="color:#0891b2">40HC'Flr</th>
+            <th style="color:#7c3aed">Labor Hrs</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="color:#059669;font-family:monospace;font-size:10px">R20260512…001</td>
+            <td>—</td><td>20260512</td><td><span class="tag green" style="font-size:10px">DA</span></td><td>Carton</td>
+            <td>1,200</td>
+            <td><input class="highlight" value="14"></td>
+            <td><input value=""></td>
+            <td><input value=""></td><td><input value=""></td><td><input value=""></td>
+            <td><input value=""></td><td><input value=""></td><td><input value=""></td>
+            <td><input value=""></td>
+          </tr>
+          <tr>
+            <td style="color:#059669;font-family:monospace;font-size:10px">R20260515…002</td>
+            <td>PO-2026-88</td><td>20260515</td><td><span class="tag green" style="font-size:10px">DA</span></td><td>40HC Container</td>
+            <td>4,832</td>
+            <td><input value=""></td><td><input value=""></td>
+            <td><input value=""></td><td><input value=""></td>
+            <td><input class="highlight" value="1"></td>
+            <td><input value=""></td><td><input value=""></td><td><input value=""></td>
+            <td><input value="8"></td>
+          </tr>
+          <tr style="background:#f8fafc;font-weight:700;color:#1d4ed8">
+            <td colspan="6">TOTAL (billed)</td>
+            <td class="auto-val" style="padding:7px 10px">14</td>
+            <td style="padding:7px 10px">—</td>
+            <td style="padding:7px 10px">—</td><td style="padding:7px 10px">—</td>
+            <td class="auto-val" style="padding:7px 10px">1</td>
+            <td style="padding:7px 10px">—</td><td style="padding:7px 10px">—</td><td style="padding:7px 10px">—</td>
+            <td class="auto-val" style="padding:7px 10px">8</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <h4>Inbound Column Reference</h4>
+  <table class="tbl">
+    <thead><tr><th>Column</th><th>Billing Item</th><th>Rate</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>Carton</td><td>Standard Inbound — Carton</td><td>$2.00/carton</td><td>Auto-detected from WMS order type. Yellow = user-edited.</td></tr>
+      <tr><td>Pallet</td><td>Standard Inbound — Pallet (LTL/LCL)</td><td>$8.00/pallet</td><td></td></tr>
+      <tr><td>20'Pal</td><td>20' Container (Palletized)</td><td>$150.00/container</td><td></td></tr>
+      <tr><td>40'Pal</td><td>40' Container (Palletized)</td><td>$250.00/container</td><td></td></tr>
+      <tr><td>40HC'Pal</td><td>40' HC Container (Palletized)</td><td>$300.00/container</td><td></td></tr>
+      <tr><td>20'Flr</td><td>20' Container (Floor Loaded)</td><td>$350.00/container</td><td></td></tr>
+      <tr><td>40'Flr</td><td>40' Container (Floor Loaded)</td><td>$450.00/container</td><td></td></tr>
+      <tr><td>40HC'Flr</td><td>40' HC Container (Floor Loaded)</td><td>$500.00/container</td><td></td></tr>
+      <tr><td>Labor Hrs</td><td>Additional Labor (QC/Counting)</td><td>$35.00/hr</td><td></td></tr>
+    </tbody>
+  </table>
+
+  <div class="box tip">
+    <strong>Yellow highlight</strong> on an input cell means the value has been manually edited and overrides the WMS auto-detected value. The TOTAL row shows the running sum that feeds directly into the invoice line items.
+  </div>
+
+  <!-- ── B2B TAB ── -->
+  <h3 id="b2b-tab" style="margin-top:36px">B2B Shipping Tab</h3>
+  <p>Shows completed B2B (wholesale/retailer) shipping orders. Only orders with status <strong>FA (Complete)</strong> and a valid out date within the billing period are included.</p>
+
+  <div class="mockup" style="margin:16px 0">
+    <div style="overflow-x:auto">
+      <table class="data-table" style="min-width:1100px">
+        <thead>
+          <tr>
+            <th>Order Code</th><th>Date</th><th>Pick/Piece</th><th>Pick/Carton</th><th>Pick/Pallet</th>
+            <th>Out/Carton</th><th>Out/Pallet</th><th>Supplies</th>
+            <th style="color:#059669">Packing✓</th><th style="color:#059669">Palletize✓</th>
+            <th style="color:#7c3aed">Labels</th><th>Inserts</th>
+            <th style="color:#dc2626">Labor Hrs</th><th style="color:#dc2626">Labor OT</th><th style="color:#dc2626">Labor Wknd</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="color:#059669;font-family:monospace;font-size:10px">S20260527…0001</td>
+            <td>20260527</td>
+            <td><input value=""></td>
+            <td><input class="highlight" value="6"></td>
+            <td><input value=""></td>
+            <td style="color:#64748b">215</td><td style="color:#64748b">—</td>
+            <td style="color:#64748b">—</td>
+            <td><input value=""></td><td><input value=""></td>
+            <td class="auto-val">430</td><td><input value=""></td>
+            <td class="auto-val" style="color:#dc2626">—</td><td><input value=""></td><td><input value=""></td>
+          </tr>
+          <tr style="background:#f8fafc;font-weight:700;color:#1d4ed8;font-size:11px">
+            <td colspan="2">Total (21 orders)</td>
+            <td style="padding:7px 10px">—</td>
+            <td class="auto-val" style="padding:7px 10px">128</td>
+            <td style="padding:7px 10px">—</td>
+            <td colspan="3" style="padding:7px 10px"></td>
+            <td style="padding:7px 10px">—</td><td style="padding:7px 10px">—</td>
+            <td class="auto-val" style="padding:7px 10px;color:#7c3aed">4,382</td>
+            <td style="padding:7px 10px">—</td>
+            <td class="auto-val" style="padding:7px 10px;color:#dc2626">101.3</td>
+            <td style="padding:7px 10px">—</td><td style="padding:7px 10px">—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <h4>B2B Column Logic</h4>
+  <table class="tbl">
+    <thead><tr><th>Column</th><th>Source</th><th>Billing Item</th><th>Rate</th></tr></thead>
+    <tbody>
+      <tr><td>Pick/Piece</td><td>WMS task comment: "Picking per Piece"</td><td>B2B Pick per Piece</td><td>$0.25/piece</td></tr>
+      <tr><td>Pick/Carton</td><td>WMS task comment: "Picking per Carton"</td><td>B2B Pick per Carton</td><td>$1.50/carton</td></tr>
+      <tr><td>Pick/Pallet</td><td>WMS task comment: "Picking per Pallet"</td><td>B2B Pick per Pallet</td><td>$5.00/pallet</td></tr>
+      <tr><td>Packing✓</td><td>Auto: Supplies qty when Out/Carton ≠ Pick/Carton</td><td>B2B Carton Packing</td><td>$1.25/carton</td></tr>
+      <tr><td>Palletize✓</td><td>Auto: Out/Pallet when Out/Pallet > 0</td><td>B2B Palletizing</td><td>$3.00/pallet</td></tr>
+      <tr><td>Labels</td><td>WMS task: Labels + Amazon Labels + FBA Labeling</td><td>B2B Labels</td><td>$0.15/label</td></tr>
+      <tr><td>Inserts</td><td>WMS task: "Inserts"</td><td>B2B Inserts</td><td>$0.10/insert</td></tr>
+      <tr><td>Labor Hrs/OT/Wknd</td><td>WMS task: Labor Hours (OT, Weekend/Holiday)</td><td>Warehouse Labor</td><td>$35–$52.50/hr</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box warn">
+    <strong>⚠ Warning indicator:</strong> Rows with a piece-level pick but no Out/Carton or Out/Pallet info are flagged with an amber ⚠ icon. This typically means packing/palletizing data is missing from the WMS task comment — verify manually.
+  </div>
+
+  <!-- ── STORAGE TAB ── -->
+  <h3 id="storage-tab" style="margin-top:36px">Storage Tab</h3>
+  <p>Storage billing uses a <strong>snapshot average</strong> method: the system takes the number of occupied locations on the <strong>15th day</strong> and the <strong>last day</strong> of the month, then bills the average.</p>
+
+  <div class="mockup" style="margin:16px 0">
+    <div style="padding:16px;background:#f8fafc">
+      <!-- Date pickers row -->
+      <div style="display:flex;align-items:center;justify-content:space-between;background:white;border:1px solid var(--border);border-radius:8px;padding:10px 16px;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:12px">
+          <span class="tag sky">Storage</span>
+          <span style="font-size:12px;color:#64748b">snapshot → avg</span>
+          <span style="font-size:12px;font-weight:600">기준일 1 <input type="date" style="font-size:12px;border:1px solid #e2e8f0;border-radius:4px;padding:3px 6px" value="2026-05-15" readonly></span>
+          <span style="font-size:12px;font-weight:600">기준일 2 <input type="date" style="font-size:12px;border:1px solid #e2e8f0;border-radius:4px;padding:3px 6px" value="2026-05-31" readonly></span>
+        </div>
+        <div class="btn" style="background:#7c3aed;color:white;border-color:#7c3aed;font-size:11px">⟳ Load from WMS History</div>
+      </div>
+      <!-- Two-column snapshots -->
+      <div class="storage-grid">
+        <div class="storage-snap">
+          <div class="storage-snap-header">2026-05-15 &nbsp;· &nbsp;<span style="color:#059669">✓ WMS History · 2026-05-15</span> &nbsp; 170 loc</div>
+          <div class="storage-snap-body">
+            <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:#64748b;margin-bottom:8px;display:grid;grid-template-columns:1fr auto;gap:12px"><span>STORAGE TYPE</span><span>15TH DAY</span></div>
+            <div class="storage-type-row"><span>Pallet Short</span><span class="storage-val">12</span></div>
+            <div class="storage-type-row"><span>Pallet Regular</span><span class="storage-val">15</span></div>
+            <div class="storage-type-row"><span>Bin</span><span class="storage-val">2</span></div>
+          </div>
+        </div>
+        <div class="storage-snap">
+          <div class="storage-snap-header">2026-05-31 &nbsp;· &nbsp;<span style="color:#059669">✓ WMS History · 2026-05-31</span> &nbsp; 217 loc</div>
+          <div class="storage-snap-body">
+            <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:#64748b;margin-bottom:8px;display:grid;grid-template-columns:1fr auto;gap:12px"><span>STORAGE TYPE</span><span>LAST DAY</span></div>
+            <div class="storage-type-row"><span>Pallet Short</span><span class="storage-val">12</span></div>
+            <div class="storage-type-row"><span>Pallet Regular</span><span class="storage-val">15</span></div>
+            <div class="storage-type-row"><span>Bin</span><span class="storage-val">2</span></div>
+          </div>
+        </div>
+      </div>
+      <div style="text-align:right;margin-top:12px">
+        <div class="btn" style="background:#7c3aed;color:white;border-color:#7c3aed;font-size:11px;margin-left:auto;display:inline-flex">📊 Apply to Invoice</div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Loading Storage Data</h3>
+  <ol class="steps">
+    <li><strong>Set snapshot dates</strong><br>기준일 1 = 15th of the billing month · 기준일 2 = last day of the billing month</li>
+    <li><strong>Load from WMS History</strong><br>Click the purple button to auto-fetch location occupancy counts from the WMS History API for both dates. The system counts distinct locations per type, filtered to this customer.</li>
+    <li><strong>Review the counts</strong><br>The left panel shows 15th-day counts, right panel shows last-day counts. Location types include: Bin, Shelf, Carton, Pallet Short, Pallet Regular, Pallet Tall, Open Floor. <em>Re-prefix types (Re Bin, Re Shelf, etc.) are automatically counted under the same category.</em></li>
+    <li><strong>Apply to Invoice</strong><br>Click <strong>Apply to Invoice</strong> to push the average values into the billing line items. This happens automatically when WMS History loads.</li>
+    <li><strong>Alternative: Upload Excel</strong><br>If WMS History is unavailable, drag-and-drop or select an Excel export from WMS containing Location, occupancyInfo (or Location Type), and Customer columns.</li>
+  </ol>
+
+  <div class="box tip">
+    <strong>Formula:</strong> Avg Billed Qty = (15th Day Qty + Last Day Qty) ÷ 2. Each storage type row in the invoice uses this average as the billable quantity.
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ─────────────────── LINE ITEMS ─────────────────── -->
+<section id="inbound-handling">
+  <h2><span class="num">07</span>Invoice Line Items</h2>
+  <p>Below the WMS Source Data panel, the invoice shows all billing line items grouped by category. Items with <span class="li-auto">auto</span> badges were filled from WMS data; others can be entered manually.</p>
+
+  <!-- Inbound -->
+  <h3>Inbound Handling</h3>
+  <div class="mockup">
+    <div class="li-section" style="margin:0;border-radius:0;border:none;border-bottom:1px solid var(--border)">
+      <div class="li-header">
+        <span class="li-cat inbound">Inbound Handling</span>
+        <span class="li-amount">$216.00</span>
+        <span style="margin-left:auto;color:#64748b;font-size:16px">⌃</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr auto auto auto auto;gap:12px;padding:8px 16px;background:#f8fafc;font-size:10px;font-weight:700;text-transform:uppercase;color:#64748b">
+        <div>Description</div><div>QTY</div><div>Unit</div><div>Rate</div><div>Amount</div>
+      </div>
+      <div class="li-row"><span class="li-desc">Standard Inbound — Carton</span><span><span class="li-auto">auto</span></span><span class="li-qty">1</span><span class="li-unit">per carton</span><span class="li-rate">$2</span><span class="li-amt">$2.00</span></div>
+      <div class="li-row"><span class="li-desc">Standard Inbound — Pallet (LTL/LCL)</span><span></span><span class="li-qty">8</span><span class="li-unit">per pallet</span><span class="li-rate">$8</span><span class="li-amt">$64.00</span></div>
+      <div class="li-row"><span class="li-desc">40' HC Container (Palletized)</span><span><span class="li-auto">auto</span></span><span class="li-qty">1</span><span class="li-unit">per container</span><span class="li-rate">$150</span><span class="li-amt">$150.00</span></div>
+      <div class="li-row" style="color:#94a3b8"><span class="li-desc">40' Container (Floor Loaded)</span><span></span><span class="li-qty">0</span><span class="li-unit">per container</span><span class="li-rate">$450</span><span class="li-amt">—</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="storage-billing" style="margin-top:0">
+  <h3>Storage</h3>
+  <div class="mockup">
+    <div class="li-section" style="margin:0;border-radius:0;border:none;border-bottom:1px solid var(--border)">
+      <div class="li-header">
+        <span class="li-cat storage">Storage</span>
+        <span class="li-amount">$521.84</span>
+        <span style="margin-left:auto;color:#64748b;font-size:16px">⌃</span>
+      </div>
+      <div class="li-row"><span class="li-desc">Bin (8"×30"×12" / 1.7 cuft)</span><span><span class="li-auto">auto</span></span><span class="li-qty">2</span><span class="li-unit">per bin/month</span><span class="li-rate">$0.52</span><span class="li-amt">$1.04</span></div>
+      <div class="li-row"><span class="li-desc">Pallet Short (48"×40"×35.5" / 39.4 cuft)</span><span><span class="li-auto">auto</span></span><span class="li-qty">12</span><span class="li-unit">per pallet/month</span><span class="li-rate">$12.15</span><span class="li-amt">$145.80</span></div>
+      <div class="li-row"><span class="li-desc">Pallet Regular (48"×40"×73" / 81.1 cuft)</span><span><span class="li-auto">auto</span></span><span class="li-qty">15</span><span class="li-unit">per pallet/month</span><span class="li-rate">$25</span><span class="li-amt">$375.00</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="fulfillment-b2b" style="margin-top:0">
+  <h3>Fulfillment B2B</h3>
+  <div class="mockup">
+    <div class="li-section" style="margin:0;border-radius:0;border:none;border-bottom:1px solid var(--border)">
+      <div class="li-header">
+        <span class="li-cat b2b">Fulfillment B2B</span>
+        <span class="li-amount">$57.00</span>
+        <span style="margin-left:auto;color:#64748b;font-size:16px">⌃</span>
+      </div>
+      <div class="li-row"><span class="li-desc">B2B — Order Processing</span><span><span class="li-auto">auto</span></span><span class="li-qty">4</span><span class="li-unit">per order</span><span class="li-rate">$4</span><span class="li-amt">$16.00</span></div>
+      <div class="li-row"><span class="li-desc">B2B — Pick per Carton</span><span><span class="li-auto">auto</span></span><span class="li-qty">6</span><span class="li-unit">per carton</span><span class="li-rate">$1.50</span><span class="li-amt">$9.00</span></div>
+      <div class="li-row"><span class="li-desc">B2B — Labels</span><span><span class="li-auto">auto</span></span><span class="li-qty">10</span><span class="li-unit">per label</span><span class="li-rate">$0.15</span><span class="li-amt">$1.50</span></div>
+      <div class="li-row" style="color:#94a3b8"><span class="li-desc">B2B — Carton Packing</span><span></span><span class="li-qty">0</span><span class="li-unit">per carton/bag</span><span class="li-rate">$1.25</span><span class="li-amt">—</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="fulfillment-b2c" style="margin-top:0">
+  <h3>Fulfillment B2C</h3>
+  <p>Same structure as B2B. B2C orders are picked at the piece level.</p>
+  <table class="tbl">
+    <thead><tr><th>Item</th><th>Rate</th><th>Unit</th></tr></thead>
+    <tbody>
+      <tr><td>B2C — Order Processing</td><td>$3.00</td><td>per order</td></tr>
+      <tr><td>B2C — Pick per Piece</td><td>$0.20</td><td>per piece</td></tr>
+      <tr><td>B2C — Fragile Handling</td><td>$0.50</td><td>per order</td></tr>
+      <tr><td>B2C — Labels</td><td>$0.15</td><td>per label</td></tr>
+      <tr><td>B2C — Inserts</td><td>$0.10</td><td>per insert</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="returns" style="margin-top:0">
+  <h3>Return Management</h3>
+  <table class="tbl">
+    <thead><tr><th>Item</th><th>Rate</th><th>Unit</th></tr></thead>
+    <tbody>
+      <tr><td>Return Processing</td><td>$3.00</td><td>per return order</td></tr>
+      <tr><td>Restocking</td><td>$0.50</td><td>per item</td></tr>
+      <tr><td>Disposal</td><td>Cost + 10%</td><td>actual disposal cost × 1.10</td></tr>
+    </tbody>
+  </table>
+  <div class="box warn"><strong>Disposal (cost+10%):</strong> Enter the actual disposal cost in the QTY field. The system automatically charges that cost × 1.10.</div>
+</section>
+
+<section id="labor" style="margin-top:0">
+  <h3>Warehouse Labor</h3>
+  <table class="tbl">
+    <thead><tr><th>Item</th><th>Rate</th><th>Unit</th></tr></thead>
+    <tbody>
+      <tr><td>Labor — Regular Hours</td><td>$35.00</td><td>per person/hr</td></tr>
+      <tr><td>Labor — OT Weekday</td><td>$45.00</td><td>per person/hr</td></tr>
+      <tr><td>Labor — OT Weekend/Holiday</td><td>$52.50</td><td>per person/hr</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ─────────────────── EXTRA TABS ─────────────────── -->
+<section id="rate-table-panel">
+  <h2><span class="num">08</span>Rate Table Panel</h2>
+  <p>Click the <strong>Rate Table</strong> tab on the right to view the standard rate schedule in effect for this invoice. This is read-only and shows the default rates for all billing categories.</p>
+  <div class="tab-panel">
+    <h4>Rate Schedule (2026-02-17)</h4>
+    <div class="rate-table-section">
+      <h5>1. Inbound Handling</h5>
+      <div class="rate-item"><span class="desc">Standard Inbound — Carton</span><span class="rate-val">$2.00</span><span class="tag slate">per carton</span></div>
+      <div class="rate-item"><span class="desc">Standard Inbound — Pallet (LTL/LCL)</span><span class="rate-val">$8.00</span><span class="tag slate">per pallet</span></div>
+      <div class="rate-item"><span class="desc">20' Container (Palletized)</span><span class="rate-val">$150.00</span><span class="tag slate">per container</span></div>
+    </div>
+    <div class="rate-table-section">
+      <h5>2. Storage</h5>
+      <div class="rate-item"><span class="desc">Bin (8"×30"×12")</span><span class="rate-val">$0.52</span><span class="tag slate">per bin/month</span></div>
+      <div class="rate-item"><span class="desc">Pallet Regular (48"×40"×73")</span><span class="rate-val">$25.00</span><span class="tag slate">per pallet/month</span></div>
+    </div>
+  </div>
+  <div class="box info">Rate version is stamped on each saved invoice, so historical invoices always show the rates that were in effect at the time of creation.</div>
+</section>
+
+<section id="om-subsidy">
+  <h2><span class="num">09</span>OM Subsidy Calculator</h2>
+  <p>The OM Subsidy calculates the allocation of warehouse manager / operations costs attributable to this customer group. It is shown separately below the GRAND TOTAL in the Summary panel and is NOT included in the billing total.</p>
+
+  <div class="tab-panel">
+    <h4>Input Fields</h4>
+    <div class="om-grid">
+      <div class="om-field"><div class="om-label">Monthly Wages ($)</div><div class="om-input">12,500</div></div>
+      <div class="om-field"><div class="om-label">Allocation % (to this group)</div><div class="om-input">60%</div></div>
+      <div class="om-field"><div class="om-label">Workers' Comp Gross Rate (%)</div><div class="om-input">3.5%</div></div>
+      <div class="om-field"><div class="om-label">Workers' Comp Discount (%)</div><div class="om-input">10%</div></div>
+      <div class="om-field"><div class="om-label">GL Insurance Rate (%)</div><div class="om-input">1.2%</div></div>
+      <div class="om-field"><div class="om-label">Dental (monthly fixed, $)</div><div class="om-input">85</div></div>
+      <div class="om-field"><div class="om-label">Medical (monthly fixed, $)</div><div class="om-input">320</div></div>
+    </div>
+    <div class="om-result">
+      <div><div class="label">STL Allocated Cost</div><div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">Wages × Alloc% × (1 + WC + GL) + Dental + Medical</div></div>
+      <div class="value">$8,247.50</div>
+    </div>
+  </div>
+
+  <div class="box purple">
+    <strong>Persistence:</strong> OM Subsidy inputs are saved with each invoice (and shared across all customers in a combined invoice). They are automatically restored when reopening an invoice.
+  </div>
+</section>
+
+<section id="office-sublease">
+  <h2><span class="num">10</span>Office Sublease</h2>
+  <p>Monthly office space charges billed to customers for shared office / operations center use. Also shown separately below the GRAND TOTAL — not included in the billing subtotal.</p>
+
+  <div class="tab-panel">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div>
+        <h4>Office Rent</h4>
+        <div class="om-field"><div class="om-label">Quantity (sq ft or units)</div><div class="om-input">1</div></div>
+        <div style="margin-top:8px;font-size:13px;color:#64748b">Rate: $1,800.00 / month</div>
+      </div>
+      <div>
+        <h4>Operating Expenses</h4>
+        <div class="om-field"><div class="om-label">Quantity (units)</div><div class="om-input">1</div></div>
+        <div style="margin-top:8px;font-size:13px;color:#64748b">Rate: $450.00 / month</div>
+      </div>
+    </div>
+    <div style="background:#fef3c7;border-radius:8px;padding:12px 16px;margin-top:16px;display:flex;justify-content:space-between;align-items:center">
+      <span style="font-size:13px;font-weight:700;color:#92400e">Subtotal — Office Sublease</span>
+      <span style="font-size:16px;font-weight:800;color:#92400e">$2,250.00</span>
+    </div>
+  </div>
+
+  <div class="box info">Sublease quantities and rates are stored in your browser's localStorage and persist across sessions on the same device.</div>
+</section>
+
+<section id="summary-panel">
+  <h2><span class="num">11</span>Summary Panel</h2>
+  <p>The Summary panel shows a consolidated view of all billing categories across all customers in the group. This matches the Excel Summary sheet exactly.</p>
+
+  <div class="tab-panel" style="padding:0;overflow:hidden">
+    <div class="summary-row cat-header"><span class="summary-label">1. Inbound Handling</span><span></span></div>
+    <div class="summary-row"><span class="summary-label" style="padding-left:12px">Standard Inbound — Carton</span><span style="color:#64748b;font-size:12px;margin-right:auto">3 units</span><span class="summary-amt">$6.00</span></div>
+    <div class="summary-row subtotal"><span class="summary-label">Subtotal — Inbound Handling</span><span class="summary-amt">$216.00</span></div>
+    <div class="summary-row cat-header"><span class="summary-label">2. Storage</span><span></span></div>
+    <div class="summary-row subtotal"><span class="summary-label">Subtotal — Storage</span><span class="summary-amt">$521.84</span></div>
+    <div class="summary-row cat-header"><span class="summary-label">3. Fulfillment B2B</span><span></span></div>
+    <div class="summary-row subtotal"><span class="summary-label">Subtotal — Fulfillment B2B</span><span class="summary-amt">$57.00</span></div>
+    <div class="summary-row grand-total"><span class="summary-label">GRAND TOTAL</span><span class="summary-amt">$794.84</span></div>
+    <div class="summary-row extra"><span class="summary-label">OM Subsidy (not included in total)</span></div>
+    <div class="summary-row" style="background:#faf5ff;padding-left:28px"><span class="summary-label" style="color:#5b21b6">STL Allocated Cost</span><span class="summary-amt" style="color:#5b21b6">$8,247.50</span></div>
+    <div class="summary-row" style="background:#fffbeb"><span class="summary-label" style="color:#92400e">Office Sublease (not included in total)</span><span class="summary-amt" style="color:#92400e">$2,250.00</span></div>
+  </div>
+
+  <div class="box tip" style="margin-top:16px">
+    <strong>GRAND TOTAL</strong> includes only the 6 billing categories (Inbound, Storage, Fulfillment B2B/B2C, Returns, Labor). OM Subsidy and Office Sublease are displayed separately below for reference only.
+  </div>
+</section>
+
+<section id="storage-summary">
+  <h2><span class="num">12</span>Storage Summary Panel</h2>
+  <p>The <strong>Storage</strong> tab (rightmost) shows a cross-customer comparison table — storage quantities by type for each customer side by side.</p>
+
+  <div class="tab-panel" style="padding:0;overflow:hidden">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border)">
+      <div style="font-weight:800;color:#0f172a">Storage Summary</div>
+      <div style="font-size:12px;color:#64748b;margin-top:2px">Per customer · Per type · Avg = (15th + Last) ÷ 2</div>
+    </div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;font-size:12px;border-collapse:collapse">
+        <thead>
+          <tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0">
+            <th style="padding:10px 16px;text-align:left;color:#64748b;font-size:11px;font-weight:700;width:140px">Storage Type</th>
+            <th colspan="3" style="padding:10px 8px;text-align:center;color:#0369a1;font-weight:700;border-left:1px solid #e2e8f0">CUSTOMER A<div style="font-weight:400;color:#64748b;font-size:10px">05-15 / 05-31</div></th>
+            <th colspan="3" style="padding:10px 8px;text-align:center;color:#0369a1;font-weight:700;border-left:1px solid #e2e8f0">CUSTOMER B<div style="font-weight:400;color:#64748b;font-size:10px">05-15 / 05-31</div></th>
+            <th style="padding:10px 8px;text-align:center;color:#475569;font-weight:700;border-left:2px solid #e2e8f0">TOTAL<div style="font-weight:400;color:#64748b;font-size:10px">avg</div></th>
+          </tr>
+          <tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;font-size:10px;color:#64748b">
+            <th style="padding:6px 16px"></th>
+            <th style="padding:6px 8px;text-align:center;border-left:1px solid #e2e8f0">15th</th>
+            <th style="padding:6px 8px;text-align:center">Last</th>
+            <th style="padding:6px 8px;text-align:center;color:#0ea5e9;font-weight:700">Avg</th>
+            <th style="padding:6px 8px;text-align:center;border-left:1px solid #e2e8f0">15th</th>
+            <th style="padding:6px 8px;text-align:center">Last</th>
+            <th style="padding:6px 8px;text-align:center;color:#0ea5e9;font-weight:700">Avg</th>
+            <th style="padding:6px 8px;text-align:center;border-left:2px solid #e2e8f0;font-weight:700">Avg</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="border-bottom:1px solid #f1f5f9">
+            <td style="padding:9px 16px;font-weight:500">Bin</td>
+            <td style="padding:9px 8px;text-align:center;border-left:1px solid #e2e8f0">2</td><td style="padding:9px 8px;text-align:center">2</td><td style="padding:9px 8px;text-align:center;font-weight:700;color:#0ea5e9">2</td>
+            <td style="padding:9px 8px;text-align:center;border-left:1px solid #e2e8f0;color:#cbd5e1">—</td><td style="padding:9px 8px;text-align:center;color:#cbd5e1">—</td><td style="padding:9px 8px;text-align:center;color:#cbd5e1">—</td>
+            <td style="padding:9px 8px;text-align:center;font-weight:700;border-left:2px solid #e2e8f0">2</td>
+          </tr>
+          <tr style="background:#f8fafc;border-bottom:1px solid #f1f5f9">
+            <td style="padding:9px 16px;font-weight:500">Pallet Short</td>
+            <td style="padding:9px 8px;text-align:center;border-left:1px solid #e2e8f0">12</td><td style="padding:9px 8px;text-align:center">12</td><td style="padding:9px 8px;text-align:center;font-weight:700;color:#0ea5e9">12</td>
+            <td style="padding:9px 8px;text-align:center;border-left:1px solid #e2e8f0">8</td><td style="padding:9px 8px;text-align:center">10</td><td style="padding:9px 8px;text-align:center;font-weight:700;color:#0ea5e9">9</td>
+            <td style="padding:9px 8px;text-align:center;font-weight:700;border-left:2px solid #e2e8f0">21</td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr style="border-top:2px solid #e2e8f0;background:#f8fafc;font-weight:700">
+            <td style="padding:10px 16px;font-size:10px;text-transform:uppercase;color:#64748b">TOTAL</td>
+            <td style="padding:10px 8px;text-align:center;border-left:1px solid #e2e8f0">14</td><td style="padding:10px 8px;text-align:center">14</td><td style="padding:10px 8px;text-align:center;color:#0ea5e9">14</td>
+            <td style="padding:10px 8px;text-align:center;border-left:1px solid #e2e8f0">8</td><td style="padding:10px 8px;text-align:center">10</td><td style="padding:10px 8px;text-align:center;color:#0ea5e9">9</td>
+            <td style="padding:10px 8px;text-align:center;border-left:2px solid #e2e8f0">23</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+    <div style="padding:14px 20px;border-top:1px solid var(--border);background:#f8fafc">
+      <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;margin-bottom:10px">Billed Storage Amount</div>
+      <div style="display:flex;gap:10px">
+        <div style="background:white;border:1px solid var(--border);border-radius:8px;padding:8px 16px;display:flex;gap:10px;align-items:center"><span style="font-size:12px;font-weight:700;color:#334155">CUSTOMER A</span><span style="font-weight:800;color:#0369a1">$521.84</span></div>
+        <div style="background:white;border:1px solid var(--border);border-radius:8px;padding:8px 16px;display:flex;gap:10px;align-items:center"><span style="font-size:12px;font-weight:700;color:#334155">CUSTOMER B</span><span style="font-weight:800;color:#0369a1">$375.00</span></div>
+        <div style="background:#0f172a;border-radius:8px;padding:8px 16px;display:flex;gap:10px;align-items:center"><span style="font-size:12px;font-weight:700;color:#94a3b8">TOTAL</span><span style="font-weight:800;color:white">$896.84</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ─────────────────── SAVE & FINALIZE ─────────────────── -->
+<section id="save-finalize">
+  <h2><span class="num">13</span>Saving &amp; Finalizing</h2>
+
+  <div class="card-grid cols-2">
+    <div class="card">
+      <h4>💾 Save All (Draft)</h4>
+      <p>Saves the current state of all invoices in the group to the database (Redis). The editor stays open. The last-saved timestamp appears in the header.</p>
+      <p style="font-size:13px">Saved data includes: all line items, WMS source data, per-order edits, OM Subsidy settings, Storage snapshots.</p>
+    </div>
+    <div class="card">
+      <h4>✓ Finalize All</h4>
+      <p>Marks all invoices in the group as <span class="tag green">Final</span>. Use this when the invoice is approved and ready to send to the customer.</p>
+      <div class="box warn" style="margin-top:12px;font-size:13px"><strong>Note:</strong> Finalized invoices remain editable in this system — the status is informational only.</div>
+    </div>
+  </div>
+
+  <div class="box tip">
+    <strong>Auto-persistence of WMS data:</strong> After saving, when you reopen the invoice, all WMS source data (order rows in the Inbound/B2B tables) is restored automatically. You do NOT need to re-fetch from WMS.
+    Click <strong>Load WMS Data</strong> only when you want to refresh/overwrite with new data from WMS.
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ─────────────────── EXCEL EXPORT ─────────────────── -->
+<section id="excel-export">
+  <h2><span class="num">14</span>Excel Export</h2>
+  <p>Click <strong>Export Combined</strong> (or the download icon on the invoice list) to generate the Excel file. A preview dialog opens first.</p>
+
+  <h3>Export Preview Dialog</h3>
+  <ol class="steps">
+    <li><strong>Review the Summary</strong><br>The dialog shows all billing categories, customer totals, OM Subsidy, and Office Sublease with the same layout as the Summary panel.</li>
+    <li><strong>Configure options</strong><br>Set Storage snapshot dates and other parameters if needed.</li>
+    <li><strong>Click Download Excel</strong><br>The .xlsx file is generated client-side and downloaded immediately.</li>
+  </ol>
+
+  <h3>Excel Workbook Structure</h3>
+  <table class="tbl">
+    <thead><tr><th>Sheet</th><th>Contents</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Summary</strong></td><td>Aggregated view across all customers. All quantities and amounts are formula-linked to customer sheets (no hardcoded values).</td></tr>
+      <tr><td><strong>[CUSTOMER]_Invoice</strong></td><td>Styled invoice for each customer — one per tab. Contains all 6 billing categories with quantities, rates, and amounts.</td></tr>
+      <tr><td><strong>[CUSTOMER]_Inbound</strong></td><td>15-column raw inbound order detail table with SUM formulas linking to the customer invoice sheet.</td></tr>
+      <tr><td><strong>[CUSTOMER]_B2B</strong></td><td>15-column B2B shipping order detail table with SUM formulas.</td></tr>
+      <tr><td><strong>[CUST]_Storage_Avg</strong></td><td>Per-customer storage type averages — links to invoice storage quantities.</td></tr>
+      <tr><td><strong>Storage_YYYY-MM-DD</strong></td><td>Raw inventory snapshot for the 15th and last day of the month.</td></tr>
+      <tr><td><strong>Rate Table</strong></td><td>Standard rate schedule for reference.</td></tr>
+      <tr><td><strong>OM Subsidy</strong></td><td>OM Subsidy calculation worksheet with all inputs and the formula breakdown.</td></tr>
+      <tr><td><strong>Per Customer Breakdown</strong></td><td>In the Summary sheet: a section showing each customer's subtotal by billing category (cross-sheet formulas).</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box tip">
+    <strong>All values in the Excel are formula-driven.</strong> The Summary and Per Customer Breakdown sections reference the customer sheets with <code>=SUM()</code> and <code>=SUMIF()</code> formulas — you can modify quantities in any customer sheet and the totals update automatically.
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ─────────────────── RATE MASTER ─────────────────── -->
+<section id="rate-master">
+  <h2><span class="num">15</span>Rate Master</h2>
+  <p>Navigate to <strong>Billing → Rate Master</strong> to configure customer-specific rates that override the standard rate schedule.</p>
+
+  <div class="mockup">
+    <div class="mockup-bar">
+      <div class="dots"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div>
+      <div class="url">localhost:3000/billing/rates</div>
+    </div>
+    <div class="mockup-shell">
+      <div class="mockup-sidebar">
+        <div class="logo"><div class="l1">STL▶</div><div class="l2">WMS Dashboard</div></div>
+        <div class="nav-item">📊 Dashboard</div>
+        <div class="nav-item active">💳 Billing</div>
+        <div class="nav-item" style="padding-left:28px;font-size:11px">→ Invoices</div>
+        <div class="nav-item" style="padding-left:28px;font-size:11px;color:#3b82f6">→ Rate Master</div>
+      </div>
+      <div class="mockup-content">
+        <div style="font-size:18px;font-weight:800;color:#0f172a;margin-bottom:4px">Rate Master</div>
+        <div style="font-size:12px;color:#64748b;margin-bottom:16px">Set custom rates per customer. Saved rates are automatically applied when creating invoices.</div>
+        <div style="background:white;border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-bottom:16px">
+          <div style="font-size:11px;text-transform:uppercase;font-weight:700;color:#64748b;margin-bottom:6px">Customer</div>
+          <div style="border:1px solid var(--border);border-radius:6px;padding:9px 12px;font-size:13px;color:#64748b">— Select a customer —</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div>
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#64748b;margin-bottom:8px">Inbound Handling</div>
+            <div class="rate-item"><span class="desc">Standard Inbound — Carton</span><span class="rate-val">$2.00</span><input class="custom-input" value="1.80"></div>
+            <div class="rate-item"><span class="desc">Standard Inbound — Pallet</span><span class="rate-val">$8.00</span><input class="custom-input" value="7.50"></div>
+          </div>
+          <div>
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#64748b;margin-bottom:8px">Storage</div>
+            <div class="rate-item"><span class="desc">Pallet Regular</span><span class="rate-val">$25.00</span><input class="custom-input" value="22.00"></div>
+          </div>
+        </div>
+        <div style="margin-top:16px;text-align:right"><div class="btn primary">Save Rate Master</div></div>
+      </div>
+    </div>
+  </div>
+
+  <h3>How to Set Custom Rates</h3>
+  <ol class="steps">
+    <li><strong>Select the customer</strong> from the dropdown. If they have no saved rates, all fields show the default rates.</li>
+    <li><strong>Enter custom rates</strong> in the input fields next to each billing item. Leave blank (or enter the default value) to use the standard rate.</li>
+    <li><strong>Click Save Rate Master.</strong> Rates are stored in Redis keyed by customer code.</li>
+    <li><strong>Create a new invoice</strong> for this customer — custom rates are automatically applied. The rate version in the header will show <code>custom (date)</code>.</li>
+  </ol>
+
+  <div class="box warn">
+    <strong>Existing invoices are NOT affected</strong> when you update the Rate Master. Only newly created invoices pick up the saved rates. To apply new rates to an existing invoice, delete and recreate it.
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ─────────────────── RATE REFERENCE ─────────────────── -->
+<section id="rate-reference">
+  <h2><span class="num">16</span>Standard Rate Reference</h2>
+
+  <h3>Inbound Handling</h3>
+  <table class="tbl">
+    <thead><tr><th>Service</th><th>Rate</th><th>Unit</th></tr></thead>
+    <tbody>
+      <tr><td>Standard Inbound — Carton</td><td>$2.00</td><td>per carton</td></tr>
+      <tr><td>Standard Inbound — Pallet (LTL/LCL)</td><td>$8.00</td><td>per pallet</td></tr>
+      <tr><td>20' Container (Palletized)</td><td>$150.00</td><td>per container</td></tr>
+      <tr><td>40' Container (Palletized)</td><td>$250.00</td><td>per container</td></tr>
+      <tr><td>40' HC Container (Palletized)</td><td>$300.00</td><td>per container</td></tr>
+      <tr><td>20' Container (Floor Loaded)</td><td>$350.00</td><td>per container</td></tr>
+      <tr><td>40' Container (Floor Loaded)</td><td>$450.00</td><td>per container</td></tr>
+      <tr><td>40' HC Container (Floor Loaded)</td><td>$500.00</td><td>per container</td></tr>
+      <tr><td>Additional Labor (QC / Counting)</td><td>$35.00</td><td>per person/hr</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Storage (per location/month)</h3>
+  <table class="tbl">
+    <thead><tr><th>Type</th><th>Dimensions</th><th>Cu.ft</th><th>Rate</th></tr></thead>
+    <tbody>
+      <tr><td>Bin</td><td>8"×30"×12"</td><td>1.7</td><td>$0.52/bin/month</td></tr>
+      <tr><td>Shelf</td><td>12.75"×42"×22"</td><td>6.8</td><td>$2.10/shelf/month</td></tr>
+      <tr><td>Carton</td><td>16"×42"×25.5"</td><td>9.9</td><td>$3.05/carton/month</td></tr>
+      <tr><td>Pallet Short</td><td>48"×40"×35.5"</td><td>39.4</td><td>$12.15/pallet/month</td></tr>
+      <tr><td>Pallet Regular</td><td>48"×40"×73"</td><td>81.1</td><td>$25.00/pallet/month</td></tr>
+      <tr><td>Pallet Tall</td><td>48"×40"×97"</td><td>107.8</td><td>$33.23/pallet/month</td></tr>
+      <tr><td>Open Floor</td><td>—</td><td>—</td><td>$50.00/spot/month</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Fulfillment — B2B</h3>
+  <table class="tbl">
+    <thead><tr><th>Service</th><th>Rate</th><th>Unit</th></tr></thead>
+    <tbody>
+      <tr><td>B2B — Order Processing</td><td>$4.00</td><td>per order</td></tr>
+      <tr><td>B2B — Pick per Piece</td><td>$0.25</td><td>per piece</td></tr>
+      <tr><td>B2B — Pick per Carton</td><td>$1.50</td><td>per carton</td></tr>
+      <tr><td>B2B — Pick per Pallet</td><td>$5.00</td><td>per pallet</td></tr>
+      <tr><td>B2B — Carton Packing</td><td>$1.25</td><td>per carton/bag</td></tr>
+      <tr><td>B2B — Palletizing</td><td>$3.00</td><td>per pallet</td></tr>
+      <tr><td>B2B — Labels</td><td>$0.15</td><td>per label</td></tr>
+      <tr><td>B2B — Inserts (BOL, packing list…)</td><td>$0.10</td><td>per insert</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Fulfillment — B2C</h3>
+  <table class="tbl">
+    <thead><tr><th>Service</th><th>Rate</th><th>Unit</th></tr></thead>
+    <tbody>
+      <tr><td>B2C — Order Processing</td><td>$3.00</td><td>per order</td></tr>
+      <tr><td>B2C — Pick per Piece</td><td>$0.20</td><td>per piece</td></tr>
+      <tr><td>B2C — Fragile Handling</td><td>$0.50</td><td>per order</td></tr>
+      <tr><td>B2C — Labels</td><td>$0.15</td><td>per label</td></tr>
+      <tr><td>B2C — Inserts</td><td>$0.10</td><td>per insert</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Return Management</h3>
+  <table class="tbl">
+    <thead><tr><th>Service</th><th>Rate</th><th>Unit</th></tr></thead>
+    <tbody>
+      <tr><td>Return Processing</td><td>$3.00</td><td>per return order</td></tr>
+      <tr><td>Restocking</td><td>$0.50</td><td>per item</td></tr>
+      <tr><td>Disposal</td><td>Cost + 10%</td><td>actual cost × 1.10</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Warehouse Labor</h3>
+  <table class="tbl">
+    <thead><tr><th>Service</th><th>Rate</th><th>Unit</th></tr></thead>
+    <tbody>
+      <tr><td>Labor — Regular Hours</td><td>$35.00</td><td>per person/hr</td></tr>
+      <tr><td>Labor — OT Weekday</td><td>$45.00</td><td>per person/hr</td></tr>
+      <tr><td>Labor — OT Weekend / Holiday</td><td>$52.50</td><td>per person/hr</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ─────────────────── COLUMN GLOSSARY ─────────────────── -->
+<section id="column-glossary">
+  <h2><span class="num">17</span>Column Glossary</h2>
+
+  <h3>Inbound Column Abbreviations</h3>
+  <table class="tbl">
+    <thead><tr><th>Abbreviation</th><th>Full Name</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><strong>20'Pal</strong></td><td>20' Container — Palletized</td><td>20-foot container, cargo stacked on pallets</td></tr>
+      <tr><td><strong>40'Pal</strong></td><td>40' Container — Palletized</td><td>40-foot container, cargo on pallets</td></tr>
+      <tr><td><strong>40HC'Pal</strong></td><td>40' HC Container — Palletized</td><td>40-foot High Cube container, cargo on pallets</td></tr>
+      <tr><td><strong>20'Flr</strong></td><td>20' Container — Floor Loaded</td><td>20-foot container, cargo stacked directly on floor (no pallets)</td></tr>
+      <tr><td><strong>40'Flr</strong></td><td>40' Container — Floor Loaded</td><td>40-foot container, floor-loaded</td></tr>
+      <tr><td><strong>40HC'Flr</strong></td><td>40' HC Container — Floor Loaded</td><td>40-foot High Cube container, floor-loaded</td></tr>
+      <tr><td><strong>DA</strong></td><td>Done / Approved</td><td>Status code — receiving order is complete</td></tr>
+    </tbody>
+  </table>
+
+  <h3>B2B Shipping Column Terms</h3>
+  <table class="tbl">
+    <thead><tr><th>Column</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td>Pick/Piece</td><td>Number of individual pieces (SKU units) picked for this order</td></tr>
+      <tr><td>Pick/Carton</td><td>Number of cartons (master cases) picked</td></tr>
+      <tr><td>Pick/Pallet</td><td>Number of pallets picked</td></tr>
+      <tr><td>Out/Carton</td><td>Number of cartons shipped out (from WMS task)</td></tr>
+      <tr><td>Out/Pallet</td><td>Number of pallets shipped out</td></tr>
+      <tr><td>Supplies</td><td>Number of boxes/supplies used for packing (from WMS task)</td></tr>
+      <tr><td>Packing✓</td><td>Carton packing charge — auto-triggered when Out/Carton ≠ Pick/Carton (indicates repacking)</td></tr>
+      <tr><td>Palletize✓</td><td>Palletizing charge — auto-triggered when Out/Pallet > 0</td></tr>
+      <tr><td>Labor OT</td><td>Overtime weekday labor hours</td></tr>
+      <tr><td>Labor Wknd</td><td>Overtime weekend / holiday labor hours</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Status Badges</h3>
+  <div style="display:flex;flex-wrap:wrap;gap:12px;margin:16px 0">
+    <div style="display:flex;align-items:center;gap:8px"><span class="tag amber">Draft</span><span style="font-size:13px;color:#64748b">Invoice is editable, not yet finalized</span></div>
+    <div style="display:flex;align-items:center;gap:8px"><span class="tag green">Final</span><span style="font-size:13px;color:#64748b">Invoice has been finalized (still editable in system)</span></div>
+    <div style="display:flex;align-items:center;gap:8px"><span class="tag blue">auto</span><span style="font-size:13px;color:#64748b">Quantity was auto-filled from WMS data</span></div>
+    <div style="display:flex;align-items:center;gap:8px"><span class="tag blue">Combined</span><span style="font-size:13px;color:#64748b">Invoice covers multiple customers in one group</span></div>
+  </div>
+</section>
+
+<!-- Footer -->
+<div style="margin-top:80px;padding-top:32px;border-top:1px solid var(--border);text-align:center;color:#94a3b8;font-size:13px">
+  <div style="font-weight:700;color:#475569;margin-bottom:4px">Spider WMS · Billing System Manual</div>
+  <div>Rate Version 2026-02-17 · Spider Logistics · Powered by STL</div>
+</div>
+
+</main>
+
+<script>
+// Active TOC highlight on scroll
+const sections = document.querySelectorAll('section[id]');
+const links = document.querySelectorAll('#toc a');
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      links.forEach(l => l.classList.remove('active'));
+      const link = document.querySelector(`#toc a[href="#${e.target.id}"]`);
+      if (link) link.classList.add('active');
+    }
+  });
+}, { threshold: 0.3, rootMargin: '-60px 0px -60% 0px' });
+sections.forEach(s => observer.observe(s));
+</script>
+</body>
+</html>
