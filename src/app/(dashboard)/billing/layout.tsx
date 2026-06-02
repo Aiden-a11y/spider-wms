@@ -1,27 +1,114 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { useEffect } from "react";
-import { Receipt, SlidersHorizontal } from "lucide-react";
-import { useAuth } from "@/contexts/auth-context";
+import { usePathname } from "next/navigation";
+import { useState, useEffect, useRef } from "react";
+import { Receipt, SlidersHorizontal, Lock, Eye, EyeOff } from "lucide-react";
 
 const TABS = [
   { href: "/billing",       label: "Invoices",     icon: Receipt },
   { href: "/billing/rates", label: "Rate Master",  icon: SlidersHorizontal },
 ];
 
+const BILLING_PW = "2020";
+const SESSION_KEY = "billing_unlocked";
+
 export default function BillingLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const router = useRouter();
-  const { user } = useAuth();
+  const [unlocked, setUnlocked] = useState(false);
+  const [input, setInput] = useState("");
+  const [error, setError] = useState(false);
+  const [shake, setShake] = useState(false);
+  const [showPw, setShowPw] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  // Block Staff-level users from accessing billing via direct URL
+  // Restore unlock state from sessionStorage (cleared on browser close)
   useEffect(() => {
-    if (user?.level?.toLowerCase() === "staff") {
-      router.replace("/dashboard");
+    if (sessionStorage.getItem(SESSION_KEY) === "1") {
+      setUnlocked(true);
     }
-  }, [user, router]);
+  }, []);
+
+  useEffect(() => {
+    if (!unlocked) {
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  }, [unlocked]);
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (input === BILLING_PW) {
+      sessionStorage.setItem(SESSION_KEY, "1");
+      setUnlocked(true);
+      setError(false);
+    } else {
+      setError(true);
+      setShake(true);
+      setInput("");
+      setTimeout(() => setShake(false), 500);
+      inputRef.current?.focus();
+    }
+  }
+
+  if (!unlocked) {
+    return (
+      <div className="flex items-center justify-center min-h-full bg-slate-50">
+        <style>{`
+          @keyframes shake {
+            0%,100%{transform:translateX(0)}
+            20%,60%{transform:translateX(-6px)}
+            40%,80%{transform:translateX(6px)}
+          }
+          .shake { animation: shake 0.4s ease; }
+        `}</style>
+
+        <div className="bg-white rounded-2xl shadow-xl border border-slate-200 p-10 w-full max-w-sm text-center">
+          {/* Lock icon */}
+          <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center mx-auto mb-6">
+            <Lock className="w-8 h-8 text-blue-600" />
+          </div>
+
+          <h2 className="text-xl font-bold text-slate-900 mb-1">Billing Access</h2>
+          <p className="text-sm text-slate-500 mb-8">Enter the password to access billing.</p>
+
+          <form onSubmit={handleSubmit}>
+            <div className={`relative mb-3 ${shake ? "shake" : ""}`}>
+              <input
+                ref={inputRef}
+                type={showPw ? "text" : "password"}
+                value={input}
+                onChange={(e) => { setInput(e.target.value); setError(false); }}
+                placeholder="Password"
+                className={`w-full px-4 py-3 pr-11 rounded-xl border text-sm font-medium outline-none transition-all
+                  ${error
+                    ? "border-red-400 bg-red-50 text-red-700 placeholder-red-300 focus:ring-2 focus:ring-red-200"
+                    : "border-slate-200 bg-slate-50 text-slate-800 placeholder-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                  }`}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPw(v => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+
+            {error && (
+              <p className="text-xs text-red-500 mb-3 font-medium">Incorrect password. Try again.</p>
+            )}
+
+            <button
+              type="submit"
+              className="w-full bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-semibold py-3 rounded-xl text-sm transition-colors"
+            >
+              Unlock
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col min-h-full">
