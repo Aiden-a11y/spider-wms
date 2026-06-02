@@ -3153,14 +3153,15 @@ export default function BillingPage() {
     if (!editing) return;
     setFetching(true);
     setFetchMsg("Fetching WMS data...");
-    setWmsSource(null);
+    // NOTE: do NOT clear wmsSource or orderEdits here — user edits must survive a re-fetch.
+    // wmsSource is replaced atomically when new data arrives (never set to null mid-flight).
     setShowSource(false);
-    setOrderEdits({});
     try {
       const { updates, source } = await fetchWmsQty(editing.customer, editing.period);
       setWmsSource(source);
       setWmsSourceMap(prev => ({ ...prev, [editing.customer]: source }));
-      setOrderEditsMap(prev => ({ ...prev, [editing.customer]: {} }));
+      // Preserve existing orderEdits — only update map entry so tab-switch saves correctly
+      setOrderEditsMap(prev => ({ ...prev, [editing.customer]: orderEdits }));
       const count = Object.keys(updates).length;
       setFetchMsg(
         count > 0
