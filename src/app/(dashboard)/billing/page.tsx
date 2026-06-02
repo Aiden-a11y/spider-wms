@@ -23,13 +23,8 @@ import {
 } from "lucide-react";
 
 // Raw WMS orders collected during auto-fetch (shown in Source Data panel)
-type WmsSource = {
-  receiving: Record<string, unknown>[];
-  b2b:       Record<string, unknown>[];
-  b2c:       Record<string, unknown>[];
-  returns:   Record<string, unknown>[];
-  b2bWarnings?: string[]; // order codes where piece picking exists but no Out info
-};
+// WmsSource = alias for the shared WmsSourceData type from billing-calc
+type WmsSource = WmsSourceData;
 
 type StorageRow = {
   key: string; // StorageRateKey
@@ -70,6 +65,7 @@ import {
   type BillingInvoice,
   type BillingLineItem,
   type CustomerRateMaster,
+  type WmsSourceData,
 } from "@/lib/billing-calc";
 import { BILLING_CATEGORIES, RATE_VERSION } from "@/lib/billing-rates";
 import type { BillingCategory } from "@/lib/billing-rates";
@@ -2753,7 +2749,16 @@ export default function BillingPage() {
     setSnapDate15(first?.date15 ?? "");
     setSnapDateLast(first?.dateLast ?? "");
 
-    setFetchMsg(""); setWmsSource(null); setShowSource(false);
+    // Restore saved WMS source data for each customer in group
+    const restoredSourceMap: Record<string, WmsSource> = {};
+    for (const inv of cloned) {
+      if (inv.wmsSource) restoredSourceMap[inv.customer] = inv.wmsSource;
+    }
+    setWmsSourceMap(restoredSourceMap);
+    const firstSource = restoredSourceMap[cloned[0].customer] ?? null;
+    setWmsSource(firstSource);
+    setShowSource(false);
+    setFetchMsg(firstSource ? "✓ WMS data restored from last save." : "");
   }
 
   // ── get full group with current editing merged in at activeIdx ──
@@ -2817,6 +2822,11 @@ export default function BillingPage() {
     };
     try {
       const now = new Date().toISOString();
+      // Flush current customer's wmsSource into map before saving
+      const flushedSourceMap = {
+        ...wmsSourceMap,
+        ...(editing && wmsSource ? { [editing.customer]: wmsSource } : {}),
+      };
       for (const inv of group) {
         const payload: BillingInvoice = {
           ...inv,
@@ -2824,6 +2834,7 @@ export default function BillingPage() {
           updatedAt: now,
           orderEdits: flushedEditsMap[inv.customer] ?? {},
           omSettings: omSnap,
+          wmsSource: flushedSourceMap[inv.customer] ?? inv.wmsSource, // persist WMS raw order data
         };
         const res = await fetch("/api/billing/invoices", {
           method: "POST",
@@ -2886,9 +2897,17 @@ export default function BillingPage() {
     setStorageLast(cs?.snapLast ?? null);
     setSnapDate15(cs?.date15 ?? "");
     setSnapDateLast(cs?.dateLast ?? "");
-    setFetchMsg("");
-    setWmsSource(null);
-    setShowSource(false);
+    // Restore saved WMS source data (no re-fetch needed)
+    if (merged.wmsSource) {
+      setWmsSource(merged.wmsSource);
+      setWmsSourceMap({ [merged.customer]: merged.wmsSource });
+      setShowSource(false);
+      setFetchMsg("✓ WMS data restored from last save.");
+    } else {
+      setFetchMsg("");
+      setWmsSource(null);
+      setShowSource(false);
+    }
   }
 
   // ── update any field of a line item (rate는 Rate Master에서 관리, 편집 불가) ──
@@ -3436,6 +3455,7 @@ export default function BillingPage() {
           wcGrossRate: omWcGrossRate, wcDiscount: omWcDiscount,
           glRate: omGlRate, dental: omDentalFixed, medical: omMedicalFixed,
         },
+        wmsSource: wmsSource ?? editing.wmsSource, // persist WMS raw order data
       };
       const res = await fetch("/api/billing/invoices", {
         method: "POST",

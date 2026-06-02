@@ -16,6 +16,14 @@ export type BillingLineItem = {
   note?: string;
 };
 
+export type WmsSourceData = {
+  receiving: Record<string, unknown>[];
+  b2b:       Record<string, unknown>[];
+  b2c:       Record<string, unknown>[];
+  returns:   Record<string, unknown>[];
+  b2bWarnings?: string[];
+};
+
 export type BillingInvoice = {
   id: string;
   customer: string;
@@ -40,6 +48,7 @@ export type BillingInvoice = {
     dental:      string;
     medical:     string;
   };
+  wmsSource?: WmsSourceData; // persisted WMS raw order data — restored on reopen
 };
 
 // ─── Calculation ──────────────────────────────────────────────────────────────
