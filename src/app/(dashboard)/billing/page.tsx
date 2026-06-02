@@ -2294,409 +2294,10 @@ async function exportAllToExcel(
   if (invoices.length === 0) return;
   const wb = new ExcelJS.Workbook();
 
-  // ── "Summary Only" path (no per-customer invoice sheets) ──
-  if (!includeBreakdown) {
-    // Build combined WMS detail sheets first (same as breakdown path)
-    const allB2BDataNB: { custCode: string; orders: Record<string, unknown>[]; orderEdits: Record<string, Record<string, number>> }[] = [];
-    const allInboundDataNB: { custCode: string; orders: Record<string, unknown>[]; orderEdits: Record<string, Record<string, number>> }[] = [];
-    const allB2CDataNB: { custCode: string; orders: Record<string, unknown>[] }[] = [];
-    for (const inv of invoices) {
-      const code   = inv.customer;
-      const source = wmsSourceMap?.[code] ?? null;
-      const edits  = orderEditsMap?.[code] ?? {};
-      if (!source) continue;
-      if (source.b2b.length > 0)       allB2BDataNB.push({ custCode: code, orders: source.b2b, orderEdits: edits });
-      if (source.receiving.length > 0) allInboundDataNB.push({ custCode: code, orders: source.receiving, orderEdits: edits });
-      if (source.b2c.length > 0)       allB2CDataNB.push({ custCode: code, orders: source.b2c });
-    }
-    let nbB2BSheet: string | undefined;
-    let nbInboundSheet: string | undefined;
-    let nbB2CSheet: string | undefined;
-    let nbStorageAvg: string | undefined;
-    if (allB2BDataNB.length > 0)      { const { sheetName } = addCombinedB2BSheet(wb, allB2BDataNB);     nbB2BSheet      = sheetName; }
-    if (allInboundDataNB.length > 0)  { const { sheetName } = addCombinedInboundSheet(wb, allInboundDataNB); nbInboundSheet = sheetName; }
-    if (allB2CDataNB.length > 0)      { const { sheetName } = addCombinedB2CSheet(wb, allB2CDataNB);     nbB2CSheet      = sheetName; }
-    if (storageRows && storageRows.length > 0) {
-      const { avgSheetName } = addInventoryDetailSheets(wb, storageRows, snapDate1, snapDate2, rawRows15, rawRowsLast);
-      nbStorageAvg = avgSheetName;
-    }
-    // Build refs per customer (SUMIF from combined sheets)
-    const refsPerCust: Record<string, DataSheetRefs> = {};
-    for (const inv of invoices) {
-      const refs: DataSheetRefs = { filterCustomer: inv.customer };
-      if (nbB2BSheet)      refs.b2bSheet = nbB2BSheet;
-      if (nbInboundSheet)  refs.inboundSheet = nbInboundSheet;
-      if (nbB2CSheet)      refs.b2cSheet = nbB2CSheet;
-      if (nbStorageAvg)    refs.storageAvgSheet = nbStorageAvg;
-      refsPerCust[inv.customer] = refs;
-    }
-    addGroupSummaryFormulaSheet(
-      wb, invoices, period, refsPerCust,
-      omSubsidy ?? 0, subleaseTotal ?? 0, subleaseBreakdown
-    );
-    addRateTableSheet(wb);
-    addOmSubsidySheet(wb, undefined, omInputs);
-    await downloadWorkbook(wb, `Invoice_ALL_${period}.xlsx`);
-    return;
-  }
-
-  // ── Summary sheet — same styled layout as individual invoice, aggregated ──
-  const ws = wb.addWorksheet("Summary");
-  ws.columns = COL_WIDTHS_7.map((w) => ({ width: w }));
-
-  // Helper: merge full row A–G
-  const merge = (rowNum: number) => ws.mergeCells(`A${rowNum}:${LAST_COL_LETTER}${rowNum}`);
-
-  // ── Header rows ──
-  const r1 = ws.addRow(["CTK USA, INC."]);
-  r1.height = 28; merge(r1.number);
-  Object.assign(r1.getCell(1), {
-    font: { bold: true, size: 16, color: { argb: C.white }, name: "Calibri" },
-    fill: { type: "pattern", pattern: "solid", fgColor: { argb: C.navy } },
-    alignment: { vertical: "middle", horizontal: "center" },
-  }); applyBorder(r1.getCell(1), "medium");
-
-  const customerNames = invoices.map(inv => inv.customerName || inv.customer).join(", ");
-  const r2 = ws.addRow([`Combined Invoice — ${customerNames}`]);
-  r2.height = 20; merge(r2.number);
-  Object.assign(r2.getCell(1), {
-    font: { bold: true, size: 12, color: { argb: C.navy } },
-    fill: { type: "pattern", pattern: "solid", fgColor: { argb: C.white } },
-    alignment: { vertical: "middle", horizontal: "center" },
-  }); applyBorder(r2.getCell(1));
-
-  const r3 = ws.addRow([`Billing Period: ${periodRange(period)}`]);
-  r3.height = 18; merge(r3.number);
-  Object.assign(r3.getCell(1), {
-    font: { size: 11, color: { argb: C.black } },
-    fill: { type: "pattern", pattern: "solid", fgColor: { argb: C.white } },
-    alignment: { vertical: "middle", horizontal: "center" },
-  }); applyBorder(r3.getCell(1));
-
-  // ── Column headers ──
-  const hdr = ws.addRow(["No.", "Category", "Description", "Rate", "Unit", "Qty", "Amount"]);
-  hdr.height = 18;
-  hdr.eachCell((cell, col) => {
-    cell.font = { bold: true, color: { argb: C.white }, size: 10 };
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
-    cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "center" : "right" };
-    applyBorder(cell, "medium");
-  });
-
-  // ── Aggregate line items across all invoices (sum qty by item id) ──
-  // Pre-populate with ALL default line items at qty=0 so every row always appears
-  const itemMap = new Map<string, BillingLineItem & { totalQty: number }>();
-  for (const def of buildDefaultLineItems()) {
-    itemMap.set(def.id, { ...def, totalQty: 0 });
-  }
-  // Sum qty from each invoice on top of the defaults
-  for (const inv of invoices) {
-    for (const item of inv.lineItems) {
-      const existing = itemMap.get(item.id);
-      if (existing) {
-        existing.totalQty += item.qty;
-        // Keep description/rate/unit from the invoice (may have custom rates)
-        existing.rate = item.rate;
-        existing.costPlus = item.costPlus;
-      } else {
-        itemMap.set(item.id, { ...item, totalQty: item.qty });
-      }
-    }
-  }
-
-  let lineNo = 1;
-  let sectionNo = 1;
-  let grandTotal = 0;
-  // track Summary sheet's own item rows so we can wire formulas after customer sheets are built
-  const summaryItemRows: Record<string, number> = {};
-  const summaryCatSubtotalRows: Record<string, number> = {};
-
-  for (const cat of BILLING_CATEGORIES) {
-    const catItems = Array.from(itemMap.values()).filter(
-      (it) => it.category === cat
-    );
-    if (catItems.length === 0) continue;
-
-    // Section header
-    const sec = ws.addRow([`${sectionNo}. ${cat}`]);
-    sec.height = 16; merge(sec.number);
-    Object.assign(sec.getCell(1), {
-      font: { bold: true, size: 10, color: { argb: C.sectionFont } },
-      fill: { type: "pattern", pattern: "solid", fgColor: { argb: C.sectionBg } },
-      alignment: { vertical: "middle", indent: 1 },
-    }); applyBorder(sec.getCell(1), "medium");
-    sectionNo++;
-
-    for (const item of catItems) {
-      const aggQty = item.totalQty;
-      const aggAmt = aggQty === 0 ? 0 : (item.costPlus ? aggQty * 1.1 : aggQty * item.rate);
-      grandTotal += aggAmt;
-
-      const r = ws.addRow([
-        lineNo, cat, item.description,
-        item.costPlus ? "cost+10%" : item.rate,
-        item.unit, aggQty, aggAmt,  // placeholder — overwritten with formulas later
-      ]);
-      summaryItemRows[item.id] = r.number;
-      r.height = 15;
-      const isZero = aggQty === 0;
-      const isAlt = lineNo % 2 === 0;
-      r.eachCell((cell, col) => {
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: isZero ? C.subtotalBg : (isAlt ? C.rowAlt : C.white) } };
-        cell.font = { size: 10, color: { argb: isZero ? C.border : C.black } };
-        cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
-        applyBorder(cell);
-      });
-      r.getCell(4).font = { size: 10, color: { argb: isZero ? C.border : C.teal } };
-      if (!item.costPlus) r.getCell(4).numFmt = "$#,##0.00";
-      const qtyVal = Math.round(aggQty * 100) / 100;
-      r.getCell(6).numFmt = Number.isInteger(qtyVal) ? "#,##0" : "#,##0.00";
-      r.getCell(7).numFmt = "$#,##0.00";
-      lineNo++;
-    }
-
-    // Subtotal — formula-based using Summary's own item rows
-    const firstSumRow = summaryItemRows[catItems[0].id];
-    const lastSumRow  = summaryItemRows[catItems[catItems.length - 1].id];
-    const subVal = catItems.reduce((s, i) => s + (i.totalQty === 0 ? 0 : (i.costPlus ? i.totalQty * 1.1 : i.totalQty * i.rate)), 0);
-    const sub = ws.addRow(["", "", "", "", "", "Subtotal",
-      firstSumRow && lastSumRow
-        ? { formula: `=SUM(G${firstSumRow}:G${lastSumRow})`, result: subVal }
-        : subVal
-    ]);
-    summaryCatSubtotalRows[cat] = sub.number;
-    sub.height = 15;
-    sub.eachCell((cell, col) => {
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.subtotalBg } };
-      cell.font = { bold: col >= 6, size: 10, color: { argb: C.black } };
-      cell.alignment = { vertical: "middle", horizontal: "right" };
-      applyBorder(cell);
-    });
-    sub.getCell(7).numFmt = "$#,##0.00";
-  }
-
-  // ── OM Subsidy section (if provided) ──
-  let omSubtotalRowNum = -1;
-  if (omSubsidy && omSubsidy > 0) {
-    grandTotal += omSubsidy;
-
-    // Section header — purple
-    const omSec = ws.addRow([`${sectionNo}. OM Subsidy`]);
-    omSec.height = 16; merge(omSec.number);
-    Object.assign(omSec.getCell(1), {
-      font: { bold: true, size: 10, color: { argb: "FFFFFFFF" } },
-      fill: { type: "pattern", pattern: "solid", fgColor: { argb: "FF7C3AED" } },
-      alignment: { vertical: "middle", indent: 1 },
-    }); applyBorder(omSec.getCell(1), "medium");
-    sectionNo++;
-
-    // Item row — show wages & allocation % when available
-    const omWagesDisp  = omInputs?.wages    ? `$${omInputs.wages.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "";
-    const omAllocDisp  = omInputs?.allocPct ? `${omInputs.allocPct.toFixed(1)}%` : "";
-    const omRow = ws.addRow([
-      lineNo, "OM Subsidy",
-      "Operations Manager Salary Subsidy (per MSA Section 4)",
-      omWagesDisp,
-      "of monthly cost",
-      omAllocDisp,
-      omSubsidy,
-    ]);
-    omRow.height = 15;
-    omRow.eachCell((cell, col) => {
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF5F3FF" } };
-      cell.font = { size: 10, color: { argb: "FF7C3AED" } };
-      cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
-      applyBorder(cell);
-    });
-    omRow.getCell(7).numFmt = "$#,##0.00";
-    lineNo++;
-
-    // Subtotal row
-    const omSub = ws.addRow(["", "", "", "", "", "Subtotal — OM Subsidy", omSubsidy]);
-    omSubtotalRowNum = omSub.number;
-    omSub.height = 15;
-    omSub.eachCell((cell, col) => {
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEDE9FE" } };
-      cell.font = { bold: col >= 6, size: 10, color: { argb: "FF6D28D9" } };
-      cell.alignment = { vertical: "middle", horizontal: "right" };
-      applyBorder(cell);
-    });
-    omSub.getCell(7).numFmt = "$#,##0.00";
-  }
-
-  // ── Office Sublease section (if provided) ──
-  let slSubtotalRowNum = -1;
-  if (subleaseTotal && subleaseTotal > 0) {
-    grandTotal += subleaseTotal;
-
-    // Section header — amber
-    const slSec = ws.addRow([`${sectionNo}. Office Sublease`]);
-    slSec.height = 16; merge(slSec.number);
-    Object.assign(slSec.getCell(1), {
-      font: { bold: true, size: 10, color: { argb: C.sectionFont } },
-      fill: { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF3CD" } },
-      alignment: { vertical: "middle", indent: 1 },
-    }); applyBorder(slSec.getCell(1), "medium");
-    sectionNo++;
-
-    const slStyle = (row: ExcelJS.Row) => {
-      row.height = 15;
-      row.eachCell((cell, col) => {
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF8E1" } };
-        cell.font = { size: 10, color: { argb: "FFB45309" } };
-        cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
-        applyBorder(cell);
-      });
-    };
-
-    if (subleaseBreakdown) {
-      // Row 1: Monthly Office Rent
-      const rentAmt = subleaseBreakdown.rentQty * subleaseBreakdown.rentRate;
-      const r1 = ws.addRow([
-        lineNo++, "Rent",
-        "Monthly Office Rent (per MSA Section 3.2)",
-        `$${subleaseBreakdown.rentRate.toLocaleString()} / month`,
-        "month",
-        subleaseBreakdown.rentQty,
-        rentAmt,
-      ]);
-      slStyle(r1);
-      r1.getCell(6).numFmt = "#,##0";
-      r1.getCell(7).numFmt = "$#,##0.00";
-
-      // Row 2: Operating Cost Reimbursement
-      const opAmt = subleaseBreakdown.opQty * subleaseBreakdown.opRate;
-      const r2 = ws.addRow([
-        lineNo++, "Rent",
-        "Operating Cost Reimbursement (per MSA Section 3.3)",
-        `$${subleaseBreakdown.opRate.toFixed(2)} per sq ft / month`,
-        "sq ft",
-        subleaseBreakdown.opQty,
-        opAmt,
-      ]);
-      slStyle(r2);
-      r2.getCell(6).numFmt = "#,##0";
-      r2.getCell(7).numFmt = "$#,##0.00";
-    } else {
-      const slRow = ws.addRow([lineNo++, "Rent", "Office Sublease — Monthly Fixed Charges", "", "monthly", 1, subleaseTotal]);
-      slStyle(slRow);
-      slRow.getCell(6).numFmt = "#,##0";
-      slRow.getCell(7).numFmt = "$#,##0.00";
-    }
-
-    // Subtotal row
-    const slSub = ws.addRow(["", "", "", "", "", "Subtotal — Office Sublease", subleaseTotal]);
-    slSubtotalRowNum = slSub.number;
-    slSub.height = 15;
-    slSub.eachCell((cell, col) => {
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF8E1" } };
-      cell.font = { bold: col >= 6, size: 10, color: { argb: "FFB45309" } };
-      cell.alignment = { vertical: "middle", horizontal: "right" };
-      applyBorder(cell);
-    });
-    slSub.getCell(7).numFmt = "$#,##0.00";
-  }
-
-  // ── Grand Total — formula summing all category subtotals + OM Subsidy + Sublease ──
-  const allSubtotalRefs = [
-    ...Object.values(summaryCatSubtotalRows).map(r => `G${r}`),
-    ...(omSubtotalRowNum > 0 ? [`G${omSubtotalRowNum}`] : []),
-    ...(slSubtotalRowNum > 0 ? [`G${slSubtotalRowNum}`] : []),
-  ].join("+");
-  const gt = ws.addRow(["", "", "", "", "", "GRAND TOTAL",
-    allSubtotalRefs ? { formula: `=${allSubtotalRefs}`, result: grandTotal } : grandTotal
-  ]);
-  gt.height = 22;
-  gt.eachCell((cell, col) => {
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.greenBg } };
-    applyBorder(cell, "medium");
-    if (col >= 6) {
-      cell.font = { bold: true, size: 12, color: { argb: C.white } };
-      cell.alignment = { vertical: "middle", horizontal: "right" };
-    }
-  });
-  gt.getCell(7).numFmt = "$#,##0.00";
-
-  // ── Per-customer breakdown table ──
-  ws.addRow([]);
-  const bkHdr = ws.addRow(["Per Customer Breakdown"]);
-  bkHdr.height = 16; merge(bkHdr.number);
-  Object.assign(bkHdr.getCell(1), {
-    font: { bold: true, size: 11, color: { argb: C.white } },
-    fill: { type: "pattern", pattern: "solid", fgColor: { argb: C.navy } },
-    alignment: { vertical: "middle", indent: 1 },
-  }); applyBorder(bkHdr.getCell(1), "medium");
-
-  // Sub-header: merge cols so it fits — use wide 3-col layout A=Customer, B=Code, C-F=categories merged label, G=Total
-  // Just do a simple flat table with as many cols as needed (reuse cols A–G, some merged)
-  const bkColHdr = ws.addRow(["Customer", "Code", ...BILLING_CATEGORIES, "Total"]);
-  // widen to fit — override widths for these extra cols if needed
-  bkColHdr.height = 16;
-  bkColHdr.eachCell((cell) => {
-    cell.font = { bold: true, color: { argb: C.white }, size: 10 };
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
-    cell.alignment = { vertical: "middle", horizontal: "center" };
-    applyBorder(cell, "medium");
-  });
-  // Extend sheet columns if needed for breakdown table
-  const extraCols = 2 + BILLING_CATEGORIES.length + 1; // Customer + Code + cats + Total
-  if (extraCols > NCOLS) {
-    // add extra column widths
-    for (let i = NCOLS + 1; i <= extraCols; i++) {
-      ws.getColumn(i).width = 16;
-    }
-  }
-
-  for (let i = 0; i < invoices.length; i++) {
-    const inv = invoices[i];
-    const row = ws.addRow([
-      inv.customerName || inv.customer,
-      inv.customer,
-      ...BILLING_CATEGORIES.map((c) => inv.subtotals?.[c] ?? 0),
-      inv.total,
-    ]);
-    row.height = 15;
-    row.eachCell((cell, col) => {
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: i % 2 === 0 ? C.white : C.rowAlt } };
-      cell.font = { size: 10, color: { argb: C.black } };
-      cell.alignment = { vertical: "middle", horizontal: col <= 2 ? "left" : "right" };
-      applyBorder(cell);
-      if (col > 2) cell.numFmt = "$#,##0.00";
-    });
-  }
-
-  // Grand total row for breakdown table
-  const bkTot = ws.addRow([
-    "TOTAL", "",
-    ...BILLING_CATEGORIES.map((c) => invoices.reduce((s, inv) => s + (inv.subtotals?.[c] ?? 0), 0)),
-    invoices.reduce((s, inv) => s + inv.total, 0),
-  ]);
-  bkTot.height = 18;
-  bkTot.eachCell((cell, col) => {
-    cell.font = { bold: true, color: { argb: C.white }, size: 10 };
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.greenBg } };
-    applyBorder(cell, "medium");
-    if (col > 2) { cell.numFmt = "$#,##0.00"; cell.alignment = { horizontal: "right" }; }
-  });
-
-  // Generated note
-  ws.addRow([]);
-  const genR = ws.addRow([`Generated: ${new Date().toLocaleDateString("en-US")}`]);
-  merge(genR.number);
-  genR.getCell(1).font = { italic: true, size: 9, color: { argb: C.border } };
-
-  // ── Inventory storage sheet (shared, one Storage_Avg for all customers) ──
-  let sharedStorageAvg: string | undefined;
-  if (storageRows && storageRows.length > 0) {
-    const { avgSheetName } = addInventoryDetailSheets(wb, storageRows, snapDate1, snapDate2, rawRows15, rawRowsLast);
-    sharedStorageAvg = avgSheetName;
-  }
-
-  // ── Combined WMS detail sheets (one per type, all customers) ──
-  // Build combined data arrays from all customers who have source data
-  const allB2BData: { custCode: string; orders: Record<string, unknown>[]; orderEdits: Record<string, Record<string, number>> }[] = [];
+  // ── Build combined data arrays (shared by both modes) ──
+  const allB2BData:     { custCode: string; orders: Record<string, unknown>[]; orderEdits: Record<string, Record<string, number>> }[] = [];
   const allInboundData: { custCode: string; orders: Record<string, unknown>[]; orderEdits: Record<string, Record<string, number>> }[] = [];
-  const allB2CData: { custCode: string; orders: Record<string, unknown>[] }[] = [];
+  const allB2CData:     { custCode: string; orders: Record<string, unknown>[] }[] = [];
 
   for (const inv of invoices) {
     const code   = inv.customer;
@@ -2708,137 +2309,51 @@ async function exportAllToExcel(
     if (source.b2c.length > 0)       allB2CData.push({ custCode: code, orders: source.b2c });
   }
 
-  let combinedB2BSheet: string | undefined;
-  let combinedInboundSheet: string | undefined;
-  let combinedB2CSheet: string | undefined;
+  // ── Add combined raw-data sheets ──
+  let combinedB2BSheet:      string | undefined;
+  let combinedInboundSheet:  string | undefined;
+  let combinedB2CSheet:      string | undefined;
+  let sharedStorageAvg:      string | undefined;
 
-  if (allB2BData.length > 0) {
-    const { sheetName } = addCombinedB2BSheet(wb, allB2BData);
-    combinedB2BSheet = sheetName;
-  }
-  if (allInboundData.length > 0) {
-    const { sheetName } = addCombinedInboundSheet(wb, allInboundData);
-    combinedInboundSheet = sheetName;
-  }
-  if (allB2CData.length > 0) {
-    const { sheetName } = addCombinedB2CSheet(wb, allB2CData);
-    combinedB2CSheet = sheetName;
+  if (allB2BData.length > 0)      { const { sheetName } = addCombinedB2BSheet(wb, allB2BData);         combinedB2BSheet     = sheetName; }
+  if (allInboundData.length > 0)  { const { sheetName } = addCombinedInboundSheet(wb, allInboundData); combinedInboundSheet = sheetName; }
+  if (allB2CData.length > 0)      { const { sheetName } = addCombinedB2CSheet(wb, allB2CData);         combinedB2CSheet     = sheetName; }
+  if (storageRows && storageRows.length > 0) {
+    const { avgSheetName } = addInventoryDetailSheets(wb, storageRows, snapDate1, snapDate2, rawRows15, rawRowsLast);
+    sharedStorageAvg = avgSheetName;
   }
 
-  // ── One invoice sheet per customer (SUMIF refs to combined sheets) ──
-  type CustomerMeta = InvoiceSheetMeta & { inv: BillingInvoice; sheetName: string };
-  const customerMetas: CustomerMeta[] = [];
-  const usedNames = new Set<string>();
-
+  // ── Per-customer SUMIF refs (all pointing to the combined sheets) ──
+  const refsPerCust: Record<string, DataSheetRefs> = {};
   for (const inv of invoices) {
-    const custCode = inv.customer;
-    const refs: DataSheetRefs = { filterCustomer: custCode };
-
-    // Point to combined sheets (SUMIF will filter by custCode in col A)
-    if (combinedB2BSheet)      refs.b2bSheet = combinedB2BSheet;
-    if (combinedInboundSheet)  refs.inboundSheet = combinedInboundSheet;
-    if (combinedB2CSheet)      refs.b2cSheet = combinedB2CSheet;
-    if (sharedStorageAvg)      refs.storageAvgSheet = sharedStorageAvg;
-
-    let name = (inv.customerName || inv.customer).slice(0, 28);
-    if (usedNames.has(name)) name = `${name.slice(0, 24)}_${inv.customer.slice(-3)}`;
-    usedNames.add(name);
-
-    const meta = fillInvoiceSheetFormula(wb.addWorksheet(name), inv, refs);
-    customerMetas.push({ ...meta, inv, sheetName: name });
+    const refs: DataSheetRefs = { filterCustomer: inv.customer };
+    if (combinedB2BSheet)     refs.b2bSheet      = combinedB2BSheet;
+    if (combinedInboundSheet) refs.inboundSheet   = combinedInboundSheet;
+    if (combinedB2CSheet)     refs.b2cSheet       = combinedB2CSheet;
+    if (sharedStorageAvg)     refs.storageAvgSheet = sharedStorageAvg;
+    refsPerCust[inv.customer] = refs;
   }
 
-  // ── Update Summary sheet — replace all hardcoded values with cross-sheet formulas ──
-  if (customerMetas.length > 0) {
-    const sn = (name: string) => `'${name}'`; // safe sheet name wrapper
+  // ── Summary sheet — per-customer sections, qty via SUMIF on combined sheets ──
+  addGroupSummaryFormulaSheet(
+    wb, invoices, period, refsPerCust,
+    omSubsidy ?? 0, subleaseTotal ?? 0, subleaseBreakdown
+  );
 
-    // 1. Per line item: Qty = SUM of each customer's qty cell, Amount = SUM of amount cells
-    const allItemIds = new Set(customerMetas.flatMap(m => Object.keys(m.itemRowNums)));
-    allItemIds.forEach(itemId => {
-      // Find which summary row this item is in by looking at the first customer's row map
-      // (all customers have same row structure)
-      const firstMeta = customerMetas.find(m => m.itemRowNums[itemId]);
-      if (!firstMeta) return;
-
-      // Find the summary sheet row for this item by scanning itemMap
-      // The summary sheet was built in the same category order — row matches first customer's offset from row 5
-      // We already tracked the summary rows via the itemMap building loop above, but we need to store them.
-      // Fallback: we'll update the Per-Customer Breakdown table only (simpler, more reliable).
-    });
-
-    // 2. Grand Total cell → SUM of each customer's total cell
-    if (customerMetas.every(m => m.totalRowNum > 0)) {
-      const parts = customerMetas.map(m => `${sn(m.sheetName)}!G${m.totalRowNum}`);
-      const grandTotalResult = invoices.reduce((s, inv) => s + inv.total, 0)
-        + (omSubsidy && omSubsidy > 0 ? omSubsidy : 0)
-        + (subleaseTotal && subleaseTotal > 0 ? subleaseTotal : 0);
-      ws.getCell(`G${gt.number}`).value = { formula: `=${parts.join("+")}`, result: grandTotalResult };
+  // ── "With Breakdown": add one invoice tab per customer ──
+  if (includeBreakdown) {
+    const usedNames = new Set<string>();
+    for (const inv of invoices) {
+      const refs = refsPerCust[inv.customer] ?? {};
+      let name = (inv.customerName || inv.customer).slice(0, 28);
+      if (usedNames.has(name)) name = `${name.slice(0, 24)}_${inv.customer.slice(-3)}`;
+      usedNames.add(name);
+      fillInvoiceSheetFormula(wb.addWorksheet(name), inv, refs);
     }
-
-    // 2b. Per line item in Summary: Qty = SUM of customer qty cells, Amount = SUM of amount cells
-    Object.keys(summaryItemRows).forEach(itemId => {
-      const sumRow = summaryItemRows[itemId];
-      if (!sumRow) return;
-      const custQtyCells  = customerMetas.filter(m => m.itemRowNums[itemId]).map(m => `${sn(m.sheetName)}!F${m.itemRowNums[itemId]}`);
-      const custAmtCells  = customerMetas.filter(m => m.itemRowNums[itemId]).map(m => `${sn(m.sheetName)}!G${m.itemRowNums[itemId]}`);
-      if (custQtyCells.length > 0) {
-        const aggQty = invoices.reduce((s, inv) => s + (inv.lineItems.find(l => l.id === itemId)?.qty ?? 0), 0);
-        const aggAmt = invoices.reduce((s, inv) => { const it = inv.lineItems.find(l => l.id === itemId); return s + (it ? calcLineAmount(it) : 0); }, 0);
-        ws.getCell(`F${sumRow}`).value = { formula: `=${custQtyCells.join("+")}`, result: aggQty };
-        ws.getCell(`G${sumRow}`).value = { formula: `=${custAmtCells.join("+")}`, result: aggAmt };
-      }
-    });
-
-    // 3. Per-Customer Breakdown rows → replace static values with cell references
-    // The breakdown table starts after gt row + 2 blank/header rows
-    // Row positions: bkHdr, bkColHdr, then one row per customer
-    // We need to find those rows. Track bkFirstDataRow using a known offset.
-    const bkFirstDataRow = gt.number + 4; // gt → blank → bkHdr → bkColHdr → first data row
-    for (let i = 0; i < invoices.length; i++) {
-      const meta = customerMetas[i];
-      if (!meta || meta.totalRowNum <= 0) continue;
-      const rowNum = bkFirstDataRow + i;
-      const bkRow = ws.getRow(rowNum);
-
-      // Col 3 onwards = category subtotals, last col = total
-      BILLING_CATEGORIES.forEach((cat, ci) => {
-        const catSubRow = meta.catSubtotalRowNums[cat];
-        if (catSubRow) {
-          const cellAmt = meta.inv.subtotals?.[cat] ?? 0;
-          bkRow.getCell(3 + ci).value = { formula: `=${sn(meta.sheetName)}!G${catSubRow}`, result: cellAmt };
-          bkRow.getCell(3 + ci).numFmt = "$#,##0.00";
-        }
-      });
-      // Total column (last)
-      const totalCell = 3 + BILLING_CATEGORIES.length;
-      bkRow.getCell(totalCell).value = { formula: `=${sn(meta.sheetName)}!G${meta.totalRowNum}`, result: meta.inv.total };
-      bkRow.getCell(totalCell).numFmt = "$#,##0.00";
-    }
-
-    // 4. Breakdown grand total row → SUM of customer rows above
-    const bkTotalRow = bkFirstDataRow + invoices.length;
-    const bkTotWsRow = ws.getRow(bkTotalRow);
-    BILLING_CATEGORIES.forEach((_, ci) => {
-      const colIdx = 3 + ci;
-      const colLetter = String.fromCharCode(64 + colIdx); // C, D, E...
-      bkTotWsRow.getCell(colIdx).value = {
-        formula: `=SUM(${colLetter}${bkFirstDataRow}:${colLetter}${bkFirstDataRow + invoices.length - 1})`,
-        result: invoices.reduce((s, inv) => s + (inv.subtotals?.[BILLING_CATEGORIES[ci]] ?? 0), 0),
-      };
-      bkTotWsRow.getCell(colIdx).numFmt = "$#,##0.00";
-    });
-    const totColIdx = 3 + BILLING_CATEGORIES.length;
-    const totColLetter = String.fromCharCode(64 + totColIdx);
-    bkTotWsRow.getCell(totColIdx).value = {
-      formula: `=SUM(${totColLetter}${bkFirstDataRow}:${totColLetter}${bkFirstDataRow + invoices.length - 1})`,
-      result: invoices.reduce((s, inv) => s + inv.total, 0),
-    };
-    bkTotWsRow.getCell(totColIdx).numFmt = "$#,##0.00";
   }
 
   addRateTableSheet(wb);
-  addOmSubsidySheet(wb, customerMetas.map(m => ({ sheetName: m.sheetName, catSubtotalRowNums: m.catSubtotalRowNums })), omInputs);
-
+  addOmSubsidySheet(wb, undefined, omInputs);
   await downloadWorkbook(wb, `Invoice_ALL_${period}.xlsx`);
 }
 
