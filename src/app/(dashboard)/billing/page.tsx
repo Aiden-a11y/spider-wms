@@ -1944,47 +1944,57 @@ async function exportInvoiceToExcel(
   snapDate2?: string,
   rawRows15?: StorageRawRow[],
   rawRowsLast?: StorageRawRow[],
-  omInputs?: OmSheetInputs
+  omInputs?: OmSheetInputs,
+  includeBreakdown = true
 ) {
   const wb = new ExcelJS.Workbook();
   const custCode = invoice.customer;
   const refs: DataSheetRefs = {};
 
-  // Add detail sheets if source data is available
-  // Single-customer export: use "B2B", "Inbound", "B2C" as sheet names (no custCode prefix)
-  if (source) {
-    if (source.b2b.length > 0) {
-      const { sheetName: b2bSn } = addB2BDetailSheet(wb, custCode, source.b2b, orderEdits ?? {}, "B2B");
-      refs.b2bSheet = b2bSn;
+  if (includeBreakdown) {
+    // Add detail sheets if source data is available
+    // Single-customer export: use "B2B", "Inbound", "B2C" as sheet names (no custCode prefix)
+    if (source) {
+      if (source.b2b.length > 0) {
+        const { sheetName: b2bSn } = addB2BDetailSheet(wb, custCode, source.b2b, orderEdits ?? {}, "B2B");
+        refs.b2bSheet = b2bSn;
+      }
+      if (source.receiving.length > 0) {
+        const { sheetName: ibSn, dataEndRow } = addInboundDetailSheet(wb, custCode, source.receiving, orderEdits ?? {}, "Inbound");
+        refs.inboundSheet = ibSn;
+        refs.inboundDataEndRow = dataEndRow;
+      }
+      if (source.b2c.length > 0) {
+        const { sheetName: b2cSn } = addB2CDetailSheet(wb, custCode, source.b2c, "B2C");
+        refs.b2cSheet = b2cSn;
+      }
     }
-    if (source.receiving.length > 0) {
-      const { sheetName: ibSn, dataEndRow } = addInboundDetailSheet(wb, custCode, source.receiving, orderEdits ?? {}, "Inbound");
-      refs.inboundSheet = ibSn;
-      refs.inboundDataEndRow = dataEndRow;
+    if (storageRows && storageRows.length > 0) {
+      const { avgSheetName } = addInventoryDetailSheets(wb, storageRows, snapDate1, snapDate2, rawRows15, rawRowsLast);
+      refs.storageAvgSheet = avgSheetName;
     }
-    if (source.b2c.length > 0) {
-      const { sheetName: b2cSn } = addB2CDetailSheet(wb, custCode, source.b2c, "B2C");
-      refs.b2cSheet = b2cSn;
-    }
-  }
-  if (storageRows && storageRows.length > 0) {
-    const { avgSheetName } = addInventoryDetailSheets(wb, storageRows, snapDate1, snapDate2, rawRows15, rawRowsLast);
-    refs.storageAvgSheet = avgSheetName;
-  }
 
-  // Invoice sheet: use formula version if we have data sheets, else styled static
-  const sheetName = (invoice.customerName || invoice.customer).slice(0, 31);
-  const hasRefs = Object.keys(refs).length > 0;
-  let invoiceSheetRefs: InvoiceSheetRef[] | undefined;
-  if (hasRefs) {
-    const meta = fillInvoiceSheetFormula(wb.addWorksheet(sheetName), invoice, refs);
-    invoiceSheetRefs = [{ sheetName, catSubtotalRowNums: meta.catSubtotalRowNums }];
+    // Invoice sheet: use formula version if we have data sheets, else styled static
+    const sheetName = (invoice.customerName || invoice.customer).slice(0, 31);
+    const hasRefs = Object.keys(refs).length > 0;
+    let invoiceSheetRefs: InvoiceSheetRef[] | undefined;
+    if (hasRefs) {
+      const meta = fillInvoiceSheetFormula(wb.addWorksheet(sheetName), invoice, refs);
+      invoiceSheetRefs = [{ sheetName, catSubtotalRowNums: meta.catSubtotalRowNums }];
+    } else {
+      fillInvoiceSheet(wb.addWorksheet(sheetName), invoice);
+    }
+
+    addRateTableSheet(wb);
+    addOmSubsidySheet(wb, invoiceSheetRefs, omInputs);
   } else {
+    // Summary Only: static invoice sheet (no detail tabs, no formula refs)
+    const sheetName = (invoice.customerName || invoice.customer).slice(0, 31);
     fillInvoiceSheet(wb.addWorksheet(sheetName), invoice);
+    addRateTableSheet(wb);
+    addOmSubsidySheet(wb, undefined, omInputs);
   }
 
-  addRateTableSheet(wb);
-  addOmSubsidySheet(wb, invoiceSheetRefs, omInputs);
   await downloadWorkbook(wb, `Invoice_${invoice.customer}_${invoice.period}.xlsx`);
 }
 
@@ -1994,6 +2004,275 @@ type PerCustStorage = {
   date15:   string;
   dateLast: string;
 };
+
+/**
+ * Build a Summary sheet where each customer's line items use SUMIF formulas
+ * pointing to the combined raw data sheets (B2B, Inbound, B2C, Storage_Avg).
+ * Used for the "Summary Only" export (includeBreakdown = false).
+ */
+function addGroupSummaryFormulaSheet(
+  wb: ExcelJS.Workbook,
+  invoices: BillingInvoice[],
+  period: string,
+  refsPerCustomer: Record<string, DataSheetRefs>,
+  omSubsidy: number,
+  subleaseTotal: number,
+  subleaseBreakdown?: { rentQty: number; rentRate: number; opQty: number; opRate: number }
+): void {
+  const ws = wb.addWorksheet("Summary");
+  ws.columns = COL_WIDTHS_7.map((w) => ({ width: w }));
+  const merge = (rowNum: number) => ws.mergeCells(`A${rowNum}:${LAST_COL_LETTER}${rowNum}`);
+
+  // ── Company header ──
+  const r1 = ws.addRow(["CTK USA, INC."]);
+  r1.height = 28; merge(r1.number);
+  Object.assign(r1.getCell(1), {
+    font: { bold: true, size: 16, color: { argb: C.white }, name: "Calibri" },
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: C.navy } },
+    alignment: { vertical: "middle", horizontal: "center" },
+  }); applyBorder(r1.getCell(1), "medium");
+
+  const customerNames = invoices.map(inv => inv.customerName || inv.customer).join(", ");
+  const r2 = ws.addRow([`Combined Invoice — ${customerNames}`]);
+  r2.height = 20; merge(r2.number);
+  Object.assign(r2.getCell(1), {
+    font: { bold: true, size: 12, color: { argb: C.navy } },
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: C.white } },
+    alignment: { vertical: "middle", horizontal: "center" },
+  }); applyBorder(r2.getCell(1));
+
+  const r3 = ws.addRow([`Billing Period: ${periodRange(period)}`]);
+  r3.height = 18; merge(r3.number);
+  Object.assign(r3.getCell(1), {
+    font: { size: 11, color: { argb: C.black } },
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: C.white } },
+    alignment: { vertical: "middle", horizontal: "center" },
+  }); applyBorder(r3.getCell(1));
+
+  // ── Column headers ──
+  const hdr = ws.addRow(["No.", "Category", "Description", "Rate", "Unit", "Qty", "Amount"]);
+  hdr.height = 18;
+  hdr.eachCell((cell, col) => {
+    cell.font = { bold: true, color: { argb: C.white }, size: 10 };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
+    cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "center" : "right" };
+    applyBorder(cell, "medium");
+  });
+
+  let lineNo = 1;
+  let sectionNo = 1;
+  const custSubtotalRows: number[] = [];
+
+  // ── Per-customer sections ──
+  for (const inv of invoices) {
+    const custCode = inv.customer;
+    const refs = refsPerCustomer[custCode] ?? {};
+
+    // Customer section header (navy background)
+    const custHdr = ws.addRow([`${sectionNo}. ${inv.customerName || inv.customer}`]);
+    custHdr.height = 18; merge(custHdr.number);
+    Object.assign(custHdr.getCell(1), {
+      font: { bold: true, size: 11, color: { argb: C.white } },
+      fill: { type: "pattern", pattern: "solid", fgColor: { argb: C.navy } },
+      alignment: { vertical: "middle", indent: 1 },
+    }); applyBorder(custHdr.getCell(1), "medium");
+    sectionNo++;
+
+    const custItemFirstRow: Record<string, number> = {};
+    const custItemLastRow:  Record<string, number> = {};
+
+    for (const cat of BILLING_CATEGORIES) {
+      const catItems = inv.lineItems.filter((l) => l.category === cat);
+      if (catItems.length === 0) continue;
+
+      // Category section header
+      const secRow = ws.addRow([`${cat}`]);
+      secRow.height = 15; merge(secRow.number);
+      const secCell = secRow.getCell(1);
+      secCell.font = { bold: true, size: 10, color: { argb: C.sectionFont } };
+      secCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.sectionBg } };
+      secCell.alignment = { vertical: "middle", indent: 2 };
+      applyBorder(secCell, "medium");
+
+      let catFirstItemRow = -1;
+      let catLastItemRow  = -1;
+
+      for (const item of catItems) {
+        const qtyVal = getQtyFormula(item.id, refs, Math.round(item.qty * 100) / 100);
+        const isQtyNum   = typeof qtyVal === "number";
+        const qtyNumeric = isQtyNum ? (qtyVal as number) : item.qty;
+        const rateDisplay = item.costPlus ? "cost+10%" : item.rate;
+        const rowNum = ws.rowCount + 1;
+
+        const amtVal: number | ExcelJS.CellFormulaValue = isQtyNum
+          ? (item.costPlus ? qtyNumeric * 1.1 : qtyNumeric * item.rate)
+          : { formula: `=F${rowNum}*D${rowNum}`, result: item.qty * item.rate };
+
+        const r = ws.addRow([lineNo, cat, item.description, rateDisplay, item.unit, qtyVal, amtVal]);
+        r.height = 15;
+        const isAlt = lineNo % 2 === 0;
+        r.eachCell((cell, col) => {
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: qtyNumeric === 0 ? C.subtotalBg : (isAlt ? C.rowAlt : C.white) } };
+          cell.font = { size: 10, color: { argb: qtyNumeric === 0 ? C.border : C.black } };
+          cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
+          applyBorder(cell);
+        });
+        r.getCell(4).font = { size: 10, color: { argb: qtyNumeric === 0 ? C.border : C.teal } };
+        if (!item.costPlus) r.getCell(4).numFmt = "$#,##0.00";
+        r.getCell(6).numFmt = Number.isInteger(qtyNumeric) ? "#,##0" : "#,##0.00";
+        r.getCell(7).numFmt = "$#,##0.00";
+
+        if (catFirstItemRow < 0) catFirstItemRow = r.number;
+        catLastItemRow = r.number;
+        custItemFirstRow[cat] = custItemFirstRow[cat] ?? r.number;
+        custItemLastRow[cat]  = r.number;
+        lineNo++;
+      }
+
+      // Category subtotal
+      const subVal = catItems.reduce((s, i) => s + calcLineAmount(i), 0);
+      const subFormula = catFirstItemRow > 0 && catLastItemRow > 0
+        ? { formula: `=SUM(G${catFirstItemRow}:G${catLastItemRow})`, result: subVal }
+        : subVal;
+      const subRow = ws.addRow(["", "", "", "", "", "Subtotal", subFormula]);
+      subRow.height = 15;
+      subRow.eachCell((cell, col) => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.subtotalBg } };
+        cell.font = { bold: col >= 6, size: 10, color: { argb: C.black } };
+        cell.alignment = { vertical: "middle", horizontal: "right" };
+        applyBorder(cell);
+      });
+      subRow.getCell(7).numFmt = "$#,##0.00";
+    }
+
+    // Customer total row
+    const custAmtRefs = Object.values(custItemFirstRow).map((fr, i) => {
+      const cat = Object.keys(custItemFirstRow)[i] as BillingCategory;
+      const lr  = custItemLastRow[cat];
+      return `SUM(G${fr}:G${lr})`;
+    });
+    const custTotalFormula = custAmtRefs.length > 0
+      ? { formula: `=${custAmtRefs.join("+")}`, result: inv.total }
+      : inv.total;
+    const custTotRow = ws.addRow(["", "", "", "", "", `Total — ${inv.customerName || inv.customer}`, custTotalFormula]);
+    custSubtotalRows.push(custTotRow.number);
+    custTotRow.height = 18;
+    custTotRow.eachCell((cell, col) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.subtotalBg } };
+      cell.font = { bold: col >= 6, size: 10, color: { argb: col >= 6 ? C.navy : C.black } };
+      cell.alignment = { vertical: "middle", horizontal: "right" };
+      applyBorder(cell, "medium");
+    });
+    custTotRow.getCell(7).numFmt = "$#,##0.00";
+    ws.addRow([]); // spacer between customers
+  }
+
+  // ── OM Subsidy section ──
+  let omSubtotalRowNum = -1;
+  if (omSubsidy > 0) {
+    const omSec = ws.addRow([`${sectionNo}. OM Subsidy`]);
+    omSec.height = 16; merge(omSec.number);
+    Object.assign(omSec.getCell(1), {
+      font: { bold: true, size: 10, color: { argb: "FFFFFFFF" } },
+      fill: { type: "pattern", pattern: "solid", fgColor: { argb: "FF7C3AED" } },
+      alignment: { vertical: "middle", indent: 1 },
+    }); applyBorder(omSec.getCell(1), "medium");
+    sectionNo++;
+
+    const omRow = ws.addRow([lineNo++, "OM Subsidy", "Operations Manager Salary Subsidy (per MSA Section 4)", "", "of monthly cost", "", omSubsidy]);
+    omRow.height = 15;
+    omRow.eachCell((cell, col) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF5F3FF" } };
+      cell.font = { size: 10, color: { argb: "FF7C3AED" } };
+      cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
+      applyBorder(cell);
+    });
+    omRow.getCell(7).numFmt = "$#,##0.00";
+
+    const omSub = ws.addRow(["", "", "", "", "", "Subtotal — OM Subsidy", omSubsidy]);
+    omSubtotalRowNum = omSub.number;
+    omSub.height = 15;
+    omSub.eachCell((cell, col) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEDE9FE" } };
+      cell.font = { bold: col >= 6, size: 10, color: { argb: "FF6D28D9" } };
+      cell.alignment = { vertical: "middle", horizontal: "right" };
+      applyBorder(cell);
+    });
+    omSub.getCell(7).numFmt = "$#,##0.00";
+  }
+
+  // ── Office Sublease section ──
+  let slSubtotalRowNum = -1;
+  if (subleaseTotal > 0) {
+    const slSec = ws.addRow([`${sectionNo}. Office Sublease`]);
+    slSec.height = 16; merge(slSec.number);
+    Object.assign(slSec.getCell(1), {
+      font: { bold: true, size: 10, color: { argb: C.sectionFont } },
+      fill: { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF3CD" } },
+      alignment: { vertical: "middle", indent: 1 },
+    }); applyBorder(slSec.getCell(1), "medium");
+    sectionNo++;
+
+    const slStyle = (row: ExcelJS.Row) => {
+      row.height = 15;
+      row.eachCell((cell, col) => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF8E1" } };
+        cell.font = { size: 10, color: { argb: "FFB45309" } };
+        cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
+        applyBorder(cell);
+      });
+    };
+
+    if (subleaseBreakdown) {
+      const rentAmt = subleaseBreakdown.rentQty * subleaseBreakdown.rentRate;
+      const r1sl = ws.addRow([lineNo++, "Rent", "Monthly Office Rent (per MSA Section 3.2)", `$${subleaseBreakdown.rentRate.toLocaleString()} / month`, "month", subleaseBreakdown.rentQty, rentAmt]);
+      slStyle(r1sl); r1sl.getCell(6).numFmt = "#,##0"; r1sl.getCell(7).numFmt = "$#,##0.00";
+      const opAmt = subleaseBreakdown.opQty * subleaseBreakdown.opRate;
+      const r2sl = ws.addRow([lineNo++, "Rent", "Operating Cost Reimbursement (per MSA Section 3.3)", `$${subleaseBreakdown.opRate.toFixed(2)} per sq ft / month`, "sq ft", subleaseBreakdown.opQty, opAmt]);
+      slStyle(r2sl); r2sl.getCell(6).numFmt = "#,##0"; r2sl.getCell(7).numFmt = "$#,##0.00";
+    } else {
+      const slRow = ws.addRow([lineNo++, "Rent", "Office Sublease — Monthly Fixed Charges", "", "monthly", 1, subleaseTotal]);
+      slStyle(slRow); slRow.getCell(6).numFmt = "#,##0"; slRow.getCell(7).numFmt = "$#,##0.00";
+    }
+
+    const slSub = ws.addRow(["", "", "", "", "", "Subtotal — Office Sublease", subleaseTotal]);
+    slSubtotalRowNum = slSub.number;
+    slSub.height = 15;
+    slSub.eachCell((cell, col) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF8E1" } };
+      cell.font = { bold: col >= 6, size: 10, color: { argb: "FFB45309" } };
+      cell.alignment = { vertical: "middle", horizontal: "right" };
+      applyBorder(cell);
+    });
+    slSub.getCell(7).numFmt = "$#,##0.00";
+  }
+
+  // ── Grand Total ──
+  const grandTotalResult = invoices.reduce((s, inv) => s + inv.total, 0) + omSubsidy + subleaseTotal;
+  const allSubtotalRefs = [
+    ...custSubtotalRows.map(r => `G${r}`),
+    ...(omSubtotalRowNum > 0 ? [`G${omSubtotalRowNum}`] : []),
+    ...(slSubtotalRowNum > 0 ? [`G${slSubtotalRowNum}`] : []),
+  ].join("+");
+  const gt = ws.addRow(["", "", "", "", "", "GRAND TOTAL",
+    allSubtotalRefs ? { formula: `=${allSubtotalRefs}`, result: grandTotalResult } : grandTotalResult,
+  ]);
+  gt.height = 22;
+  gt.eachCell((cell, col) => {
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.greenBg } };
+    applyBorder(cell, "medium");
+    if (col >= 6) {
+      cell.font = { bold: true, size: 12, color: { argb: C.white } };
+      cell.alignment = { vertical: "middle", horizontal: "right" };
+    }
+  });
+  gt.getCell(7).numFmt = "$#,##0.00";
+
+  ws.addRow([]);
+  const genR = ws.addRow([`Generated: ${new Date().toLocaleDateString("en-US")}`]);
+  merge(genR.number);
+  genR.getCell(1).font = { italic: true, size: 9, color: { argb: C.border } };
+}
 
 /** Export multiple invoices — styled Summary tab + one tab per customer + optional raw data tabs */
 async function exportAllToExcel(
@@ -2009,10 +2288,57 @@ async function exportAllToExcel(
   rawRows15?: StorageRawRow[],
   rawRowsLast?: StorageRawRow[],
   subleaseBreakdown?: { rentQty: number; rentRate: number; opQty: number; opRate: number },
-  omInputs?: OmSheetInputs
+  omInputs?: OmSheetInputs,
+  includeBreakdown = true
 ) {
   if (invoices.length === 0) return;
   const wb = new ExcelJS.Workbook();
+
+  // ── "Summary Only" path (no per-customer invoice sheets) ──
+  if (!includeBreakdown) {
+    // Build combined WMS detail sheets first (same as breakdown path)
+    const allB2BDataNB: { custCode: string; orders: Record<string, unknown>[]; orderEdits: Record<string, Record<string, number>> }[] = [];
+    const allInboundDataNB: { custCode: string; orders: Record<string, unknown>[]; orderEdits: Record<string, Record<string, number>> }[] = [];
+    const allB2CDataNB: { custCode: string; orders: Record<string, unknown>[] }[] = [];
+    for (const inv of invoices) {
+      const code   = inv.customer;
+      const source = wmsSourceMap?.[code] ?? null;
+      const edits  = orderEditsMap?.[code] ?? {};
+      if (!source) continue;
+      if (source.b2b.length > 0)       allB2BDataNB.push({ custCode: code, orders: source.b2b, orderEdits: edits });
+      if (source.receiving.length > 0) allInboundDataNB.push({ custCode: code, orders: source.receiving, orderEdits: edits });
+      if (source.b2c.length > 0)       allB2CDataNB.push({ custCode: code, orders: source.b2c });
+    }
+    let nbB2BSheet: string | undefined;
+    let nbInboundSheet: string | undefined;
+    let nbB2CSheet: string | undefined;
+    let nbStorageAvg: string | undefined;
+    if (allB2BDataNB.length > 0)      { const { sheetName } = addCombinedB2BSheet(wb, allB2BDataNB);     nbB2BSheet      = sheetName; }
+    if (allInboundDataNB.length > 0)  { const { sheetName } = addCombinedInboundSheet(wb, allInboundDataNB); nbInboundSheet = sheetName; }
+    if (allB2CDataNB.length > 0)      { const { sheetName } = addCombinedB2CSheet(wb, allB2CDataNB);     nbB2CSheet      = sheetName; }
+    if (storageRows && storageRows.length > 0) {
+      const { avgSheetName } = addInventoryDetailSheets(wb, storageRows, snapDate1, snapDate2, rawRows15, rawRowsLast);
+      nbStorageAvg = avgSheetName;
+    }
+    // Build refs per customer (SUMIF from combined sheets)
+    const refsPerCust: Record<string, DataSheetRefs> = {};
+    for (const inv of invoices) {
+      const refs: DataSheetRefs = { filterCustomer: inv.customer };
+      if (nbB2BSheet)      refs.b2bSheet = nbB2BSheet;
+      if (nbInboundSheet)  refs.inboundSheet = nbInboundSheet;
+      if (nbB2CSheet)      refs.b2cSheet = nbB2CSheet;
+      if (nbStorageAvg)    refs.storageAvgSheet = nbStorageAvg;
+      refsPerCust[inv.customer] = refs;
+    }
+    addGroupSummaryFormulaSheet(
+      wb, invoices, period, refsPerCust,
+      omSubsidy ?? 0, subleaseTotal ?? 0, subleaseBreakdown
+    );
+    addRateTableSheet(wb);
+    addOmSubsidySheet(wb, undefined, omInputs);
+    await downloadWorkbook(wb, `Invoice_ALL_${period}.xlsx`);
+    return;
+  }
 
   // ── Summary sheet — same styled layout as individual invoice, aggregated ──
   const ws = wb.addWorksheet("Summary");
@@ -3625,7 +3951,8 @@ export default function BillingPage() {
     group: BillingInvoice[],
     period: string,
     omSubsidyAmt: number,
-    subleaseAmt: number
+    subleaseAmt: number,
+    includeBreakdown = true
   ) {
     if (exportingNow) return;
     setExportingNow(true);
@@ -3697,7 +4024,7 @@ export default function BillingPage() {
         effectiveStorageRows, omSubsidyAmt, subleaseAmt,
         effectiveDate15, effectiveDateLast,
         effectiveRawRows15, effectiveRawRowsLast,
-        slBreakdown, getOmInputs(groupInvRev)
+        slBreakdown, getOmInputs(groupInvRev), includeBreakdown
       );
     } finally {
       setExportingNow(false);
@@ -3727,7 +4054,7 @@ export default function BillingPage() {
   }
 
   // ── Export invoices from the list view (auto-fetch all WMS + storage data) ──
-  async function handleExportFromList(invoices: BillingInvoice[], period: string) {
+  async function handleExportFromList(invoices: BillingInvoice[], period: string, includeBreakdown = true) {
     if (exportingNow || invoices.length === 0) return;
     setExportingNow(true);
     try {
@@ -3773,7 +4100,7 @@ export default function BillingPage() {
           storageRows, firstStorageLoc?.date15 || undefined, firstStorageLoc?.dateLast || undefined,
           allRawRows15.length > 0 ? allRawRows15 : undefined,
           allRawRowsLast.length > 0 ? allRawRowsLast : undefined,
-          listOmInputs,
+          listOmInputs, includeBreakdown
         );
       } else {
         await exportAllToExcel(
@@ -3782,7 +4109,7 @@ export default function BillingPage() {
           firstStorageLoc?.date15 || undefined, firstStorageLoc?.dateLast || undefined,
           allRawRows15.length > 0 ? allRawRows15 : undefined,
           allRawRowsLast.length > 0 ? allRawRowsLast : undefined,
-          listSlBreakdown, listOmInputs,
+          listSlBreakdown, listOmInputs, includeBreakdown
         );
       }
     } finally {
@@ -3985,7 +4312,7 @@ export default function BillingPage() {
     const fmt = formatUSD;
     const isMulti = previewInvoices.length > 1;
 
-    function doExport() {
+    function doExport(includeBreakdown: boolean) {
       if (exportPreview!.mode === "single") {
         const inv = exportPreview!.invoice as BillingInvoice;
         if (editing && editing.id === inv.id && wmsSource) {
@@ -3994,19 +4321,19 @@ export default function BillingPage() {
           exportInvoiceToExcel(
             inv, wmsSource, orderEdits,
             storageRows, snapDate15 || undefined, snapDateLast || undefined,
-            storage15?.rawRows, storageLast?.rawRows, getOmInputs(singleInvRev)
+            storage15?.rawRows, storageLast?.rawRows, getOmInputs(singleInvRev), includeBreakdown
           ).catch(console.error);
         } else {
           // Outside editor (list view) — auto-fetch WMS + load storage from localStorage
-          handleExportFromList([inv], inv.period).catch(console.error);
+          handleExportFromList([inv], inv.period, includeBreakdown).catch(console.error);
         }
       } else if (exportPreview!.mode === "multi") {
         const ep = exportPreview as Extract<typeof exportPreview, { mode: "multi" }>;
-        handleExportWithFetch(ep.invoices, ep.period, ep.omSubsidy, ep.subleaseTotal).catch(console.error);
+        handleExportWithFetch(ep.invoices, ep.period, ep.omSubsidy, ep.subleaseTotal, includeBreakdown).catch(console.error);
       } else {
         // "list" mode — from list view
         const ep = exportPreview as Extract<typeof exportPreview, { mode: "list" }>;
-        handleExportFromList(ep.invoices, ep.period).catch(console.error);
+        handleExportFromList(ep.invoices, ep.period, includeBreakdown).catch(console.error);
       }
       setExportPreview(null);
     }
@@ -4136,10 +4463,15 @@ export default function BillingPage() {
               className="px-4 py-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg hover:bg-white transition-colors">
               Cancel
             </button>
-            <button onClick={doExport}
+            <button onClick={() => doExport(false)}
+              className="flex items-center gap-2 px-5 py-2 text-sm font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg transition-colors shadow-sm">
+              <Table2 className="w-4 h-4" />
+              Summary Only
+            </button>
+            <button onClick={() => doExport(true)}
               className="flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors shadow-sm">
               <Download className="w-4 h-4" />
-              Download Excel
+              With Breakdown
             </button>
           </div>
         </div>
