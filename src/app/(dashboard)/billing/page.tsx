@@ -2021,29 +2021,28 @@ function addGroupSummaryFormulaSheet(
 ): void {
   const ws = wb.addWorksheet("Summary");
 
-  // Summary-specific column widths (wider Description to prevent truncation)
-  // No. | Category | Description | Rate | Unit | Qty | Amount
+  // No. | Description | Rate | Unit | Qty | Amount  (6 cols — no Category col, shown as section headers)
+  const SCOLS = 6;
+  const SLAST = "F";
   ws.columns = [
     { width: 5  },  // A — No.
-    { width: 18 },  // B — Category
-    { width: 52 },  // C — Description  (long strings like "40' HC Container Floor Loaded")
-    { width: 14 },  // D — Rate
-    { width: 14 },  // E — Unit
-    { width: 10 },  // F — Qty
-    { width: 16 },  // G — Amount
+    { width: 54 },  // B — Description
+    { width: 14 },  // C — Rate
+    { width: 15 },  // D — Unit
+    { width: 12 },  // E — Qty
+    { width: 16 },  // F — Amount
   ];
 
-  // Page setup: landscape, fit to 1 page wide (unlimited height)
   ws.pageSetup = {
-    orientation:   "landscape",
-    fitToPage:     true,
-    fitToWidth:    1,
-    fitToHeight:   0,
-    paperSize:     9,   // A4
+    orientation: "landscape",
+    fitToPage:   true,
+    fitToWidth:  1,
+    fitToHeight: 0,
+    paperSize:   9,
     margins: { left: 0.5, right: 0.5, top: 0.75, bottom: 0.75, header: 0.3, footer: 0.3 },
   };
 
-  const merge = (rowNum: number) => ws.mergeCells(`A${rowNum}:${LAST_COL_LETTER}${rowNum}`);
+  const merge = (rowNum: number) => ws.mergeCells(`A${rowNum}:${SLAST}${rowNum}`);
 
   // ── Company header ──
   const r1 = ws.addRow(["CTK USA, INC."]);
@@ -2071,226 +2070,203 @@ function addGroupSummaryFormulaSheet(
     alignment: { vertical: "middle", horizontal: "center" },
   }); applyBorder(r3.getCell(1));
 
-  // ── Column headers ──
-  const hdr = ws.addRow(["No.", "Category", "Description", "Rate", "Unit", "Qty", "Amount"]);
+  // ── Column headers (6 cols: No | Description | Rate | Unit | Qty | Amount) ──
+  const hdr = ws.addRow(["No.", "Description", "Rate", "Unit", "Qty", "Amount"]);
   hdr.height = 18;
-  // Freeze pane: keep header rows visible while scrolling
   ws.views = [{ state: "frozen", ySplit: hdr.number }];
   hdr.eachCell((cell, col) => {
     cell.font = { bold: true, color: { argb: C.white }, size: 10 };
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
-    cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "center" : "right" };
+    cell.alignment = { vertical: "middle", horizontal: col <= 2 ? "center" : "right" };
     applyBorder(cell, "medium");
   });
 
-  let lineNo = 1;
-  let sectionNo = 1;
-  const custSubtotalRows: number[] = [];
-
-  // ── Per-customer sections ──
+  // ── Merge all invoices: sum qty per item.id across all customers ──
+  type MergedItem = {
+    id: string; category: BillingCategory; description: string;
+    rate: number; unit: string; costPlus?: boolean; totalQty: number;
+  };
+  const mergedMap = new Map<string, MergedItem>();
   for (const inv of invoices) {
-    const custCode = inv.customer;
-    const refs = refsPerCustomer[custCode] ?? {};
-
-    // Customer section header (navy background)
-    const custHdr = ws.addRow([`${sectionNo}. ${inv.customerName || inv.customer}`]);
-    custHdr.height = 18; merge(custHdr.number);
-    Object.assign(custHdr.getCell(1), {
-      font: { bold: true, size: 11, color: { argb: C.white } },
-      fill: { type: "pattern", pattern: "solid", fgColor: { argb: C.navy } },
-      alignment: { vertical: "middle", indent: 1 },
-    }); applyBorder(custHdr.getCell(1), "medium");
-    sectionNo++;
-
-    const custItemFirstRow: Record<string, number> = {};
-    const custItemLastRow:  Record<string, number> = {};
-
-    for (const cat of BILLING_CATEGORIES) {
-      const catItems = inv.lineItems.filter((l) => l.category === cat);
-      if (catItems.length === 0) continue;
-
-      // Category section header
-      const secRow = ws.addRow([`${cat}`]);
-      secRow.height = 15; merge(secRow.number);
-      const secCell = secRow.getCell(1);
-      secCell.font = { bold: true, size: 10, color: { argb: C.sectionFont } };
-      secCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.sectionBg } };
-      secCell.alignment = { vertical: "middle", indent: 2 };
-      applyBorder(secCell, "medium");
-
-      let catFirstItemRow = -1;
-      let catLastItemRow  = -1;
-
-      for (const item of catItems) {
-        const qtyVal = getQtyFormula(item.id, refs, Math.round(item.qty * 100) / 100);
-        const isQtyNum   = typeof qtyVal === "number";
-        const qtyNumeric = isQtyNum ? (qtyVal as number) : item.qty;
-        const rateDisplay = item.costPlus ? "cost+10%" : item.rate;
-        const rowNum = ws.rowCount + 1;
-
-        const amtVal: number | ExcelJS.CellFormulaValue = isQtyNum
-          ? (item.costPlus ? qtyNumeric * 1.1 : qtyNumeric * item.rate)
-          : { formula: `=F${rowNum}*D${rowNum}`, result: item.qty * item.rate };
-
-        const r = ws.addRow([lineNo, cat, item.description, rateDisplay, item.unit, qtyVal, amtVal]);
-        r.height = 15;
-        const isAlt = lineNo % 2 === 0;
-        r.eachCell((cell, col) => {
-          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: qtyNumeric === 0 ? C.subtotalBg : (isAlt ? C.rowAlt : C.white) } };
-          cell.font = { size: 10, color: { argb: qtyNumeric === 0 ? C.border : C.black } };
-          cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
-          applyBorder(cell);
+    for (const item of inv.lineItems) {
+      const ex = mergedMap.get(item.id);
+      if (ex) {
+        ex.totalQty += item.qty;
+      } else {
+        mergedMap.set(item.id, {
+          id: item.id, category: item.category, description: item.description,
+          rate: item.rate, unit: item.unit, costPlus: item.costPlus,
+          totalQty: item.qty,
         });
-        r.getCell(4).font = { size: 10, color: { argb: qtyNumeric === 0 ? C.border : C.teal } };
-        if (!item.costPlus) r.getCell(4).numFmt = "$#,##0.00";
-        r.getCell(6).numFmt = Number.isInteger(qtyNumeric) ? "#,##0" : "#,##0.00";
-        r.getCell(7).numFmt = "$#,##0.00";
-
-        if (catFirstItemRow < 0) catFirstItemRow = r.number;
-        catLastItemRow = r.number;
-        custItemFirstRow[cat] = custItemFirstRow[cat] ?? r.number;
-        custItemLastRow[cat]  = r.number;
-        lineNo++;
       }
+    }
+  }
 
-      // Category subtotal
-      const subVal = catItems.reduce((s, i) => s + calcLineAmount(i), 0);
-      const subFormula = catFirstItemRow > 0 && catLastItemRow > 0
-        ? { formula: `=SUM(G${catFirstItemRow}:G${catLastItemRow})`, result: subVal }
-        : subVal;
-      const subRow = ws.addRow(["", "", "", "", "", "Subtotal", subFormula]);
-      subRow.height = 15;
-      subRow.eachCell((cell, col) => {
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.subtotalBg } };
-        cell.font = { bold: col >= 6, size: 10, color: { argb: C.black } };
-        cell.alignment = { vertical: "middle", horizontal: "right" };
+  let lineNo = 1;
+  const catSubtotalRows: number[] = [];
+
+  // ── Category sections (combined across all customers) ──
+  for (const cat of BILLING_CATEGORIES) {
+    const catItems = Array.from(mergedMap.values()).filter(i => i.category === cat);
+    if (catItems.length === 0) continue;
+
+    // Category header
+    const secRow = ws.addRow([cat.toUpperCase()]);
+    secRow.height = 16; merge(secRow.number);
+    const secCell = secRow.getCell(1);
+    secCell.font = { bold: true, size: 10, color: { argb: C.sectionFont } };
+    secCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.sectionBg } };
+    secCell.alignment = { vertical: "middle", indent: 1 };
+    applyBorder(secCell, "medium");
+
+    let catFirst = -1, catLast = -1;
+
+    for (const item of catItems) {
+      const qty    = Math.round(item.totalQty * 100) / 100;
+      const rate   = item.costPlus ? "cost+10%" : item.rate;
+      const rowNum = ws.rowCount + 1;
+      const amt: number | ExcelJS.CellFormulaValue = item.costPlus
+        ? qty * 1.1
+        : { formula: `=E${rowNum}*C${rowNum}`, result: qty * item.rate };
+
+      // A=No, B=Description, C=Rate, D=Unit, E=Qty, F=Amount
+      const r = ws.addRow([lineNo, item.description, rate, item.unit, qty, amt]);
+      r.height = 15;
+      const isAlt = lineNo % 2 === 0;
+      r.eachCell((cell, col) => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: qty === 0 ? C.subtotalBg : (isAlt ? C.rowAlt : C.white) } };
+        cell.font = { size: 10, color: { argb: qty === 0 ? C.border : C.black } };
+        cell.alignment = { vertical: "middle", horizontal: col <= 2 ? "left" : "right" };
         applyBorder(cell);
       });
-      subRow.getCell(7).numFmt = "$#,##0.00";
+      // Rate cell teal
+      r.getCell(3).font = { size: 10, color: { argb: qty === 0 ? C.border : C.teal } };
+      if (!item.costPlus) r.getCell(3).numFmt = "$#,##0.00";
+      r.getCell(5).numFmt = Number.isInteger(qty) ? "#,##0" : "#,##0.00";
+      r.getCell(6).numFmt = "$#,##0.00";
+
+      if (catFirst < 0) catFirst = r.number;
+      catLast = r.number;
+      lineNo++;
     }
 
-    // Customer total row
-    const custAmtRefs = Object.values(custItemFirstRow).map((fr, i) => {
-      const cat = Object.keys(custItemFirstRow)[i] as BillingCategory;
-      const lr  = custItemLastRow[cat];
-      return `SUM(G${fr}:G${lr})`;
-    });
-    const custTotalFormula = custAmtRefs.length > 0
-      ? { formula: `=${custAmtRefs.join("+")}`, result: inv.total }
-      : inv.total;
-    const custTotRow = ws.addRow(["", "", "", "", "", `Total — ${inv.customerName || inv.customer}`, custTotalFormula]);
-    custSubtotalRows.push(custTotRow.number);
-    custTotRow.height = 18;
-    custTotRow.eachCell((cell, col) => {
+    // Category subtotal
+    const subVal = catItems.reduce((s, i) =>
+      s + (i.costPlus ? i.totalQty * 1.1 : i.totalQty * i.rate), 0);
+    const subFormula = catFirst > 0
+      ? { formula: `=SUM(F${catFirst}:F${catLast})`, result: subVal }
+      : subVal;
+    const subRow = ws.addRow(["", "", "", "", "Subtotal", subFormula]);
+    catSubtotalRows.push(subRow.number);
+    subRow.height = 15;
+    subRow.eachCell((cell, col) => {
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.subtotalBg } };
-      cell.font = { bold: col >= 6, size: 10, color: { argb: col >= 6 ? C.navy : C.black } };
+      cell.font = { bold: col >= 5, size: 10, color: { argb: C.black } };
       cell.alignment = { vertical: "middle", horizontal: "right" };
-      applyBorder(cell, "medium");
+      applyBorder(cell);
     });
-    custTotRow.getCell(7).numFmt = "$#,##0.00";
-    ws.addRow([]); // spacer between customers
+    subRow.getCell(6).numFmt = "$#,##0.00";
   }
 
   // ── OM Subsidy section ──
   let omSubtotalRowNum = -1;
   if (omSubsidy > 0) {
-    const omSec = ws.addRow([`${sectionNo}. OM Subsidy`]);
+    const omSec = ws.addRow(["OM Subsidy"]);
     omSec.height = 16; merge(omSec.number);
     Object.assign(omSec.getCell(1), {
       font: { bold: true, size: 10, color: { argb: "FFFFFFFF" } },
       fill: { type: "pattern", pattern: "solid", fgColor: { argb: "FF7C3AED" } },
       alignment: { vertical: "middle", indent: 1 },
     }); applyBorder(omSec.getCell(1), "medium");
-    sectionNo++;
 
-    const omRow = ws.addRow([lineNo++, "OM Subsidy", "Operations Manager Salary Subsidy (per MSA Section 4)", "", "of monthly cost", "", omSubsidy]);
+    // A=No, B=Description, C=Rate, D=Unit, E=Qty, F=Amount
+    const omRow = ws.addRow([lineNo++, "Operations Manager Salary Subsidy (per MSA Section 4)", "", "of monthly cost", "", omSubsidy]);
     omRow.height = 15;
     omRow.eachCell((cell, col) => {
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF5F3FF" } };
       cell.font = { size: 10, color: { argb: "FF7C3AED" } };
-      cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
+      cell.alignment = { vertical: "middle", horizontal: col <= 2 ? "left" : "right" };
       applyBorder(cell);
     });
-    omRow.getCell(7).numFmt = "$#,##0.00";
+    omRow.getCell(6).numFmt = "$#,##0.00";
 
-    const omSub = ws.addRow(["", "", "", "", "", "Subtotal — OM Subsidy", omSubsidy]);
+    const omSub = ws.addRow(["", "", "", "", "Subtotal — OM Subsidy", omSubsidy]);
     omSubtotalRowNum = omSub.number;
     omSub.height = 15;
     omSub.eachCell((cell, col) => {
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEDE9FE" } };
-      cell.font = { bold: col >= 6, size: 10, color: { argb: "FF6D28D9" } };
+      cell.font = { bold: col >= 5, size: 10, color: { argb: "FF6D28D9" } };
       cell.alignment = { vertical: "middle", horizontal: "right" };
       applyBorder(cell);
     });
-    omSub.getCell(7).numFmt = "$#,##0.00";
+    omSub.getCell(6).numFmt = "$#,##0.00";
   }
 
   // ── Office Sublease section ──
   let slSubtotalRowNum = -1;
   if (subleaseTotal > 0) {
-    const slSec = ws.addRow([`${sectionNo}. Office Sublease`]);
+    const slSec = ws.addRow(["Office Sublease"]);
     slSec.height = 16; merge(slSec.number);
     Object.assign(slSec.getCell(1), {
       font: { bold: true, size: 10, color: { argb: C.sectionFont } },
       fill: { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF3CD" } },
       alignment: { vertical: "middle", indent: 1 },
     }); applyBorder(slSec.getCell(1), "medium");
-    sectionNo++;
 
     const slStyle = (row: ExcelJS.Row) => {
       row.height = 15;
       row.eachCell((cell, col) => {
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF8E1" } };
         cell.font = { size: 10, color: { argb: "FFB45309" } };
-        cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
+        cell.alignment = { vertical: "middle", horizontal: col <= 2 ? "left" : "right" };
         applyBorder(cell);
       });
     };
 
     if (subleaseBreakdown) {
       const rentAmt = subleaseBreakdown.rentQty * subleaseBreakdown.rentRate;
-      const r1sl = ws.addRow([lineNo++, "Rent", "Monthly Office Rent (per MSA Section 3.2)", `$${subleaseBreakdown.rentRate.toLocaleString()} / month`, "month", subleaseBreakdown.rentQty, rentAmt]);
-      slStyle(r1sl); r1sl.getCell(6).numFmt = "#,##0"; r1sl.getCell(7).numFmt = "$#,##0.00";
+      const r1sl = ws.addRow([lineNo++, "Monthly Office Rent (per MSA Section 3.2)", `$${subleaseBreakdown.rentRate.toLocaleString()} / month`, "month", subleaseBreakdown.rentQty, rentAmt]);
+      slStyle(r1sl); r1sl.getCell(5).numFmt = "#,##0"; r1sl.getCell(6).numFmt = "$#,##0.00";
       const opAmt = subleaseBreakdown.opQty * subleaseBreakdown.opRate;
-      const r2sl = ws.addRow([lineNo++, "Rent", "Operating Cost Reimbursement (per MSA Section 3.3)", `$${subleaseBreakdown.opRate.toFixed(2)} per sq ft / month`, "sq ft", subleaseBreakdown.opQty, opAmt]);
-      slStyle(r2sl); r2sl.getCell(6).numFmt = "#,##0"; r2sl.getCell(7).numFmt = "$#,##0.00";
+      const r2sl = ws.addRow([lineNo++, "Operating Cost Reimbursement (per MSA Section 3.3)", `$${subleaseBreakdown.opRate.toFixed(2)} per sq ft / month`, "sq ft", subleaseBreakdown.opQty, opAmt]);
+      slStyle(r2sl); r2sl.getCell(5).numFmt = "#,##0"; r2sl.getCell(6).numFmt = "$#,##0.00";
     } else {
-      const slRow = ws.addRow([lineNo++, "Rent", "Office Sublease — Monthly Fixed Charges", "", "monthly", 1, subleaseTotal]);
-      slStyle(slRow); slRow.getCell(6).numFmt = "#,##0"; slRow.getCell(7).numFmt = "$#,##0.00";
+      const slRow = ws.addRow([lineNo++, "Office Sublease — Monthly Fixed Charges", "", "monthly", 1, subleaseTotal]);
+      slStyle(slRow); slRow.getCell(5).numFmt = "#,##0"; slRow.getCell(6).numFmt = "$#,##0.00";
     }
 
-    const slSub = ws.addRow(["", "", "", "", "", "Subtotal — Office Sublease", subleaseTotal]);
+    const slSub = ws.addRow(["", "", "", "", "Subtotal — Office Sublease", subleaseTotal]);
     slSubtotalRowNum = slSub.number;
     slSub.height = 15;
     slSub.eachCell((cell, col) => {
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF8E1" } };
-      cell.font = { bold: col >= 6, size: 10, color: { argb: "FFB45309" } };
+      cell.font = { bold: col >= 5, size: 10, color: { argb: "FFB45309" } };
       cell.alignment = { vertical: "middle", horizontal: "right" };
       applyBorder(cell);
     });
-    slSub.getCell(7).numFmt = "$#,##0.00";
+    slSub.getCell(6).numFmt = "$#,##0.00";
   }
 
   // ── Grand Total ──
   const grandTotalResult = invoices.reduce((s, inv) => s + inv.total, 0) + omSubsidy + subleaseTotal;
   const allSubtotalRefs = [
-    ...custSubtotalRows.map(r => `G${r}`),
-    ...(omSubtotalRowNum > 0 ? [`G${omSubtotalRowNum}`] : []),
-    ...(slSubtotalRowNum > 0 ? [`G${slSubtotalRowNum}`] : []),
+    ...catSubtotalRows.map(r => `F${r}`),
+    ...(omSubtotalRowNum > 0 ? [`F${omSubtotalRowNum}`] : []),
+    ...(slSubtotalRowNum > 0 ? [`F${slSubtotalRowNum}`] : []),
   ].join("+");
-  const gt = ws.addRow(["", "", "", "", "", "GRAND TOTAL",
+  const gt = ws.addRow(["", "", "", "", "GRAND TOTAL",
     allSubtotalRefs ? { formula: `=${allSubtotalRefs}`, result: grandTotalResult } : grandTotalResult,
   ]);
   gt.height = 22;
   gt.eachCell((cell, col) => {
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.greenBg } };
     applyBorder(cell, "medium");
-    if (col >= 6) {
+    if (col >= 5) {
       cell.font = { bold: true, size: 12, color: { argb: C.white } };
       cell.alignment = { vertical: "middle", horizontal: "right" };
     }
   });
-  gt.getCell(7).numFmt = "$#,##0.00";
+  gt.getCell(6).numFmt = "$#,##0.00";
 
   ws.addRow([]);
   const genR = ws.addRow([`Generated: ${new Date().toLocaleDateString("en-US")}`]);
