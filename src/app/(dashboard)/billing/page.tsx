@@ -2020,7 +2020,29 @@ function addGroupSummaryFormulaSheet(
   subleaseBreakdown?: { rentQty: number; rentRate: number; opQty: number; opRate: number }
 ): void {
   const ws = wb.addWorksheet("Summary");
-  ws.columns = COL_WIDTHS_7.map((w) => ({ width: w }));
+
+  // Summary-specific column widths (wider Description to prevent truncation)
+  // No. | Category | Description | Rate | Unit | Qty | Amount
+  ws.columns = [
+    { width: 5  },  // A — No.
+    { width: 18 },  // B — Category
+    { width: 52 },  // C — Description  (long strings like "40' HC Container Floor Loaded")
+    { width: 14 },  // D — Rate
+    { width: 14 },  // E — Unit
+    { width: 10 },  // F — Qty
+    { width: 16 },  // G — Amount
+  ];
+
+  // Page setup: landscape, fit to 1 page wide (unlimited height)
+  ws.pageSetup = {
+    orientation:   "landscape",
+    fitToPage:     true,
+    fitToWidth:    1,
+    fitToHeight:   0,
+    paperSize:     9,   // A4
+    margins: { left: 0.5, right: 0.5, top: 0.75, bottom: 0.75, header: 0.3, footer: 0.3 },
+  };
+
   const merge = (rowNum: number) => ws.mergeCells(`A${rowNum}:${LAST_COL_LETTER}${rowNum}`);
 
   // ── Company header ──
@@ -2052,6 +2074,8 @@ function addGroupSummaryFormulaSheet(
   // ── Column headers ──
   const hdr = ws.addRow(["No.", "Category", "Description", "Rate", "Unit", "Qty", "Amount"]);
   hdr.height = 18;
+  // Freeze pane: keep header rows visible while scrolling
+  ws.views = [{ state: "frozen", ySplit: hdr.number }];
   hdr.eachCell((cell, col) => {
     cell.font = { bold: true, color: { argb: C.white }, size: 10 };
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
