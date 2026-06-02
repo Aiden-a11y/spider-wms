@@ -1622,6 +1622,10 @@ function addInventoryDetailSheets(
     wsAvg.getRow(r.number).getCell(4).numFmt = "#,##0.00";
   });
 
+  // ── Raw inventory evidence sheets (all customers combined, 3 sheets: 15th / Last / Avg summary) ──
+  if (rawRows15   && rawRows15.length   > 0) addStorageRawSheet(wb, date1, rawRows15);
+  if (rawRowsLast && rawRowsLast.length > 0) addStorageRawSheet(wb, date2, rawRowsLast);
+
   return { avgSheetName, snap1SheetName: snap1Name, snap2SheetName: snap2Name };
 }
 
