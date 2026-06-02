@@ -30,6 +30,7 @@ import {
   FileText,
   AlertTriangle,
   SlidersHorizontal,
+  BookOpen,
 } from "lucide-react";
 
 type NavChild = { href: string; label: string; icon: React.ElementType };
@@ -199,6 +200,19 @@ export default function Sidebar() {
           );
         })}
       </nav>
+
+      {/* Manual link */}
+      <div className="px-3 pb-2">
+        <a
+          href="/manual.html"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-3 px-3 py-2 w-full text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg text-sm transition-colors"
+        >
+          <BookOpen className="w-4 h-4 flex-shrink-0" />
+          User Manual
+        </a>
+      </div>
 
       {/* User */}
       <div className="px-3 py-4 border-t border-slate-800">
