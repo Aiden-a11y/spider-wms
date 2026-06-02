@@ -1638,6 +1638,8 @@ type DataSheetRefs = {
   storageAvgSheet?: string;
   /** When set, use SUMIF/COUNTIF to filter rows for this customer in combined sheets */
   filterCustomer?: string;
+  /** When true, SUM entire column from combined sheets (all customers — no filter) */
+  allCustomers?: boolean;
 };
 
 /** Return ExcelJS cell value for a qty cell: formula if data sheet exists, else fallback number */
@@ -1705,6 +1707,58 @@ function getQtyFormula(
     }
     if (itemId === "b2c_pick_piece" && c) {
       return { formula: `=SUMIF('${c}'!A:A,"${cust}",'${c}'!F:F)`, result: fallbackQty };
+    }
+  } else if (refs.allCustomers) {
+    // ── Combined sheets: SUM entire column across ALL customers (no filter) ──
+    // B2B combined layout: A=Customer B=OrderCode C=Date D=Pick/Piece E=Pick/Carton F=Pick/Pallet
+    //   G=Out/Carton H=Out/Pallet I=Supplies J=Packing K=Palletize L=Labels M=Inserts N=Labor O=OT P=Wknd
+    const b2bCombinedColMap: Record<string, string> = {
+      b2b_pick_piece:    "D",
+      b2b_pick_carton:   "E",
+      b2b_pick_pallet:   "F",
+      b2b_carton_packing:"J",
+      b2b_palletizing:   "K",
+      b2b_label:         "L",
+      b2b_insert:        "M",
+      labor_regular:     "N",
+      labor_ot_weekday:  "O",
+      labor_ot_weekend:  "P",
+    };
+    if (b2bCombinedColMap[itemId] && b) {
+      const col = b2bCombinedColMap[itemId];
+      return { formula: `=SUM('${b}'!${col}2:${col}9999)`, result: fallbackQty };
+    }
+    if (itemId === "b2b_order" && b) {
+      return { formula: `=COUNTA('${b}'!B2:B9999)`, result: fallbackQty };
+    }
+
+    // Inbound combined layout: A=Customer B=OrderCode C=PO/Ref D=InDate E=Status F=Type G=ItemQty
+    //   H=Carton I=Pallet J=20'Pal K=40'Pal L=40HC'Pal M=20'Flr N=40'Flr O=40HC'Flr P=Labor
+    const ibCombinedColMap: Record<string, string> = {
+      inbound_carton:           "H",
+      inbound_pallet:           "I",
+      inbound_20ft_palletized:  "J",
+      inbound_40ft_palletized:  "K",
+      inbound_40hc_palletized:  "L",
+      inbound_20ft_floor:       "M",
+      inbound_40ft_floor:       "N",
+      inbound_40hc_floor:       "O",
+      inbound_labor:            "P",
+    };
+    if (ibCombinedColMap[itemId] && ib) {
+      const col = ibCombinedColMap[itemId];
+      return { formula: `=SUM('${ib}'!${col}2:${col}9999)`, result: fallbackQty };
+    }
+    if (itemId === "inbound_order" && ib) {
+      return { formula: `=COUNTA('${ib}'!B2:B9999)`, result: fallbackQty };
+    }
+
+    // B2C combined layout: A=Customer B=OrderCode C=Date D=TotalQty E=+1 Order F=Extra Picks
+    if (itemId === "b2c_order" && c) {
+      return { formula: `=COUNTA('${c}'!B2:B9999)`, result: fallbackQty };
+    }
+    if (itemId === "b2c_pick_piece" && c) {
+      return { formula: `=SUM('${c}'!F2:F9999)`, result: fallbackQty };
     }
   } else {
     // ── Single-customer sheets (no filterCustomer) ──
@@ -2102,6 +2156,16 @@ function addGroupSummaryFormulaSheet(
     }
   }
 
+  // ── Build combined refs — points to raw data sheets, sums ALL customers ──
+  const anyRefs = Object.values(refsPerCustomer)[0] ?? {};
+  const combinedRefs: DataSheetRefs = {
+    allCustomers:    true,
+    b2bSheet:        anyRefs.b2bSheet,
+    inboundSheet:    anyRefs.inboundSheet,
+    b2cSheet:        anyRefs.b2cSheet,
+    storageAvgSheet: anyRefs.storageAvgSheet,
+  };
+
   let lineNo = 1;
   const catSubtotalRows: number[] = [];
 
@@ -2122,27 +2186,33 @@ function addGroupSummaryFormulaSheet(
     let catFirst = -1, catLast = -1;
 
     for (const item of catItems) {
-      const qty    = Math.round(item.totalQty * 100) / 100;
-      const rate   = item.costPlus ? "cost+10%" : item.rate;
-      const rowNum = ws.rowCount + 1;
+      const fallbackQty = Math.round(item.totalQty * 100) / 100;
+      const isZero      = fallbackQty === 0;
+      const rate        = item.costPlus ? "cost+10%" : item.rate;
+      const rowNum      = ws.rowCount + 1;
+
+      // Qty — formula linking to combined raw-data sheet when available
+      const qtyVal = getQtyFormula(item.id, combinedRefs, fallbackQty);
+
+      // Amount — always =E*C (or cost+10% for disposal)
       const amt: number | ExcelJS.CellFormulaValue = item.costPlus
-        ? qty * 1.1
-        : { formula: `=E${rowNum}*C${rowNum}`, result: qty * item.rate };
+        ? { formula: `=E${rowNum}*1.1`, result: fallbackQty * 1.1 }
+        : { formula: `=E${rowNum}*C${rowNum}`, result: fallbackQty * item.rate };
 
       // A=No, B=Description, C=Rate, D=Unit, E=Qty, F=Amount
-      const r = ws.addRow([lineNo, item.description, rate, item.unit, qty, amt]);
+      const r = ws.addRow([lineNo, item.description, rate, item.unit, qtyVal, amt]);
       r.height = 15;
       const isAlt = lineNo % 2 === 0;
       r.eachCell((cell, col) => {
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: qty === 0 ? C.subtotalBg : (isAlt ? C.rowAlt : C.white) } };
-        cell.font = { size: 10, color: { argb: qty === 0 ? C.border : C.black } };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: isZero ? C.subtotalBg : (isAlt ? C.rowAlt : C.white) } };
+        cell.font = { size: 10, color: { argb: isZero ? C.border : C.black } };
         cell.alignment = { vertical: "middle", horizontal: col <= 2 ? "left" : "right" };
         applyBorder(cell);
       });
       // Rate cell teal
-      r.getCell(3).font = { size: 10, color: { argb: qty === 0 ? C.border : C.teal } };
+      r.getCell(3).font = { size: 10, color: { argb: isZero ? C.border : C.teal } };
       if (!item.costPlus) r.getCell(3).numFmt = "$#,##0.00";
-      r.getCell(5).numFmt = Number.isInteger(qty) ? "#,##0" : "#,##0.00";
+      r.getCell(5).numFmt = Number.isInteger(fallbackQty) ? "#,##0" : "#,##0.00";
       r.getCell(6).numFmt = "$#,##0.00";
 
       if (catFirst < 0) catFirst = r.number;
