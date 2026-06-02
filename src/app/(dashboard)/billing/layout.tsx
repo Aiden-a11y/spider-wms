@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect } from "react";
 import { Receipt, SlidersHorizontal } from "lucide-react";
+import { useAuth } from "@/contexts/auth-context";
 
 const TABS = [
   { href: "/billing",       label: "Invoices",     icon: Receipt },
@@ -11,6 +13,15 @@ const TABS = [
 
 export default function BillingLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const { user } = useAuth();
+
+  // Block Staff-level users from accessing billing via direct URL
+  useEffect(() => {
+    if (user?.level?.toLowerCase() === "staff") {
+      router.replace("/dashboard");
+    }
+  }, [user, router]);
 
   return (
     <div className="flex flex-col min-h-full">

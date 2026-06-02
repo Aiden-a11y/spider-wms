@@ -98,6 +98,12 @@ const nav: NavItem[] = [
   },
 ];
 
+/** Staff-level users cannot see the Billing section */
+function canSeeBilling(level?: string): boolean {
+  if (!level) return true; // unknown level → show (fail-open)
+  return level.toLowerCase() !== "staff";
+}
+
 export default function Sidebar() {
   const pathname = usePathname();
   const { user, logout } = useAuth();
@@ -133,7 +139,7 @@ export default function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-0.5">
-        {nav.map((item) => {
+        {nav.filter((item) => item.label !== "Billing" || canSeeBilling(user?.level)).map((item) => {
           if (isGroup(item)) {
             const isGroupActive = item.children.some(
               (c) => pathname === c.href || pathname.startsWith(c.href + "/")

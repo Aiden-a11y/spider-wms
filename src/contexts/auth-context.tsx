@@ -7,6 +7,7 @@ interface AuthUser {
   userId: string;
   token: string;
   name?: string;
+  level?: string;   // "Manager" | "Admin" | "Staff" | ...
 }
 
 interface AuthContextValue {
@@ -55,7 +56,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!token) throw new Error("Token not found in response");
 
     const name = json?.data?.name ?? json?.data?.userName ?? userId;
-    const authUser: AuthUser = { userId, token, name };
+    // Try common field names for user level/role
+    const level =
+      json?.data?.level ??
+      json?.data?.userLevel ??
+      json?.data?.memberLevel ??
+      json?.data?.role ??
+      json?.data?.authority ??
+      json?.level ??
+      undefined;
+    const authUser: AuthUser = { userId, token, name, level };
 
     sessionStorage.setItem("wms_auth", JSON.stringify(authUser));
     setUser(authUser);
