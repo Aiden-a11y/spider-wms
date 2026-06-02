@@ -794,14 +794,306 @@ function getInboundDefs(o: Record<string, unknown>): Record<string, number> {
   return { inbound_40ft_palletized: 1 };
 }
 
+// ─── Combined (multi-customer) detail sheets ──────────────────────────────────
+
+/** Add a combined B2B sheet (all customers). Customer in col A, data shifted right by 1. */
+function addCombinedB2BSheet(
+  wb: ExcelJS.Workbook,
+  allData: { custCode: string; orders: Record<string, unknown>[]; orderEdits: Record<string, Record<string, number>> }[]
+): { sheetName: string } {
+  const sheetName = "B2B";
+  const ws = wb.addWorksheet(sheetName);
+  ws.columns = [
+    { width: 14 }, // A: Customer
+    { width: 18 }, // B: Order Code
+    { width: 12 }, // C: Date
+    { width: 11 }, // D: Pick/Piece
+    { width: 12 }, // E: Pick/Carton
+    { width: 12 }, // F: Pick/Pallet
+    { width: 11 }, // G: Out/Carton
+    { width: 11 }, // H: Out/Pallet
+    { width: 11 }, // I: Supplies
+    { width: 11 }, // J: Packing
+    { width: 11 }, // K: Palletize
+    { width: 11 }, // L: Labels
+    { width: 11 }, // M: Inserts
+    { width: 11 }, // N: Labor Hrs
+    { width: 11 }, // O: Labor OT
+    { width: 12 }, // P: Labor Wknd
+  ];
+  const headers = [
+    "Customer","Order Code","Date","Pick/Piece","Pick/Carton","Pick/Pallet",
+    "Out/Carton","Out/Pallet","Supplies","Packing✓","Palletize✓",
+    "Labels","Inserts","Labor Hrs","Labor OT","Labor Wknd",
+  ];
+  const hdrRow = ws.addRow(headers);
+  hdrRow.height = 16;
+  hdrRow.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: C.white }, size: 10 };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
+    cell.alignment = { vertical: "middle", horizontal: "center" };
+    applyBorder(cell, "medium");
+  });
+
+  let globalRowIdx = 0;
+  for (const { custCode, orders, orderEdits } of allData) {
+    for (const order of orders) {
+      const code  = String(order.shippingOrderCode ?? order.orderCode ?? "");
+      const date  = String(order.outDate ?? order.deliveryDate ?? order.shippingDate ?? order.outboundDate ?? "");
+      const tasks = parseTaskComment(String(order.comment ?? ""));
+      const ov    = orderEdits[code] ?? {};
+
+      const pp       = ov["b2b_pick_piece"]    ?? tasks["Picking per Piece"]    ?? 0;
+      const pc       = ov["b2b_pick_carton"]   ?? tasks["Picking per Carton"]   ?? 0;
+      const ppl      = ov["b2b_pick_pallet"]   ?? tasks["Picking per Pallet"]   ?? 0;
+      const oc       = tasks["Out per Carton"] ?? 0;
+      const op       = tasks["Out per Pallet"] ?? 0;
+      const supplies = tasks["Supplies"]       ?? 0;
+      const packing  = ov["b2b_carton_packing"] ?? ((oc > 0 && oc !== pc) ? supplies : 0);
+      const palletize = ov["b2b_palletizing"]  ?? (op > 0 && op !== ppl ? op : 0);
+      const labels    = ov["b2b_label"]         ?? ((tasks["Labels"] ?? 0) + (tasks["Amazon Labels"] ?? 0) + (tasks["FBA Labeling"] ?? 0));
+      const inserts   = ov["b2b_insert"]        ?? (tasks["Inserts"] ?? 0);
+      const laborReg  = ov["labor_regular"]     ?? (tasks["Labor Hours"] ?? 0);
+      const laborOT   = ov["labor_ot_weekday"]  ?? (tasks["Labor Hours (OT)"] ?? 0);
+      const laborWknd = ov["labor_ot_weekend"]  ?? (tasks["Labor Hours (Weekend/Holiday)"] ?? 0);
+
+      const r = ws.addRow([
+        custCode, code, date, pp, pc, ppl, oc, op, supplies, packing, palletize,
+        labels, inserts, laborReg, laborOT, laborWknd,
+      ]);
+      r.height = 15;
+      r.eachCell((cell, col) => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: globalRowIdx % 2 === 0 ? C.white : C.rowAlt } };
+        cell.font = { size: 10 };
+        cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
+        applyBorder(cell);
+      });
+      globalRowIdx++;
+    }
+  }
+
+  // TOTALS row
+  const lastDataRow = ws.rowCount;
+  if (lastDataRow >= 2) {
+    const totRow = ws.addRow([
+      "TOTAL", "", "",
+      ...["D","E","F","G","H","I","J","K","L","M","N","O","P"].map(col => ({
+        formula: `=SUM(${col}2:${col}${lastDataRow})`, result: 0,
+      })),
+    ]);
+    totRow.height = 16;
+    ws.mergeCells(totRow.number, 1, totRow.number, 3);
+    totRow.eachCell({ includeEmpty: true }, (cell, col) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.subtotalBg } };
+      cell.font = { bold: true, size: 10, color: { argb: col >= 4 ? "FF1E40AF" : "FF374151" } };
+      cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "center" : "right" };
+      applyBorder(cell, "medium");
+    });
+  }
+
+  return { sheetName };
+}
+
+/** Add a combined Inbound sheet (all customers). Customer in col A, data shifted right by 1. */
+function addCombinedInboundSheet(
+  wb: ExcelJS.Workbook,
+  allData: { custCode: string; orders: Record<string, unknown>[]; orderEdits: Record<string, Record<string, number>> }[]
+): { sheetName: string } {
+  const sheetName = "Inbound";
+  const ws = wb.addWorksheet(sheetName);
+  ws.columns = [
+    { width: 14 }, // A: Customer
+    { width: 22 }, // B: Order Code
+    { width: 14 }, // C: PO / Ref
+    { width: 12 }, // D: In Date
+    { width: 8  }, // E: Status
+    { width: 20 }, // F: Type
+    { width: 10 }, // G: Item Qty
+    { width: 9  }, // H: Carton
+    { width: 8  }, // I: Pallet
+    { width: 8  }, // J: 20'Pal
+    { width: 8  }, // K: 40'Pal
+    { width: 9  }, // L: 40HC'Pal
+    { width: 8  }, // M: 20'Flr
+    { width: 8  }, // N: 40'Flr
+    { width: 9  }, // O: 40HC'Flr
+    { width: 9  }, // P: Labor Hrs
+  ];
+  const headers = [
+    "Customer","Order Code","PO / Ref","In Date","Status","Type","Item Qty",
+    "Carton","Pallet","20'Pal","40'Pal","40HC'Pal","20'Flr","40'Flr","40HC'Flr","Labor Hrs",
+  ];
+  const hdr = ws.addRow(headers);
+  hdr.height = 17;
+  hdr.eachCell((cell, col) => {
+    const isBilling = col >= 8;
+    cell.font = { bold: true, color: { argb: C.white }, size: 10 };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: isBilling ? C.blue : "FF374151" } };
+    cell.alignment = { vertical: "middle", horizontal: col <= 7 ? "left" : "center" };
+    applyBorder(cell, "medium");
+  });
+
+  const IB_KEYS = [
+    "inbound_carton","inbound_pallet",
+    "inbound_20ft_palletized","inbound_40ft_palletized","inbound_40hc_palletized",
+    "inbound_20ft_floor","inbound_40ft_floor","inbound_40hc_floor",
+    "inbound_labor",
+  ] as const;
+
+  let globalRowIdx = 0;
+  for (const { custCode, orders, orderEdits } of allData) {
+    for (const order of orders) {
+      const code    = String(order.receiveOrderCode ?? order.orderCode ?? "");
+      const poRef   = String(order.poNo ?? order.poNumber ?? order.referenceNo ?? "");
+      const inDate  = String(order.inDate ?? order.receiveDate ?? order.orderDate ?? "");
+      const status  = String(order.status ?? order.orderStatus ?? "");
+      const type    = String(order.inboundType ?? order.receiveType ?? "");
+      const itemQty = Number(order.totalQty ?? order.itemCount ?? 0);
+      const ov      = orderEdits[code] ?? {};
+      const defs    = getInboundDefs(order);
+      const val     = (key: string) => ov[key] ?? defs[key] ?? 0;
+
+      const r = ws.addRow([
+        custCode, code, poRef, inDate, status, type,
+        itemQty || null,
+        val("inbound_carton")          || null,
+        val("inbound_pallet")          || null,
+        val("inbound_20ft_palletized") || null,
+        val("inbound_40ft_palletized") || null,
+        val("inbound_40hc_palletized") || null,
+        val("inbound_20ft_floor")      || null,
+        val("inbound_40ft_floor")      || null,
+        val("inbound_40hc_floor")      || null,
+        val("inbound_labor")           || null,
+      ]);
+      r.height = 15;
+
+      const isContainer = /container|cont/i.test(type);
+      const rowBg = globalRowIdx % 2 === 0 ? C.white : C.rowAlt;
+      const containerBg = "FFF8F9FA";
+
+      r.eachCell({ includeEmpty: true }, (cell, col) => {
+        cell.font = { size: 10 };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: isContainer ? containerBg : rowBg } };
+        if (col <= 7) {
+          cell.alignment = { vertical: "middle", horizontal: col === 7 ? "right" : "left" };
+          cell.font = { size: 10, color: { argb: col === 2 ? "FF2563EB" : "FF374151" } };
+        } else {
+          cell.alignment = { vertical: "middle", horizontal: "right" };
+          const key = IB_KEYS[col - 8];
+          const isOverridden = key && key in ov;
+          const isBlue = col <= 9; // Carton (H) and Pallet (I)
+          if (isOverridden) {
+            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEF9C3" } };
+            cell.font = { size: 10, bold: true, color: { argb: isBlue ? "FF1D4ED8" : "FF92400E" } };
+          } else if (cell.value != null && cell.value !== 0) {
+            cell.font = { size: 10, color: { argb: isBlue ? "FF2563EB" : col === 16 ? "FFC2410C" : "FF374151" } };
+          } else {
+            cell.font = { size: 10, color: { argb: "FFCBD5E1" } };
+          }
+        }
+        applyBorder(cell);
+      });
+      globalRowIdx++;
+    }
+  }
+
+  // TOTALS row
+  const lastDataRow = ws.rowCount;
+  if (lastDataRow >= 2) {
+    const totRow = ws.addRow([
+      "TOTAL (billed)", "", "", "", "", "", "",
+      ...["H","I","J","K","L","M","N","O","P"].map(col => ({
+        formula: `=SUM(${col}2:${col}${lastDataRow})`, result: 0,
+      })),
+    ]);
+    totRow.height = 16;
+    ws.mergeCells(totRow.number, 1, totRow.number, 7);
+    totRow.eachCell({ includeEmpty: true }, (cell, col) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDBEAFE" } };
+      cell.font = { bold: true, size: 10, color: { argb: col >= 8 ? "FF1E40AF" : "FF374151" } };
+      cell.alignment = { vertical: "middle", horizontal: col <= 7 ? (col === 1 ? "right" : "left") : "right" };
+      applyBorder(cell, "medium");
+    });
+  }
+
+  return { sheetName };
+}
+
+/** Add a combined B2C sheet (all customers). Customer in col A, data shifted right by 1. */
+function addCombinedB2CSheet(
+  wb: ExcelJS.Workbook,
+  allData: { custCode: string; orders: Record<string, unknown>[] }[]
+): { sheetName: string } {
+  const sheetName = "B2C";
+  const ws = wb.addWorksheet(sheetName);
+  ws.columns = [
+    { width: 14 }, // A: Customer
+    { width: 18 }, // B: Order Code
+    { width: 12 }, // C: Date
+    { width: 12 }, // D: Total Qty
+    { width: 12 }, // E: +1 Order
+    { width: 12 }, // F: Extra Picks
+  ];
+  const hdrRow = ws.addRow(["Customer", "Order Code", "Date", "Total Qty", "+1 Order", "Extra Picks"]);
+  hdrRow.height = 16;
+  hdrRow.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: C.white }, size: 10 };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
+    cell.alignment = { vertical: "middle", horizontal: "center" };
+    applyBorder(cell, "medium");
+  });
+
+  let globalRowIdx = 0;
+  for (const { custCode, orders } of allData) {
+    for (const order of orders) {
+      const code  = String(order.shippingOrderCode ?? order.orderCode ?? "");
+      const date  = String(order.outDate ?? order.deliveryDate ?? order.shippingDate ?? "");
+      const qty   = Number(order.totalQty ?? order.orderQty ?? 0);
+      const extra = Math.max(0, qty - 5);
+      const r = ws.addRow([custCode, code, date, qty, 1, extra]);
+      r.height = 15;
+      r.eachCell((cell, col) => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: globalRowIdx % 2 === 0 ? C.white : C.rowAlt } };
+        cell.font = { size: 10 };
+        cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
+        applyBorder(cell);
+      });
+      globalRowIdx++;
+    }
+  }
+
+  // TOTALS row
+  const lastDataRow = ws.rowCount;
+  if (lastDataRow >= 2) {
+    const totRow = ws.addRow([
+      "TOTAL", "", "",
+      { formula: `=SUM(D2:D${lastDataRow})`, result: 0 },
+      { formula: `=SUM(E2:E${lastDataRow})`, result: 0 },
+      { formula: `=SUM(F2:F${lastDataRow})`, result: 0 },
+    ]);
+    totRow.height = 16;
+    ws.mergeCells(totRow.number, 1, totRow.number, 3);
+    totRow.eachCell({ includeEmpty: true }, (cell, col) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.subtotalBg } };
+      cell.font = { bold: true, size: 10, color: { argb: col >= 4 ? "FF1E40AF" : "FF374151" } };
+      cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "center" : "right" };
+      applyBorder(cell, "medium");
+    });
+  }
+
+  return { sheetName };
+}
+
 /** Add a [CustCode]_B2B sheet and return { sheetName, rowCount } */
 function addB2BDetailSheet(
   wb: ExcelJS.Workbook,
   custCode: string,
   orders: Record<string, unknown>[],
-  orderEdits: Record<string, Record<string, number>>
+  orderEdits: Record<string, Record<string, number>>,
+  sheetNameOverride?: string
 ): { sheetName: string; rowCount: number } {
-  const sheetName = `${custCode}_B2B`.slice(0, 31);
+  const sheetName = (sheetNameOverride ?? `${custCode}_B2B`).slice(0, 31);
   const ws = wb.addWorksheet(sheetName);
   ws.columns = [
     { width: 18 }, // A: Order Code
@@ -885,9 +1177,10 @@ function addInboundDetailSheet(
   wb: ExcelJS.Workbook,
   custCode: string,
   orders: Record<string, unknown>[],
-  orderEdits: Record<string, Record<string, number>> = {}
+  orderEdits: Record<string, Record<string, number>> = {},
+  sheetNameOverride?: string
 ): { sheetName: string; rowCount: number; dataEndRow: number } {
-  const sheetName = `${custCode}_Inbound`.slice(0, 31);
+  const sheetName = (sheetNameOverride ?? `${custCode}_Inbound`).slice(0, 31);
   const ws = wb.addWorksheet(sheetName);
 
   // Column widths: A–F info, G–O billing quantities
@@ -1018,9 +1311,10 @@ function addInboundDetailSheet(
 function addB2CDetailSheet(
   wb: ExcelJS.Workbook,
   custCode: string,
-  orders: Record<string, unknown>[]
+  orders: Record<string, unknown>[],
+  sheetNameOverride?: string
 ): { sheetName: string; rowCount: number } {
-  const sheetName = `${custCode}_B2C`.slice(0, 31);
+  const sheetName = (sheetNameOverride ?? `${custCode}_B2C`).slice(0, 31);
   const ws = wb.addWorksheet(sheetName);
   ws.columns = [
     { width: 18 }, // A: Order Code
@@ -1288,9 +1582,45 @@ function addInventoryDetailSheets(
   });
   [2, 3, 4].forEach(c => { wsAvg.getRow(totAvg.number).getCell(c).numFmt = "#,##0.00"; });
 
-  // Raw inventory sheets (근거 데이터 — SKU/qty per location)
-  if (rawRows15   && rawRows15.length   > 0) addStorageRawSheet(wb, `${sheetPrefix}${date1}`, rawRows15);
-  if (rawRowsLast && rawRowsLast.length > 0) addStorageRawSheet(wb, `${sheetPrefix}${date2}`, rawRowsLast);
+  // ── BILLED SUMMARY section (quick-reference at bottom of Storage_Avg) ──
+  wsAvg.addRow([]); // blank row
+
+  const summaryHdr = wsAvg.addRow(["BILLED SUMMARY"]);
+  summaryHdr.height = 16;
+  wsAvg.mergeCells(`A${summaryHdr.number}:D${summaryHdr.number}`);
+  Object.assign(summaryHdr.getCell(1), {
+    font: { bold: true, size: 11, color: { argb: C.white } },
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: C.navy } },
+    alignment: { horizontal: "center", vertical: "middle" },
+  });
+  applyBorder(summaryHdr.getCell(1), "medium");
+
+  // Sub-header
+  const summaryColHdr = wsAvg.addRow(["Location Type", "", "", "Average (Billed)"]);
+  summaryColHdr.height = 15;
+  wsAvg.mergeCells(`A${summaryColHdr.number}:C${summaryColHdr.number}`);
+  summaryColHdr.eachCell({ includeEmpty: true }, (cell) => {
+    cell.font = { bold: true, color: { argb: C.white }, size: 10 };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.blue } };
+    cell.alignment = { vertical: "middle", horizontal: "center" };
+    applyBorder(cell, "medium");
+  });
+
+  STORAGE_TEMPLATE_ROWS.forEach((tmpl, i) => {
+    const found = storageRows.find(r => r.key === tmpl.key);
+    const avg   = found?.avg ?? 0;
+    const dataRow = i + 3; // matching row in the main section above
+    const r = wsAvg.addRow([tmpl.label, "", "", { formula: `=AVERAGE(B${dataRow},C${dataRow})`, result: avg }]);
+    r.height = 14;
+    wsAvg.mergeCells(`A${r.number}:C${r.number}`);
+    r.eachCell({ includeEmpty: true }, (cell, col) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: i % 2 === 0 ? C.white : C.rowAlt } };
+      cell.font = { bold: col === 4, size: 10, color: { argb: avg === 0 ? C.border : (col === 4 ? C.teal : C.black) } };
+      cell.alignment = { vertical: "middle", horizontal: col === 1 ? "left" : "right" };
+      applyBorder(cell);
+    });
+    wsAvg.getRow(r.number).getCell(4).numFmt = "#,##0.00";
+  });
 
   return { avgSheetName, snap1SheetName: snap1Name, snap2SheetName: snap2Name };
 }
@@ -1302,6 +1632,8 @@ type DataSheetRefs = {
   inboundDataEndRow?: number; // last data row (excl. total row) so SUM doesn't double-count
   b2cSheet?: string;
   storageAvgSheet?: string;
+  /** When set, use SUMIF/COUNTIF to filter rows for this customer in combined sheets */
+  filterCustomer?: string;
 };
 
 /** Return ExcelJS cell value for a qty cell: formula if data sheet exists, else fallback number */
@@ -1315,48 +1647,108 @@ function getQtyFormula(
   const ibEnd = refs.inboundDataEndRow ?? 9999; // stop before TOTAL row
   const c = refs.b2cSheet;
   const s = refs.storageAvgSheet;
+  const cust = refs.filterCustomer; // when set, use SUMIF/COUNTIF for combined sheets
 
-  // B2B columns
-  const b2bColMap: Record<string, string> = {
-    b2b_pick_piece:    "C",
-    b2b_pick_carton:   "D",
-    b2b_pick_pallet:   "E",
-    b2b_carton_packing:"I",
-    b2b_palletizing:   "J",
-    b2b_label:         "K",
-    b2b_insert:        "L",
-    labor_regular:     "M",
-    labor_ot_weekday:  "N",
-    labor_ot_weekend:  "O",
-  };
-  if (b2bColMap[itemId] && b) {
-    return { formula: `=SUM('${b}'!${b2bColMap[itemId]}2:${b2bColMap[itemId]}9999)`, result: fallbackQty };
+  if (cust) {
+    // ── Combined sheets: customer in col A, data shifted +1 ──
+    // B2B combined: A=Customer B=OrderCode C=Date D=Pick/Piece E=Pick/Carton F=Pick/Pallet
+    //               G=Out/Carton H=Out/Pallet I=Supplies J=Packing K=Palletize L=Labels M=Inserts
+    //               N=Labor Hrs O=Labor OT P=Labor Wknd
+    const b2bCombinedColMap: Record<string, string> = {
+      b2b_pick_piece:    "D",
+      b2b_pick_carton:   "E",
+      b2b_pick_pallet:   "F",
+      b2b_carton_packing:"J",
+      b2b_palletizing:   "K",
+      b2b_label:         "L",
+      b2b_insert:        "M",
+      labor_regular:     "N",
+      labor_ot_weekday:  "O",
+      labor_ot_weekend:  "P",
+    };
+    if (b2bCombinedColMap[itemId] && b) {
+      const col = b2bCombinedColMap[itemId];
+      return { formula: `=SUMIF('${b}'!A:A,"${cust}",'${b}'!${col}:${col})`, result: fallbackQty };
+    }
+    if (itemId === "b2b_order" && b) {
+      return { formula: `=COUNTIF('${b}'!A:A,"${cust}")`, result: fallbackQty };
+    }
+
+    // Inbound combined: A=Customer B=OrderCode C=PO/Ref D=InDate E=Status F=Type G=ItemQty
+    //                   H=Carton I=Pallet J=20'Pal K=40'Pal L=40HC'Pal M=20'Flr N=40'Flr O=40HC'Flr P=Labor
+    const ibCombinedColMap: Record<string, string> = {
+      inbound_carton:           "H",
+      inbound_pallet:           "I",
+      inbound_20ft_palletized:  "J",
+      inbound_40ft_palletized:  "K",
+      inbound_40hc_palletized:  "L",
+      inbound_20ft_floor:       "M",
+      inbound_40ft_floor:       "N",
+      inbound_40hc_floor:       "O",
+      inbound_labor:            "P",
+    };
+    if (ibCombinedColMap[itemId] && ib) {
+      const col = ibCombinedColMap[itemId];
+      return { formula: `=SUMIF('${ib}'!A:A,"${cust}",'${ib}'!${col}:${col})`, result: fallbackQty };
+    }
+    if (itemId === "inbound_order" && ib) {
+      return { formula: `=COUNTIF('${ib}'!A:A,"${cust}")`, result: fallbackQty };
+    }
+
+    // B2C combined: A=Customer B=OrderCode C=Date D=TotalQty E=+1 Order F=Extra Picks
+    if (itemId === "b2c_order" && c) {
+      return { formula: `=COUNTIF('${c}'!A:A,"${cust}")`, result: fallbackQty };
+    }
+    if (itemId === "b2c_pick_piece" && c) {
+      return { formula: `=SUMIF('${c}'!A:A,"${cust}",'${c}'!F:F)`, result: fallbackQty };
+    }
+  } else {
+    // ── Single-customer sheets (no filterCustomer) ──
+    // B2B columns (original layout): A=OrderCode B=Date C=Pick/Piece D=Pick/Carton E=Pick/Pallet
+    //   F=Out/Carton G=Out/Pallet H=Supplies I=Packing J=Palletize K=Labels L=Inserts M=Labor N=OT O=Wknd
+    const b2bColMap: Record<string, string> = {
+      b2b_pick_piece:    "C",
+      b2b_pick_carton:   "D",
+      b2b_pick_pallet:   "E",
+      b2b_carton_packing:"I",
+      b2b_palletizing:   "J",
+      b2b_label:         "K",
+      b2b_insert:        "L",
+      labor_regular:     "M",
+      labor_ot_weekday:  "N",
+      labor_ot_weekend:  "O",
+    };
+    if (b2bColMap[itemId] && b) {
+      return { formula: `=SUM('${b}'!${b2bColMap[itemId]}2:${b2bColMap[itemId]}9999)`, result: fallbackQty };
+    }
+    if (itemId === "b2b_order" && b) {
+      return { formula: `=COUNTA('${b}'!A2:A9999)`, result: fallbackQty };
+    }
+
+    // Inbound columns: G=Carton H=Pallet I=20'Pal J=40'Pal K=40HC'Pal L=20'Flr M=40'Flr N=40HC'Flr O=Labor
+    const ibColMap: Record<string, string> = {
+      inbound_carton:           "G",
+      inbound_pallet:           "H",
+      inbound_20ft_palletized:  "I",
+      inbound_40ft_palletized:  "J",
+      inbound_40hc_palletized:  "K",
+      inbound_20ft_floor:       "L",
+      inbound_40ft_floor:       "M",
+      inbound_40hc_floor:       "N",
+      inbound_labor:            "O",
+    };
+    if (ibColMap[itemId] && ib) {
+      const col = ibColMap[itemId];
+      return { formula: `=SUM('${ib}'!${col}2:${col}${ibEnd})`, result: fallbackQty };
+    }
+    if (itemId === "b2c_order" && c) {
+      return { formula: `=COUNTA('${c}'!A2:A9999)`, result: fallbackQty };
+    }
+    if (itemId === "b2c_pick_piece" && c) {
+      return { formula: `=SUM('${c}'!E2:E9999)`, result: fallbackQty };
+    }
   }
-  if (itemId === "b2b_order" && b) {
-    return { formula: `=COUNTA('${b}'!A2:A9999)`, result: fallbackQty };
-  }
-  // Inbound columns: G=Carton H=Pallet I=20'Pal J=40'Pal K=40HC'Pal L=20'Flr M=40'Flr N=40HC'Flr O=Labor
-  const ibColMap: Record<string, string> = {
-    inbound_carton:           "G",
-    inbound_pallet:           "H",
-    inbound_20ft_palletized:  "I",
-    inbound_40ft_palletized:  "J",
-    inbound_40hc_palletized:  "K",
-    inbound_20ft_floor:       "L",
-    inbound_40ft_floor:       "M",
-    inbound_40hc_floor:       "N",
-    inbound_labor:            "O",
-  };
-  if (ibColMap[itemId] && ib) {
-    const col = ibColMap[itemId];
-    return { formula: `=SUM('${ib}'!${col}2:${col}${ibEnd})`, result: fallbackQty };
-  }
-  if (itemId === "b2c_order" && c) {
-    return { formula: `=COUNTA('${c}'!A2:A9999)`, result: fallbackQty };
-  }
-  if (itemId === "b2c_pick_piece" && c) {
-    return { formula: `=SUM('${c}'!E2:E9999)`, result: fallbackQty };
-  }
+
   // Storage → Storage_Avg!D{row} (rows 3–9: row 1=date label, row 2=col header, rows 3+ = data)
   const storageRowMap: Record<string, number> = {
     storage_bin:            3,
@@ -1555,19 +1947,20 @@ async function exportInvoiceToExcel(
   const refs: DataSheetRefs = {};
 
   // Add detail sheets if source data is available
+  // Single-customer export: use "B2B", "Inbound", "B2C" as sheet names (no custCode prefix)
   if (source) {
     if (source.b2b.length > 0) {
-      const { sheetName } = addB2BDetailSheet(wb, custCode, source.b2b, orderEdits ?? {});
-      refs.b2bSheet = sheetName;
+      const { sheetName: b2bSn } = addB2BDetailSheet(wb, custCode, source.b2b, orderEdits ?? {}, "B2B");
+      refs.b2bSheet = b2bSn;
     }
     if (source.receiving.length > 0) {
-      const { sheetName, dataEndRow } = addInboundDetailSheet(wb, custCode, source.receiving, orderEdits ?? {});
-      refs.inboundSheet = sheetName;
+      const { sheetName: ibSn, dataEndRow } = addInboundDetailSheet(wb, custCode, source.receiving, orderEdits ?? {}, "Inbound");
+      refs.inboundSheet = ibSn;
       refs.inboundDataEndRow = dataEndRow;
     }
     if (source.b2c.length > 0) {
-      const { sheetName } = addB2CDetailSheet(wb, custCode, source.b2c);
-      refs.b2cSheet = sheetName;
+      const { sheetName: b2cSn } = addB2CDetailSheet(wb, custCode, source.b2c, "B2C");
+      refs.b2cSheet = b2cSn;
     }
   }
   if (storageRows && storageRows.length > 0) {
@@ -1612,8 +2005,7 @@ async function exportAllToExcel(
   rawRows15?: StorageRawRow[],
   rawRowsLast?: StorageRawRow[],
   subleaseBreakdown?: { rentQty: number; rentRate: number; opQty: number; opRate: number },
-  omInputs?: OmSheetInputs,
-  perCustStorageMap?: Record<string, PerCustStorage>   // per-customer storage for separate avg sheets
+  omInputs?: OmSheetInputs
 ) {
   if (invoices.length === 0) return;
   const wb = new ExcelJS.Workbook();
@@ -1963,75 +2355,60 @@ async function exportAllToExcel(
   merge(genR.number);
   genR.getCell(1).font = { italic: true, size: 9, color: { argb: C.border } };
 
-  // ── Inventory storage sheets ──
-  // If per-customer storage map provided → individual sheets per customer (correct)
-  // Otherwise fall back to one shared sheet from aggregated storageRows
+  // ── Inventory storage sheet (shared, one Storage_Avg for all customers) ──
   let sharedStorageAvg: string | undefined;
-  if (!perCustStorageMap && storageRows && storageRows.length > 0) {
-    // Legacy / single-customer path: one shared Storage_Avg
+  if (storageRows && storageRows.length > 0) {
     const { avgSheetName } = addInventoryDetailSheets(wb, storageRows, snapDate1, snapDate2, rawRows15, rawRowsLast);
     sharedStorageAvg = avgSheetName;
-  } else if (perCustStorageMap) {
-    // Combined raw evidence sheets (full warehouse inventory, all customers)
-    if (rawRows15   && rawRows15.length   > 0) addStorageRawSheet(wb, snapDate1 ?? "Date1", rawRows15);
-    if (rawRowsLast && rawRowsLast.length > 0) addStorageRawSheet(wb, snapDate2 ?? "Date2", rawRowsLast);
   }
 
-  // ── One set of WMS data sheets + invoice sheet per customer ──
+  // ── Combined WMS detail sheets (one per type, all customers) ──
+  // Build combined data arrays from all customers who have source data
+  const allB2BData: { custCode: string; orders: Record<string, unknown>[]; orderEdits: Record<string, Record<string, number>> }[] = [];
+  const allInboundData: { custCode: string; orders: Record<string, unknown>[]; orderEdits: Record<string, Record<string, number>> }[] = [];
+  const allB2CData: { custCode: string; orders: Record<string, unknown>[] }[] = [];
+
+  for (const inv of invoices) {
+    const code   = inv.customer;
+    const source = wmsSourceMap?.[code] ?? null;
+    const edits  = orderEditsMap?.[code] ?? {};
+    if (!source) continue;
+    if (source.b2b.length > 0)       allB2BData.push({ custCode: code, orders: source.b2b, orderEdits: edits });
+    if (source.receiving.length > 0) allInboundData.push({ custCode: code, orders: source.receiving, orderEdits: edits });
+    if (source.b2c.length > 0)       allB2CData.push({ custCode: code, orders: source.b2c });
+  }
+
+  let combinedB2BSheet: string | undefined;
+  let combinedInboundSheet: string | undefined;
+  let combinedB2CSheet: string | undefined;
+
+  if (allB2BData.length > 0) {
+    const { sheetName } = addCombinedB2BSheet(wb, allB2BData);
+    combinedB2BSheet = sheetName;
+  }
+  if (allInboundData.length > 0) {
+    const { sheetName } = addCombinedInboundSheet(wb, allInboundData);
+    combinedInboundSheet = sheetName;
+  }
+  if (allB2CData.length > 0) {
+    const { sheetName } = addCombinedB2CSheet(wb, allB2CData);
+    combinedB2CSheet = sheetName;
+  }
+
+  // ── One invoice sheet per customer (SUMIF refs to combined sheets) ──
   type CustomerMeta = InvoiceSheetMeta & { inv: BillingInvoice; sheetName: string };
   const customerMetas: CustomerMeta[] = [];
   const usedNames = new Set<string>();
 
   for (const inv of invoices) {
     const custCode = inv.customer;
-    const source = wmsSourceMap?.[custCode] ?? null;
-    const custOrderEdits = orderEditsMap?.[custCode] ?? {};
-    const refs: DataSheetRefs = {};
+    const refs: DataSheetRefs = { filterCustomer: custCode };
 
-    if (source) {
-      if (source.b2b.length > 0) {
-        const { sheetName } = addB2BDetailSheet(wb, custCode, source.b2b, custOrderEdits);
-        refs.b2bSheet = sheetName;
-      }
-      if (source.receiving.length > 0) {
-        const { sheetName, dataEndRow } = addInboundDetailSheet(wb, custCode, source.receiving, custOrderEdits);
-        refs.inboundSheet = sheetName;
-        refs.inboundDataEndRow = dataEndRow;
-      }
-      if (source.b2c.length > 0) {
-        const { sheetName } = addB2CDetailSheet(wb, custCode, source.b2c);
-        refs.b2cSheet = sheetName;
-      }
-    }
-
-    // Storage: per-customer sheet if available, else shared
-    if (perCustStorageMap) {
-      const cs = perCustStorageMap[custCode];
-      if (cs?.snap15 || cs?.snapLast) {
-        const custStorageRows = STORAGE_TEMPLATE_ROWS
-          .map(r => ({
-            key: r.key, label: r.label,
-            qty15:   cs.snap15?.data[r.key]   ?? 0,
-            qtyLast: cs.snapLast?.data[r.key] ?? 0,
-            avg:    ((cs.snap15?.data[r.key] ?? 0) + (cs.snapLast?.data[r.key] ?? 0)) / 2,
-          }))
-          .filter(r => r.qty15 > 0 || r.qtyLast > 0);
-        if (custStorageRows.length > 0) {
-          // Per-customer storage sheets (prefixed with custCode)
-          const prefix = `${custCode}_`;
-          const { avgSheetName } = addInventoryDetailSheets(
-            wb, custStorageRows,
-            cs.date15   || snapDate1 || "Date1",
-            cs.dateLast || snapDate2 || "Date2",
-            undefined, undefined, // raw sheets already created above (combined)
-            prefix
-          );
-          refs.storageAvgSheet = avgSheetName;
-        }
-      }
-    } else if (sharedStorageAvg) {
-      refs.storageAvgSheet = sharedStorageAvg;
-    }
+    // Point to combined sheets (SUMIF will filter by custCode in col A)
+    if (combinedB2BSheet)      refs.b2bSheet = combinedB2BSheet;
+    if (combinedInboundSheet)  refs.inboundSheet = combinedInboundSheet;
+    if (combinedB2CSheet)      refs.b2cSheet = combinedB2CSheet;
+    if (sharedStorageAvg)      refs.storageAvgSheet = sharedStorageAvg;
 
     let name = (inv.customerName || inv.customer).slice(0, 28);
     if (usedNames.has(name)) name = `${name.slice(0, 24)}_${inv.customer.slice(-3)}`;
@@ -3316,8 +3693,7 @@ export default function BillingPage() {
         effectiveStorageRows, omSubsidyAmt, subleaseAmt,
         effectiveDate15, effectiveDateLast,
         effectiveRawRows15, effectiveRawRowsLast,
-        slBreakdown, getOmInputs(groupInvRev),
-        fullStorageMap   // per-customer storage → separate avg sheets per customer
+        slBreakdown, getOmInputs(groupInvRev)
       );
     } finally {
       setExportingNow(false);
