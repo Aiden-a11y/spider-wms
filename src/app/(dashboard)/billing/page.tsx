@@ -1172,12 +1172,13 @@ function addInventoryDetailSheets(
   date1 = "Date 1",
   date2 = "Date 2",
   rawRows15?: StorageRawRow[],
-  rawRowsLast?: StorageRawRow[]
+  rawRowsLast?: StorageRawRow[],
+  sheetPrefix = ""   // e.g. "FCOKR_" to namespace per-customer sheets
 ): { avgSheetName: string; snap1SheetName: string; snap2SheetName: string } {
   // Truncate date labels to fit Excel 31-char sheet name limit
-  const snap1Name = `Storage_${date1}`.slice(0, 31);
-  const snap2Name = `Storage_${date2}`.slice(0, 31);
-  const avgSheetName = "Storage_Avg";
+  const snap1Name = `${sheetPrefix}Storage_${date1}`.slice(0, 31);
+  const snap2Name = `${sheetPrefix}Storage_${date2}`.slice(0, 31);
+  const avgSheetName = `${sheetPrefix}Storage_Avg`.slice(0, 31);
 
   // Helper: add a snapshot sheet with totals row
   function addSnapSheet(name: string, colHeader: string, getQty: (r: StorageRow) => number) {
@@ -1292,8 +1293,8 @@ function addInventoryDetailSheets(
   [2, 3, 4].forEach(c => { wsAvg.getRow(totAvg.number).getCell(c).numFmt = "#,##0.00"; });
 
   // Raw inventory sheets (근거 데이터 — SKU/qty per location)
-  if (rawRows15   && rawRows15.length   > 0) addStorageRawSheet(wb, date1, rawRows15);
-  if (rawRowsLast && rawRowsLast.length > 0) addStorageRawSheet(wb, date2, rawRowsLast);
+  if (rawRows15   && rawRows15.length   > 0) addStorageRawSheet(wb, `${sheetPrefix}${date1}`, rawRows15);
+  if (rawRowsLast && rawRowsLast.length > 0) addStorageRawSheet(wb, `${sheetPrefix}${date2}`, rawRowsLast);
 
   return { avgSheetName, snap1SheetName: snap1Name, snap2SheetName: snap2Name };
 }
@@ -1594,6 +1595,13 @@ async function exportInvoiceToExcel(
   await downloadWorkbook(wb, `Invoice_${invoice.customer}_${invoice.period}.xlsx`);
 }
 
+type PerCustStorage = {
+  snap15:   { data: Record<string, number>; rawRows?: StorageRawRow[] } | null;
+  snapLast: { data: Record<string, number>; rawRows?: StorageRawRow[] } | null;
+  date15:   string;
+  dateLast: string;
+};
+
 /** Export multiple invoices — styled Summary tab + one tab per customer + optional raw data tabs */
 async function exportAllToExcel(
   invoices: BillingInvoice[],
@@ -1608,7 +1616,8 @@ async function exportAllToExcel(
   rawRows15?: StorageRawRow[],
   rawRowsLast?: StorageRawRow[],
   subleaseBreakdown?: { rentQty: number; rentRate: number; opQty: number; opRate: number },
-  omInputs?: OmSheetInputs
+  omInputs?: OmSheetInputs,
+  perCustStorageMap?: Record<string, PerCustStorage>   // per-customer storage for separate avg sheets
 ) {
   if (invoices.length === 0) return;
   const wb = new ExcelJS.Workbook();
@@ -1958,11 +1967,18 @@ async function exportAllToExcel(
   merge(genR.number);
   genR.getCell(1).font = { italic: true, size: 9, color: { argb: C.border } };
 
-  // ── Inventory storage sheets (shared across all customers) ──
+  // ── Inventory storage sheets ──
+  // If per-customer storage map provided → individual sheets per customer (correct)
+  // Otherwise fall back to one shared sheet from aggregated storageRows
   let sharedStorageAvg: string | undefined;
-  if (storageRows && storageRows.length > 0) {
+  if (!perCustStorageMap && storageRows && storageRows.length > 0) {
+    // Legacy / single-customer path: one shared Storage_Avg
     const { avgSheetName } = addInventoryDetailSheets(wb, storageRows, snapDate1, snapDate2, rawRows15, rawRowsLast);
     sharedStorageAvg = avgSheetName;
+  } else if (perCustStorageMap) {
+    // Combined raw evidence sheets (full warehouse inventory, all customers)
+    if (rawRows15   && rawRows15.length   > 0) addStorageRawSheet(wb, snapDate1 ?? "Date1", rawRows15);
+    if (rawRowsLast && rawRowsLast.length > 0) addStorageRawSheet(wb, snapDate2 ?? "Date2", rawRowsLast);
   }
 
   // ── One set of WMS data sheets + invoice sheet per customer ──
@@ -1991,7 +2007,35 @@ async function exportAllToExcel(
         refs.b2cSheet = sheetName;
       }
     }
-    if (sharedStorageAvg) refs.storageAvgSheet = sharedStorageAvg;
+
+    // Storage: per-customer sheet if available, else shared
+    if (perCustStorageMap) {
+      const cs = perCustStorageMap[custCode];
+      if (cs?.snap15 || cs?.snapLast) {
+        const custStorageRows = STORAGE_TEMPLATE_ROWS
+          .map(r => ({
+            key: r.key, label: r.label,
+            qty15:   cs.snap15?.data[r.key]   ?? 0,
+            qtyLast: cs.snapLast?.data[r.key] ?? 0,
+            avg:    ((cs.snap15?.data[r.key] ?? 0) + (cs.snapLast?.data[r.key] ?? 0)) / 2,
+          }))
+          .filter(r => r.qty15 > 0 || r.qtyLast > 0);
+        if (custStorageRows.length > 0) {
+          // Per-customer storage sheets (prefixed with custCode)
+          const prefix = `${custCode}_`;
+          const { avgSheetName } = addInventoryDetailSheets(
+            wb, custStorageRows,
+            cs.date15   || snapDate1 || "Date1",
+            cs.dateLast || snapDate2 || "Date2",
+            undefined, undefined, // raw sheets already created above (combined)
+            prefix
+          );
+          refs.storageAvgSheet = avgSheetName;
+        }
+      }
+    } else if (sharedStorageAvg) {
+      refs.storageAvgSheet = sharedStorageAvg;
+    }
 
     let name = (inv.customerName || inv.customer).slice(0, 28);
     if (usedNames.has(name)) name = `${name.slice(0, 24)}_${inv.customer.slice(-3)}`;
@@ -3216,7 +3260,8 @@ export default function BillingPage() {
         effectiveStorageRows, omSubsidyAmt, subleaseAmt,
         effectiveDate15, effectiveDateLast,
         effectiveRawRows15, effectiveRawRowsLast,
-        slBreakdown, getOmInputs(groupInvRev)
+        slBreakdown, getOmInputs(groupInvRev),
+        fullStorageMap   // per-customer storage → separate avg sheets per customer
       );
     } finally {
       setExportingNow(false);
