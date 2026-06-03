@@ -155,7 +155,7 @@ export default function LocationMasterPage() {
         aisleNm:       String(n["AISLE"] ?? n["AISLE_NM"] ?? ""),
         levelNm:       String(n["LEVEL"] ?? n["LEVEL_NM"] ?? ""),
         bayNm:         String(n["BAY"] ?? n["BAY_NM"] ?? ""),
-        positionNm:    String(n["POSITION"] ?? n["POSITION_NM"] ?? ""),
+        positionNm:    String(n["SLOT"] ?? n["POSITION"] ?? n["POSITION_NM"] ?? n["SLOT_NM"] ?? ""),
         maxCbm:        n["MAX_CBM"] !== "" && n["MAX_CBM"] !== undefined ? Number(n["MAX_CBM"]) : "",
         maxCbf:        n["MAX_CBF"] !== "" && n["MAX_CBF"] !== undefined ? Number(n["MAX_CBF"]) : "",
         occupancyInfo: String(n["OCCUPANCY_INFO"] ?? n["OCCUPANCY"] ?? n["OCCUPANCY_TYPE"] ?? ""),
@@ -270,7 +270,7 @@ export default function LocationMasterPage() {
           {/* Instructions */}
           <div className="text-xs text-slate-500 mb-4 bg-white border border-slate-100 rounded-lg px-4 py-3 leading-relaxed">
             <span className="font-medium text-slate-700">Required columns: </span>
-            ZONE · AISLE · LEVEL · BAY · POSITION · MAX_CBM · MAX_CBF · OCCUPANCY_INFO · REMARK
+            ZONE · AISLE · BAY · LEVEL · SLOT · MAX_CBM · MAX_CBF · OCCUPANCY_INFO · REMARK
             <br />
             Warehouse code is taken from the selector above. Each row will be registered via <code className="bg-slate-100 px-1 rounded">POST /warehouse/location/save</code>.
             <br />
@@ -309,7 +309,7 @@ export default function LocationMasterPage() {
               <span className="font-medium text-slate-700">Detected columns: </span>
               {detectedCols.map((c) => (
                 <span key={c} className={`inline-block mr-1 px-1.5 py-0.5 rounded font-mono ${
-                  ["ZONE","AISLE","LEVEL","BAY","POSITION","MAX_CBM","MAX_CBF","OCCUPANCY","OCCUPANCY_INFO","REMARK"].includes(c.trim().toUpperCase())
+                  ["ZONE","AISLE","BAY","LEVEL","SLOT","POSITION","MAX_CBM","MAX_CBF","OCCUPANCY","OCCUPANCY_INFO","REMARK"].includes(c.trim().toUpperCase())
                     ? "bg-green-100 text-green-800"
                     : "bg-slate-200 text-slate-600"
                 }`}>{c}</span>
@@ -325,7 +325,7 @@ export default function LocationMasterPage() {
                   <thead className="sticky top-0 bg-slate-50 border-b border-slate-200">
                     <tr>
                       <th className="px-3 py-2 text-left text-slate-500 font-medium">#</th>
-                      {["ZONE","AISLE","LEVEL","BAY","POSITION","MAX_CBM","MAX_CBF","OCCUPANCY_INFO","REMARK"].map((h) => (
+                      {["ZONE","AISLE","BAY","LEVEL","SLOT","MAX_CBM","MAX_CBF","OCCUPANCY_INFO","REMARK"].map((h) => (
                         <th key={h} className="px-3 py-2 text-left text-slate-500 font-medium whitespace-nowrap">{h}</th>
                       ))}
                       {uploadResults.length > 0 && <th className="px-3 py-2 text-left text-slate-500 font-medium">Status</th>}
@@ -342,8 +342,8 @@ export default function LocationMasterPage() {
                           <td className="px-3 py-1.5 text-slate-400">{i + 1}</td>
                           <td className="px-3 py-1.5 text-slate-700">{row.zoneNm || "-"}</td>
                           <td className="px-3 py-1.5 text-slate-700">{row.aisleNm || "-"}</td>
-                          <td className="px-3 py-1.5 text-slate-700">{row.levelNm || "-"}</td>
                           <td className="px-3 py-1.5 text-slate-700">{row.bayNm || "-"}</td>
+                          <td className="px-3 py-1.5 text-slate-700">{row.levelNm || "-"}</td>
                           <td className="px-3 py-1.5 text-slate-700">{row.positionNm || "-"}</td>
                           <td className="px-3 py-1.5 text-slate-700 text-right">{row.maxCbm === "" ? "-" : String(row.maxCbm)}</td>
                           <td className="px-3 py-1.5 text-slate-700 text-right">{row.maxCbf === "" ? "-" : String(row.maxCbf)}</td>
