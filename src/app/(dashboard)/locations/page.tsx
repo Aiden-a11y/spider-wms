@@ -178,8 +178,6 @@ export default function LocationMasterPage() {
 
     for (let i = 0; i < uploadRows.length; i++) {
       const row = uploadRows[i];
-      // Build payload — try all known field name variants in one shot
-      const posNum = parseInt(row.positionNm, 10);
       const payload = {
         warehouseCd,
         warehouseCode,
@@ -188,8 +186,6 @@ export default function LocationMasterPage() {
         levelNm:       row.levelNm,
         bayNm:         row.bayNm,
         positionNm:    row.positionNm,
-        // "p" — single-letter required field reported by API (tested as both string and number)
-        p:             isNaN(posNum) ? row.positionNm : posNum,
         maxCbm:        row.maxCbm === "" ? 0 : Number(row.maxCbm),
         maxCbf:        row.maxCbf === "" ? 0 : Number(row.maxCbf),
         occupancyInfo: row.occupancyInfo || "",
