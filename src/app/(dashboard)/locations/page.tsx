@@ -178,19 +178,25 @@ export default function LocationMasterPage() {
 
     for (let i = 0; i < uploadRows.length; i++) {
       const row = uploadRows[i];
+      // warehouseCd: use the numeric internal ID extracted from the list response.
+      // Some WMS endpoints expect it as a number; convert if it parses as one.
+      const cdVal = warehouseCd || "";
+      const cdNum = Number(cdVal);
       const payload = {
-        warehouseCd:  "",
+        warehouseCd:   !isNaN(cdNum) && cdVal !== "" ? cdNum : cdVal,
         warehouseCode,
-        zoneNm:       row.zoneNm,
-        aisleNm:      row.aisleNm,
-        levelNm:      row.levelNm,
-        bayNm:        row.bayNm,
-        positionNm:   row.positionNm,
-        maxCbm:       row.maxCbm === "" ? null : Number(row.maxCbm),
-        maxCbf:       row.maxCbf === "" ? null : Number(row.maxCbf),
+        zoneNm:        row.zoneNm,
+        aisleNm:       row.aisleNm,
+        levelNm:       row.levelNm,
+        bayNm:         row.bayNm,
+        positionNm:    row.positionNm,
+        // Some WMS API versions use abbreviated single-letter field names for location parts
+        p:             row.positionNm,
+        maxCbm:        row.maxCbm === "" ? null : Number(row.maxCbm),
+        maxCbf:        row.maxCbf === "" ? null : Number(row.maxCbf),
         occupancyInfo: row.occupancyInfo || null,
-        remark:       row.remark || null,
-        isNew:        true,
+        remark:        row.remark || null,
+        isNew:         true,
       };
       try {
         const res = await fetch("/api/wms/warehouse/location/save", {
@@ -203,7 +209,8 @@ export default function LocationMasterPage() {
         try { json = JSON.parse(rawText); } catch { /* not json */ }
 
         if (!res.ok) {
-          results.push({ row, status: "error", message: `HTTP ${res.status}: ${rawText.slice(0, 120)}` });
+          // Show full error so we can diagnose field-name mismatches
+          results.push({ row, status: "error", message: `HTTP ${res.status}: ${rawText}` });
         } else {
           const code = json?.code ?? json?.resultCode ?? json?.result ?? json?.status;
           const msg  = String(json?.message ?? json?.msg ?? json?.resultMessage ?? "");
