@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Receipt, SlidersHorizontal, Lock, Eye, EyeOff } from "lucide-react";
 
 const TABS = [
