@@ -178,26 +178,25 @@ export default function LocationMasterPage() {
 
     for (let i = 0; i < uploadRows.length; i++) {
       const row = uploadRows[i];
-      // warehouseCd: use the numeric internal ID extracted from the list response.
-      // Some WMS endpoints expect it as a number; convert if it parses as one.
-      const cdVal = warehouseCd || "";
-      const cdNum = Number(cdVal);
+      // Build payload — try all known field name variants in one shot
+      const posNum = parseInt(row.positionNm, 10);
       const payload = {
-        warehouseCd:   !isNaN(cdNum) && cdVal !== "" ? cdNum : cdVal,
         warehouseCode,
         zoneNm:        row.zoneNm,
         aisleNm:       row.aisleNm,
         levelNm:       row.levelNm,
         bayNm:         row.bayNm,
         positionNm:    row.positionNm,
-        // Some WMS API versions use abbreviated single-letter field names for location parts
-        p:             row.positionNm,
-        maxCbm:        row.maxCbm === "" ? null : Number(row.maxCbm),
-        maxCbf:        row.maxCbf === "" ? null : Number(row.maxCbf),
-        occupancyInfo: row.occupancyInfo || null,
-        remark:        row.remark || null,
+        // "p" — single-letter required field reported by API (tested as both string and number)
+        p:             isNaN(posNum) ? row.positionNm : posNum,
+        maxCbm:        row.maxCbm === "" ? 0 : Number(row.maxCbm),
+        maxCbf:        row.maxCbf === "" ? 0 : Number(row.maxCbf),
+        occupancyInfo: row.occupancyInfo || "",
+        remark:        row.remark || "",
         isNew:         true,
       };
+      // Log full payload + response to console for debugging
+      if (i === 0) console.log("[location/save] payload →", JSON.stringify(payload, null, 2));
       try {
         const res = await fetch("/api/wms/warehouse/location/save", {
           method: "POST",
@@ -205,11 +204,11 @@ export default function LocationMasterPage() {
           body: JSON.stringify(payload),
         });
         const rawText = await res.text().catch(() => "");
+        if (i === 0) console.log("[location/save] response →", rawText);
         let json: Record<string, unknown> = {};
         try { json = JSON.parse(rawText); } catch { /* not json */ }
 
         if (!res.ok) {
-          // Show full error so we can diagnose field-name mismatches
           results.push({ row, status: "error", message: `HTTP ${res.status}: ${rawText}` });
         } else {
           const code = json?.code ?? json?.resultCode ?? json?.result ?? json?.status;
