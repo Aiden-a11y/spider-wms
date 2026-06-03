@@ -5317,6 +5317,7 @@ export default function BillingPage() {
                           <thead className="bg-slate-50 sticky top-0">
                             <tr>
                               <th className="px-3 py-2 text-left text-slate-500 font-semibold">Order Code</th>
+                              <th className="px-3 py-2 text-left text-slate-500 font-semibold">Shipping Order No</th>
                               <th className="px-3 py-2 text-left text-slate-500 font-semibold">Date</th>
                               <th className="px-3 py-2 text-right text-slate-500 font-semibold">Pick/Piece</th>
                               <th className="px-3 py-2 text-right text-slate-500 font-semibold">Pick/Carton</th>
@@ -5433,6 +5434,7 @@ export default function BillingPage() {
                                     {code}
                                     {warn && <span className="ml-1 text-amber-500">⚠</span>}
                                   </td>
+                                  <td className="px-3 py-1 font-mono text-slate-400 text-[10px] whitespace-nowrap">{String(o.shippingOrderNo ?? "—")}</td>
                                   <td className={`px-3 py-1 whitespace-nowrap font-semibold ${missingOutDate ? "text-yellow-600" : "text-slate-500"}`}>
                                     {missingOutDate ? "⚠ No date" : outDateVal}
                                   </td>
@@ -5477,7 +5479,7 @@ export default function BillingPage() {
                               );
                               return (
                                 <tr className="bg-emerald-50 border-t-2 border-emerald-200">
-                                  <td colSpan={2} className="px-3 py-1.5 text-emerald-700 text-xs font-bold">
+                                  <td colSpan={3} className="px-3 py-1.5 text-emerald-700 text-xs font-bold">
                                     Total ({wmsSource.b2b.length} orders)
                                   </td>
                                   {tdTot(totPP)}
@@ -5511,6 +5513,7 @@ export default function BillingPage() {
                         <thead className="bg-slate-50 sticky top-0">
                           <tr>
                             <th className="px-3 py-2 text-left text-slate-500 font-semibold">Order Code</th>
+                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">Shipping Order No</th>
                             <th className="px-3 py-2 text-left text-slate-500 font-semibold">Date</th>
                             <th className="px-3 py-2 text-right text-slate-500 font-semibold">Total Qty</th>
                             <th className="px-3 py-2 text-right text-slate-500 font-semibold">+1 Order</th>
@@ -5526,6 +5529,7 @@ export default function BillingPage() {
                             return (
                               <tr key={i} className={`border-b border-slate-50 ${b2cMissingDate ? "bg-yellow-50" : "hover:bg-slate-50"}`}>
                                 <td className="px-3 py-1.5 font-mono text-teal-600">{String(o.shipOrderCode ?? o.orderCode ?? "—")}</td>
+                                <td className="px-3 py-1.5 font-mono text-slate-400 text-[10px] whitespace-nowrap">{String(o.shippingOrderNo ?? "—")}</td>
                                 <td className={`px-3 py-1.5 whitespace-nowrap font-semibold ${b2cMissingDate ? "text-yellow-600" : "text-slate-500"}`}>
                                   {b2cMissingDate ? "⚠ No date" : b2cDateVal}
                                 </td>
@@ -5536,7 +5540,7 @@ export default function BillingPage() {
                             );
                           })}
                           <tr className="bg-teal-50 border-t border-teal-100 font-semibold text-teal-700">
-                            <td colSpan={3} className="px-3 py-1.5">Total</td>
+                            <td colSpan={4} className="px-3 py-1.5">Total</td>
                             <td className="px-3 py-1.5 text-right">{wmsSource.b2c.length}</td>
                             <td className="px-3 py-1.5 text-right">{wmsSource.b2c.reduce((s, o) => s + Math.max(0, Number(o.totalQty ?? o.orderQty ?? 0) - 5), 0)}</td>
                           </tr>
