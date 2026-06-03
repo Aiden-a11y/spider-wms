@@ -181,6 +181,7 @@ export default function LocationMasterPage() {
       // Build payload — try all known field name variants in one shot
       const posNum = parseInt(row.positionNm, 10);
       const payload = {
+        warehouseCd,
         warehouseCode,
         zoneNm:        row.zoneNm,
         aisleNm:       row.aisleNm,
