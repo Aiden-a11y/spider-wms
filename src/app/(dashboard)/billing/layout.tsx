@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, useEffect, useRef } from "react";
+import { useState, useRef } from "react";
 import { Receipt, SlidersHorizontal, Lock, Eye, EyeOff } from "lucide-react";
 
 const TABS = [
@@ -11,8 +11,6 @@ const TABS = [
 ];
 
 const BILLING_PW = "2020";
-const SESSION_KEY = "billing_unlocked";
-
 export default function BillingLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [unlocked, setUnlocked] = useState(false);
@@ -21,13 +19,6 @@ export default function BillingLayout({ children }: { children: React.ReactNode 
   const [shake, setShake] = useState(false);
   const [showPw, setShowPw] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-
-  // Restore unlock state from sessionStorage (cleared on browser close)
-  useEffect(() => {
-    if (sessionStorage.getItem(SESSION_KEY) === "1") {
-      setUnlocked(true);
-    }
-  }, []);
 
   useEffect(() => {
     if (!unlocked) {
@@ -38,7 +29,6 @@ export default function BillingLayout({ children }: { children: React.ReactNode 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (input === BILLING_PW) {
-      sessionStorage.setItem(SESSION_KEY, "1");
       setUnlocked(true);
       setError(false);
     } else {
