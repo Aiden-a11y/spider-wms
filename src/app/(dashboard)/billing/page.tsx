@@ -806,23 +806,24 @@ function addCombinedB2BSheet(
   ws.columns = [
     { width: 14 }, // A: Customer
     { width: 18 }, // B: Order Code
-    { width: 12 }, // C: Date
-    { width: 11 }, // D: Pick/Piece
-    { width: 12 }, // E: Pick/Carton
-    { width: 12 }, // F: Pick/Pallet
-    { width: 11 }, // G: Out/Carton
-    { width: 11 }, // H: Out/Pallet
-    { width: 11 }, // I: Supplies
-    { width: 11 }, // J: Packing
-    { width: 11 }, // K: Palletize
-    { width: 11 }, // L: Labels
-    { width: 11 }, // M: Inserts
-    { width: 11 }, // N: Labor Hrs
-    { width: 11 }, // O: Labor OT
-    { width: 12 }, // P: Labor Wknd
+    { width: 22 }, // C: Shipping Order No
+    { width: 12 }, // D: Date
+    { width: 11 }, // E: Pick/Piece
+    { width: 12 }, // F: Pick/Carton
+    { width: 12 }, // G: Pick/Pallet
+    { width: 11 }, // H: Out/Carton
+    { width: 11 }, // I: Out/Pallet
+    { width: 11 }, // J: Supplies
+    { width: 11 }, // K: Packing
+    { width: 11 }, // L: Palletize
+    { width: 11 }, // M: Labels
+    { width: 11 }, // N: Inserts
+    { width: 11 }, // O: Labor Hrs
+    { width: 11 }, // P: Labor OT
+    { width: 12 }, // Q: Labor Wknd
   ];
   const headers = [
-    "Customer","Order Code","Date","Pick/Piece","Pick/Carton","Pick/Pallet",
+    "Customer","Order Code","Shipping Order No","Date","Pick/Piece","Pick/Carton","Pick/Pallet",
     "Out/Carton","Out/Pallet","Supplies","Packing✓","Palletize✓",
     "Labels","Inserts","Labor Hrs","Labor OT","Labor Wknd",
   ];
@@ -838,10 +839,11 @@ function addCombinedB2BSheet(
   let globalRowIdx = 0;
   for (const { custCode, orders, orderEdits } of allData) {
     for (const order of orders) {
-      const code  = String(order.shippingOrderCode ?? order.orderCode ?? "");
-      const date  = String(order.outDate ?? order.deliveryDate ?? order.shippingDate ?? order.outboundDate ?? "");
-      const tasks = parseTaskComment(String(order.comment ?? ""));
-      const ov    = orderEdits[code] ?? {};
+      const code    = String(order.shippingOrderCode ?? order.orderCode ?? "");
+      const shipNo  = String(order.shippingOrderNo ?? "");
+      const date    = String(order.outDate ?? order.deliveryDate ?? order.shippingDate ?? order.outboundDate ?? "");
+      const tasks   = parseTaskComment(String(order.comment ?? ""));
+      const ov      = orderEdits[code] ?? {};
 
       const pp       = ov["b2b_pick_piece"]    ?? tasks["Picking per Piece"]    ?? 0;
       const pc       = ov["b2b_pick_carton"]   ?? tasks["Picking per Carton"]   ?? 0;
@@ -858,14 +860,14 @@ function addCombinedB2BSheet(
       const laborWknd = ov["labor_ot_weekend"]  ?? (tasks["Labor Hours (Weekend/Holiday)"] ?? 0);
 
       const r = ws.addRow([
-        custCode, code, date, pp, pc, ppl, oc, op, supplies, packing, palletize,
+        custCode, code, shipNo, date, pp, pc, ppl, oc, op, supplies, packing, palletize,
         labels, inserts, laborReg, laborOT, laborWknd,
       ]);
       r.height = 15;
       r.eachCell((cell, col) => {
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: globalRowIdx % 2 === 0 ? C.white : C.rowAlt } };
         cell.font = { size: 10 };
-        cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
+        cell.alignment = { vertical: "middle", horizontal: col <= 4 ? "left" : "right" };
         applyBorder(cell);
       });
       globalRowIdx++;
@@ -876,17 +878,17 @@ function addCombinedB2BSheet(
   const lastDataRow = ws.rowCount;
   if (lastDataRow >= 2) {
     const totRow = ws.addRow([
-      "TOTAL", "", "",
-      ...["D","E","F","G","H","I","J","K","L","M","N","O","P"].map(col => ({
+      "TOTAL", "", "", "",
+      ...["E","F","G","H","I","J","K","L","M","N","O","P","Q"].map(col => ({
         formula: `=SUM(${col}2:${col}${lastDataRow})`, result: 0,
       })),
     ]);
     totRow.height = 16;
-    ws.mergeCells(totRow.number, 1, totRow.number, 3);
+    ws.mergeCells(totRow.number, 1, totRow.number, 4);
     totRow.eachCell({ includeEmpty: true }, (cell, col) => {
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.subtotalBg } };
-      cell.font = { bold: true, size: 10, color: { argb: col >= 4 ? "FF1E40AF" : "FF374151" } };
-      cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "center" : "right" };
+      cell.font = { bold: true, size: 10, color: { argb: col >= 5 ? "FF1E40AF" : "FF374151" } };
+      cell.alignment = { vertical: "middle", horizontal: col <= 4 ? "center" : "right" };
       applyBorder(cell, "medium");
     });
   }
@@ -1030,12 +1032,13 @@ function addCombinedB2CSheet(
   ws.columns = [
     { width: 14 }, // A: Customer
     { width: 18 }, // B: Order Code
-    { width: 12 }, // C: Date
-    { width: 12 }, // D: Total Qty
-    { width: 12 }, // E: +1 Order
-    { width: 12 }, // F: Extra Picks
+    { width: 22 }, // C: Shipping Order No
+    { width: 12 }, // D: Date
+    { width: 12 }, // E: Total Qty
+    { width: 12 }, // F: +1 Order
+    { width: 12 }, // G: Extra Picks
   ];
-  const hdrRow = ws.addRow(["Customer", "Order Code", "Date", "Total Qty", "+1 Order", "Extra Picks"]);
+  const hdrRow = ws.addRow(["Customer", "Order Code", "Shipping Order No", "Date", "Total Qty", "+1 Order", "Extra Picks"]);
   hdrRow.height = 16;
   hdrRow.eachCell((cell) => {
     cell.font = { bold: true, color: { argb: C.white }, size: 10 };
@@ -1047,16 +1050,17 @@ function addCombinedB2CSheet(
   let globalRowIdx = 0;
   for (const { custCode, orders } of allData) {
     for (const order of orders) {
-      const code  = String(order.shippingOrderCode ?? order.orderCode ?? "");
-      const date  = String(order.outDate ?? order.deliveryDate ?? order.shippingDate ?? "");
-      const qty   = Number(order.totalQty ?? order.orderQty ?? 0);
-      const extra = Math.max(0, qty - 5);
-      const r = ws.addRow([custCode, code, date, qty, 1, extra]);
+      const code    = String(order.shippingOrderCode ?? order.orderCode ?? "");
+      const shipNo  = String(order.shippingOrderNo ?? "");
+      const date    = String(order.outDate ?? order.deliveryDate ?? order.shippingDate ?? "");
+      const qty     = Number(order.totalQty ?? order.orderQty ?? 0);
+      const extra   = Math.max(0, qty - 5);
+      const r = ws.addRow([custCode, code, shipNo, date, qty, 1, extra]);
       r.height = 15;
       r.eachCell((cell, col) => {
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: globalRowIdx % 2 === 0 ? C.white : C.rowAlt } };
         cell.font = { size: 10 };
-        cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "left" : "right" };
+        cell.alignment = { vertical: "middle", horizontal: col <= 4 ? "left" : "right" };
         applyBorder(cell);
       });
       globalRowIdx++;
@@ -1067,17 +1071,17 @@ function addCombinedB2CSheet(
   const lastDataRow = ws.rowCount;
   if (lastDataRow >= 2) {
     const totRow = ws.addRow([
-      "TOTAL", "", "",
-      { formula: `=SUM(D2:D${lastDataRow})`, result: 0 },
+      "TOTAL", "", "", "",
       { formula: `=SUM(E2:E${lastDataRow})`, result: 0 },
       { formula: `=SUM(F2:F${lastDataRow})`, result: 0 },
+      { formula: `=SUM(G2:G${lastDataRow})`, result: 0 },
     ]);
     totRow.height = 16;
-    ws.mergeCells(totRow.number, 1, totRow.number, 3);
+    ws.mergeCells(totRow.number, 1, totRow.number, 4);
     totRow.eachCell({ includeEmpty: true }, (cell, col) => {
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.subtotalBg } };
-      cell.font = { bold: true, size: 10, color: { argb: col >= 4 ? "FF1E40AF" : "FF374151" } };
-      cell.alignment = { vertical: "middle", horizontal: col <= 3 ? "center" : "right" };
+      cell.font = { bold: true, size: 10, color: { argb: col >= 5 ? "FF1E40AF" : "FF374151" } };
+      cell.alignment = { vertical: "middle", horizontal: col <= 4 ? "center" : "right" };
       applyBorder(cell, "medium");
     });
   }
@@ -1657,20 +1661,20 @@ function getQtyFormula(
 
   if (cust) {
     // ── Combined sheets: customer in col A, data shifted +1 ──
-    // B2B combined: A=Customer B=OrderCode C=Date D=Pick/Piece E=Pick/Carton F=Pick/Pallet
-    //               G=Out/Carton H=Out/Pallet I=Supplies J=Packing K=Palletize L=Labels M=Inserts
-    //               N=Labor Hrs O=Labor OT P=Labor Wknd
+    // B2B combined: A=Customer B=OrderCode C=ShippingOrderNo D=Date E=Pick/Piece F=Pick/Carton G=Pick/Pallet
+    //               H=Out/Carton I=Out/Pallet J=Supplies K=Packing L=Palletize M=Labels N=Inserts
+    //               O=Labor Hrs P=Labor OT Q=Labor Wknd
     const b2bCombinedColMap: Record<string, string> = {
-      b2b_pick_piece:    "D",
-      b2b_pick_carton:   "E",
-      b2b_pick_pallet:   "F",
-      b2b_carton_packing:"J",
-      b2b_palletizing:   "K",
-      b2b_label:         "L",
-      b2b_insert:        "M",
-      labor_regular:     "N",
-      labor_ot_weekday:  "O",
-      labor_ot_weekend:  "P",
+      b2b_pick_piece:    "E",
+      b2b_pick_carton:   "F",
+      b2b_pick_pallet:   "G",
+      b2b_carton_packing:"K",
+      b2b_palletizing:   "L",
+      b2b_label:         "M",
+      b2b_insert:        "N",
+      labor_regular:     "O",
+      labor_ot_weekday:  "P",
+      labor_ot_weekend:  "Q",
     };
     if (b2bCombinedColMap[itemId] && b) {
       const col = b2bCombinedColMap[itemId];
@@ -1701,28 +1705,28 @@ function getQtyFormula(
       return { formula: `=COUNTIF('${ib}'!A:A,"${cust}")`, result: fallbackQty };
     }
 
-    // B2C combined: A=Customer B=OrderCode C=Date D=TotalQty E=+1 Order F=Extra Picks
+    // B2C combined: A=Customer B=OrderCode C=ShippingOrderNo D=Date E=TotalQty F=+1 Order G=Extra Picks
     if (itemId === "b2c_order" && c) {
       return { formula: `=COUNTIF('${c}'!A:A,"${cust}")`, result: fallbackQty };
     }
     if (itemId === "b2c_pick_piece" && c) {
-      return { formula: `=SUMIF('${c}'!A:A,"${cust}",'${c}'!F:F)`, result: fallbackQty };
+      return { formula: `=SUMIF('${c}'!A:A,"${cust}",'${c}'!G:G)`, result: fallbackQty };
     }
   } else if (refs.allCustomers) {
     // ── Combined sheets: SUM entire column across ALL customers (no filter) ──
-    // B2B combined layout: A=Customer B=OrderCode C=Date D=Pick/Piece E=Pick/Carton F=Pick/Pallet
-    //   G=Out/Carton H=Out/Pallet I=Supplies J=Packing K=Palletize L=Labels M=Inserts N=Labor O=OT P=Wknd
+    // B2B combined layout: A=Customer B=OrderCode C=ShippingOrderNo D=Date E=Pick/Piece F=Pick/Carton G=Pick/Pallet
+    //   H=Out/Carton I=Out/Pallet J=Supplies K=Packing L=Palletize M=Labels N=Inserts O=Labor P=OT Q=Wknd
     const b2bCombinedColMap: Record<string, string> = {
-      b2b_pick_piece:    "D",
-      b2b_pick_carton:   "E",
-      b2b_pick_pallet:   "F",
-      b2b_carton_packing:"J",
-      b2b_palletizing:   "K",
-      b2b_label:         "L",
-      b2b_insert:        "M",
-      labor_regular:     "N",
-      labor_ot_weekday:  "O",
-      labor_ot_weekend:  "P",
+      b2b_pick_piece:    "E",
+      b2b_pick_carton:   "F",
+      b2b_pick_pallet:   "G",
+      b2b_carton_packing:"K",
+      b2b_palletizing:   "L",
+      b2b_label:         "M",
+      b2b_insert:        "N",
+      labor_regular:     "O",
+      labor_ot_weekday:  "P",
+      labor_ot_weekend:  "Q",
     };
     if (b2bCombinedColMap[itemId] && b) {
       const col = b2bCombinedColMap[itemId];
@@ -1753,12 +1757,12 @@ function getQtyFormula(
       return { formula: `=COUNTA('${ib}'!B2:B9999)`, result: fallbackQty };
     }
 
-    // B2C combined layout: A=Customer B=OrderCode C=Date D=TotalQty E=+1 Order F=Extra Picks
+    // B2C combined layout: A=Customer B=OrderCode C=ShippingOrderNo D=Date E=TotalQty F=+1 Order G=Extra Picks
     if (itemId === "b2c_order" && c) {
       return { formula: `=COUNTA('${c}'!B2:B9999)`, result: fallbackQty };
     }
     if (itemId === "b2c_pick_piece" && c) {
-      return { formula: `=SUM('${c}'!F2:F9999)`, result: fallbackQty };
+      return { formula: `=SUM('${c}'!G2:G9999)`, result: fallbackQty };
     }
   } else {
     // ── Single-customer sheets (no filterCustomer) ──
