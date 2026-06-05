@@ -228,6 +228,17 @@ export default function ShippingTypePage() {
   const [uomMap,         setUomMap]         = useState<Record<string, number>>({}); // sku → units_per_carton
   const [ticketSortOpen, setTicketSortOpen] = useState(false);  // PDF sort dropdown
 
+  // orderCode → shippingOrderNo map (built from loaded orders list)
+  const shipNoMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    orders.forEach((o) => {
+      const code   = String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? "");
+      const shipNo = String(o.shippingOrderNo ?? "");
+      if (code) map[code] = shipNo;
+    });
+    return map;
+  }, [orders]);
+
   const headers = useMemo(
     () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
     [user]
@@ -775,8 +786,12 @@ export default function ShippingTypePage() {
   async function exportAllocExcel() {
     const { utils, writeFile } = await import("xlsx");
     const codes = Object.keys(selectedCodes).filter((k) => selectedCodes[k]);
-    const shortCode = (c: string) => c.slice(-5);
-    const header = ["#", "Location", "SKU", "Product", "Lot", "Exp Date", ...codes.map(shortCode), "Total Qty"];
+    // Column label: "ShipNo\n(last5)" or just last5 if no shipping order no
+    const colLabel = (c: string) => {
+      const s = shipNoMap[c];
+      return s ? `${s}\n(${c.slice(-5)})` : c.slice(-5);
+    };
+    const header = ["#", "Location", "SKU", "Product", "Lot", "Exp Date", ...codes.map(colLabel), "Total Qty"];
     const dataRows = allocRows.map((row, i) => [
       i + 1, row.location, row.sku, row.productName, row.lot, row.expDate,
       ...codes.map((c) => row.perOrder[c] ?? 0),
@@ -854,8 +869,14 @@ export default function ShippingTypePage() {
       </tr>`;
     }).join("");
 
-    // All order codes, one per line
-    const orderNoLines = codes.map((c) => `<div style="font-size:9pt;font-family:'Courier New',monospace;font-weight:bold">${c}</div>`).join("");
+    // All order codes, one per line (with Shipping Order No if available)
+    const orderNoLines = codes.map((c) => {
+      const shipNo = shipNoMap[c];
+      return `<div style="margin-bottom:1pt">
+        <div style="font-size:9pt;font-family:'Courier New',monospace;font-weight:bold">${c}</div>
+        ${shipNo ? `<div style="font-size:8pt;color:#444;font-family:'Courier New',monospace">Ship: ${shipNo}</div>` : ""}
+      </div>`;
+    }).join("");
 
     const html = `<!DOCTYPE html>
 <html lang="en">
@@ -976,7 +997,13 @@ export default function ShippingTypePage() {
           }).join("")
         : "";
 
-      const orderNoLines = codes.map((c, idx) => `<div style="font-size:9pt;font-family:'Courier New',monospace;font-weight:bold">#${idx+1} ${c}</div>`).join("");
+      const orderNoLines = codes.map((c, idx) => {
+        const shipNo = shipNoMap[c];
+        return `<div style="margin-bottom:1pt">
+          <div style="font-size:9pt;font-family:'Courier New',monospace;font-weight:bold">#${idx+1} ${c}</div>
+          ${shipNo ? `<div style="font-size:8pt;color:#444;font-family:'Courier New',monospace">Ship: ${shipNo}</div>` : ""}
+        </div>`;
+      }).join("");
 
       return `<div class="label-page">
 
@@ -2259,8 +2286,9 @@ ${labels}
                     return (
                       <div className="flex flex-wrap gap-2">
                         {codes.map((c, i) => (
-                          <span key={c} className="text-xs font-mono bg-slate-100 text-slate-600 border border-slate-200 rounded-lg px-2.5 py-1">
-                            <span className="font-bold text-blue-600">#{i + 1}</span> → {c}
+                          <span key={c} className="text-xs font-mono bg-slate-100 text-slate-600 border border-slate-200 rounded-lg px-2.5 py-1 flex flex-col gap-0.5">
+                            <span><span className="font-bold text-blue-600">#{i + 1}</span> → {c}</span>
+                            {shipNoMap[c] && <span className="text-slate-400 font-normal">Ship: {shipNoMap[c]}</span>}
                           </span>
                         ))}
                       </div>
