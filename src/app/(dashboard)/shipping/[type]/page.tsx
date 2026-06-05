@@ -874,7 +874,7 @@ export default function ShippingTypePage() {
       const shipNo = shipNoMap[c];
       return `<div style="margin-bottom:1pt">
         <div style="font-size:9pt;font-family:'Courier New',monospace;font-weight:bold">${c}</div>
-        ${shipNo ? `<div style="font-size:8pt;color:#444;font-family:'Courier New',monospace">Ship: ${shipNo}</div>` : ""}
+        ${shipNo ? `<div style="font-size:9pt;font-family:'Courier New',monospace;font-weight:bold">Ship: ${shipNo}</div>` : ""}
       </div>`;
     }).join("");
 
@@ -1001,7 +1001,7 @@ export default function ShippingTypePage() {
         const shipNo = shipNoMap[c];
         return `<div style="margin-bottom:1pt">
           <div style="font-size:9pt;font-family:'Courier New',monospace;font-weight:bold">#${idx+1} ${c}</div>
-          ${shipNo ? `<div style="font-size:8pt;color:#444;font-family:'Courier New',monospace">Ship: ${shipNo}</div>` : ""}
+          ${shipNo ? `<div style="font-size:9pt;font-family:'Courier New',monospace;font-weight:bold">Ship: ${shipNo}</div>` : ""}
         </div>`;
       }).join("");
 
