@@ -2287,8 +2287,8 @@ ${labels}
                       <div className="flex flex-wrap gap-2">
                         {codes.map((c, i) => (
                           <span key={c} className="text-xs font-mono bg-slate-100 text-slate-600 border border-slate-200 rounded-lg px-2.5 py-1 flex flex-col gap-0.5">
-                            <span><span className="font-bold text-blue-600">#{i + 1}</span> → {c}</span>
-                            {shipNoMap[c] && <span className="text-slate-400 font-normal">Ship: {shipNoMap[c]}</span>}
+                            <span className="font-bold text-slate-800"><span className="text-blue-600">#{i + 1}</span> → {shipNoMap[c] || c}</span>
+                            {shipNoMap[c] && <span className="text-slate-400 font-medium">{c}</span>}
                           </span>
                         ))}
                       </div>
