@@ -239,6 +239,23 @@ export default function ShippingTypePage() {
     return map;
   }, [orders]);
 
+  // orderCode → address info map
+  const addrMap = useMemo(() => {
+    const map: Record<string, { name: string; address: string; city: string; state: string; zip: string }> = {};
+    orders.forEach((o) => {
+      const code = String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? "");
+      if (!code) return;
+      map[code] = {
+        name:    String(o.consigneeName    ?? o.receiverName    ?? ""),
+        address: String(o.consigneeAddress1 ?? o.deliveryAddress ?? ""),
+        city:    String(o.consigneeCity    ?? ""),
+        state:   String(o.consigneeState   ?? ""),
+        zip:     String(o.consigneeZipCode ?? o.zipCode         ?? ""),
+      };
+    });
+    return map;
+  }, [orders]);
+
   const headers = useMemo(
     () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
     [user]
@@ -869,6 +886,18 @@ export default function ShippingTypePage() {
       </tr>`;
     }).join("");
 
+    // Address block — one per order (name + address + city/state/zip)
+    const addrLines = codes.map((c) => {
+      const a = addrMap[c];
+      if (!a || (!a.name && !a.address)) return "";
+      const cityLine = [a.city, a.state, a.zip].filter(Boolean).join(", ");
+      return `<div style="margin-top:2pt;padding:2pt 3pt;border-left:2pt solid #000;background:#f8f8f8">
+        ${a.name ? `<div style="font-size:8pt;font-weight:bold;font-family:'Courier New',monospace">${a.name}</div>` : ""}
+        ${a.address ? `<div style="font-size:8pt;font-family:'Courier New',monospace">${a.address}</div>` : ""}
+        ${cityLine ? `<div style="font-size:8pt;font-family:'Courier New',monospace">${cityLine}</div>` : ""}
+      </div>`;
+    }).filter(Boolean).join("");
+
     // All order codes, one per line (with Shipping Order No if available)
     const orderNoLines = codes.map((c) => {
       const shipNo = shipNoMap[c];
@@ -920,6 +949,7 @@ export default function ShippingTypePage() {
       <div style="font-size:8pt;color:#555;margin-top:2pt">&#128196; ${sortLabel}</div>
       <div style="font-size:9pt;margin-top:3pt">Order No.:</div>
       ${orderNoLines}
+      ${addrLines ? `<div style="margin-top:4pt;font-size:8pt;color:#333;font-weight:bold">Ship To:</div>${addrLines}` : ""}
     </div>
     <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3pt;flex-shrink:0">
       <img src="${qrUrl}" width="80" height="80" style="border:1pt solid #000" onerror="this.style.display='none'"/>
