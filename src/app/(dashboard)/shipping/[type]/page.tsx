@@ -227,6 +227,7 @@ export default function ShippingTypePage() {
   const [allocWarnings,  setAllocWarnings]  = useState<string[]>([]);
   const [uomMap,         setUomMap]         = useState<Record<string, number>>({}); // sku → units_per_carton
   const [ticketSortOpen, setTicketSortOpen] = useState(false);  // PDF sort dropdown
+  const [allocAddrMap,   setAllocAddrMap]   = useState<Record<string, { name: string; address: string; city: string; state: string; zip: string }>>({});
 
   // orderCode → shippingOrderNo map (built from loaded orders list)
   const shipNoMap = useMemo(() => {
@@ -725,6 +726,7 @@ export default function ShippingTypePage() {
     setAllocLoading(true);
     setAllocRows([]);
     setAllocWarnings([]);
+    setAllocAddrMap({});
 
     const warnings: string[] = [];
     const rowMap: Record<string, AllocRow> = {};
@@ -777,6 +779,25 @@ export default function ShippingTypePage() {
     const rows = Object.values(rowMap).sort(pickingSort);
     setAllocWarnings(warnings);
     setAllocRows(rows);
+
+    // ── Fetch order detail for each code → get address ──
+    const newAddrMap: Record<string, { name: string; address: string; city: string; state: string; zip: string }> = {};
+    await Promise.all(codes.map(async (code) => {
+      try {
+        const res  = await fetch(`/api/wms/shipping/${code}`, { headers });
+        const json = await res.json().catch(() => null);
+        if (!json) return;
+        const d = (json?.data ?? json) as Record<string, unknown>;
+        newAddrMap[code] = {
+          name:    String(d.consigneeName    ?? d.receiverName    ?? ""),
+          address: String(d.consigneeAddress1 ?? d.deliveryAddress ?? ""),
+          city:    String(d.consigneeCity    ?? ""),
+          state:   String(d.consigneeState   ?? ""),
+          zip:     String(d.consigneeZipCode ?? d.zipCode         ?? ""),
+        };
+      } catch { /* skip */ }
+    }));
+    setAllocAddrMap(newAddrMap);
 
     // ── Fetch UOM (units_per_carton) from Supabase for all SKUs ──
     const newUomMap: Record<string, number> = {};
@@ -888,7 +909,7 @@ export default function ShippingTypePage() {
 
     // Address block — one per order (name + address + city/state/zip)
     const addrLines = codes.map((c) => {
-      const a = addrMap[c];
+      const a = allocAddrMap[c] ?? addrMap[c];
       if (!a || (!a.name && !a.address)) return "";
       const cityLine = [a.city, a.state, a.zip].filter(Boolean).join(", ");
       return `<div style="margin-top:2pt;padding:2pt 3pt;border-left:2pt solid #000;background:#f8f8f8">
