@@ -912,10 +912,10 @@ export default function ShippingTypePage() {
       const a = allocAddrMap[c] ?? addrMap[c];
       if (!a || (!a.name && !a.address)) return "";
       const cityLine = [a.city, a.state, a.zip].filter(Boolean).join(", ");
-      return `<div style="margin-top:2pt;padding:2pt 3pt;border-left:2pt solid #000;background:#f8f8f8">
-        ${a.name ? `<div style="font-size:8pt;font-weight:bold;font-family:'Courier New',monospace">${a.name}</div>` : ""}
-        ${a.address ? `<div style="font-size:8pt;font-family:'Courier New',monospace">${a.address}</div>` : ""}
-        ${cityLine ? `<div style="font-size:8pt;font-family:'Courier New',monospace">${cityLine}</div>` : ""}
+      return `<div style="margin-top:2pt;padding:3pt 5pt;border-left:3pt solid #000;background:#f0f0f0">
+        ${a.name ? `<div style="font-size:9pt;font-weight:bold;font-family:Arial,sans-serif">${a.name}</div>` : ""}
+        ${a.address ? `<div style="font-size:9pt;font-family:Arial,sans-serif">${a.address}</div>` : ""}
+        ${cityLine ? `<div style="font-size:9pt;font-family:Arial,sans-serif">${cityLine}</div>` : ""}
       </div>`;
     }).filter(Boolean).join("");
 
@@ -970,7 +970,7 @@ export default function ShippingTypePage() {
       <div style="font-size:8pt;color:#555;margin-top:2pt">&#128196; ${sortLabel}</div>
       <div style="font-size:9pt;margin-top:3pt">Order No.:</div>
       ${orderNoLines}
-      ${addrLines ? `<div style="margin-top:4pt;font-size:8pt;color:#333;font-weight:bold">Ship To:</div>${addrLines}` : ""}
+      ${addrLines ? `<div style="margin-top:5pt;font-size:9pt;font-weight:bold;font-family:Arial,sans-serif">Ship To:</div>${addrLines}` : ""}
     </div>
     <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3pt;flex-shrink:0">
       <img src="${qrUrl}" width="80" height="80" style="border:1pt solid #000" onerror="this.style.display='none'"/>
