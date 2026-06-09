@@ -848,7 +848,7 @@ export default function ShippingTypePage() {
             .map((c) => {
               const qty = row.perOrder[c]!;
               const ctn = upc > 0 ? Math.ceil(qty / upc) : null;
-              return `<div style="font-size:8pt;margin-top:1pt;font-family:'Courier New',monospace">&nbsp;&nbsp;▸ ${c}: <b>${qty.toLocaleString()} EA${ctn != null ? ` / ${ctn} CTN` : ""}</b></div>`;
+              return `<div style="font-size:8pt;margin-top:1pt;font-family:'Courier New',monospace">&nbsp;&nbsp;▸ ${shipNoMap[c] || c}: <b>${qty.toLocaleString()} EA${ctn != null ? ` / ${ctn} CTN` : ""}</b></div>`;
             }).join("")
         : "";
 
@@ -991,7 +991,7 @@ export default function ShippingTypePage() {
             const qty  = row.perOrder[c]!;
             const ctn  = upc > 0 ? Math.ceil(qty / upc) : null;
             return `<tr>
-              <td style="border:1pt solid #000;padding:2pt 4pt;font-size:9pt">#${oIdx + 1} ${c}</td>
+              <td style="border:1pt solid #000;padding:2pt 4pt;font-size:9pt">#${oIdx + 1} ${shipNoMap[c] || c}</td>
               <td style="border:1pt solid #000;padding:2pt 4pt;font-size:9pt;text-align:right;font-weight:bold">${qty.toLocaleString()} EA${ctn != null ? ` / ${ctn} CTN` : ""}</td>
             </tr>`;
           }).join("")
