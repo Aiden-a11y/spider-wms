@@ -9,6 +9,7 @@ import {
   emptyRecvInfo,
   hasRecvInfo,
 } from "@/lib/receiving-info";
+import { normalizeInventory, type InventoryItem } from "@/lib/wms";
 
 type Row = Record<string, unknown>;
 
@@ -59,6 +60,7 @@ export default function ReceivingPage() {
   const [detail, setDetail] = useState<Row | null>(null);
   const [detailRaw, setDetailRaw] = useState<unknown>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [itemLocationMap, setItemLocationMap] = useState<Record<string, InventoryItem[]>>({});
   const [activeTab, setActiveTab] = useState<"info" | "items" | "docs" | "recvInfo" | "raw">("info");
   const [statusModal, setStatusModal] = useState(false);
   const [newStatus, setNewStatus] = useState("");
@@ -177,6 +179,30 @@ export default function ReceivingPage() {
       const merged = { ...d, _itemList: itemList };
       setDetailRaw({ detail: detailJson, items: itemsJson });
       setDetail(merged);
+
+      // Fetch assigned locations for items that have been put away
+      setItemLocationMap({});
+      const skusToFetch = Array.from(new Set(
+        itemList
+          .filter((it) => Number(it.assignedQty ?? 0) > 0)
+          .map((it) => String(it.productSku ?? ""))
+          .filter(Boolean)
+      ));
+      if (skusToFetch.length > 0) {
+        const newLocMap: Record<string, InventoryItem[]> = {};
+        await Promise.all(skusToFetch.map(async (sku) => {
+          try {
+            const invRes = await fetch("/api/wms/inventory/detail", {
+              method: "POST",
+              headers,
+              body: JSON.stringify({ warehouseCode, customerCode, productSku: sku }),
+            });
+            const invJson = await invRes.json().catch(() => null);
+            newLocMap[sku] = normalizeInventory(invJson).filter((it) => it.locationCode);
+          } catch { /* skip */ }
+        }));
+        setItemLocationMap(newLocMap);
+      }
     } catch {
       setDetail(row);
       setDetailRaw(null);
@@ -189,6 +215,7 @@ export default function ReceivingPage() {
     setSelected(null);
     setDetail(null);
     setDetailRaw(null);
+    setItemLocationMap({});
     setStatusModal(false);
     setNewStatus("");
     setCancelComment("");
@@ -361,6 +388,16 @@ export default function ReceivingPage() {
   const docs: Row[] = Array.isArray(d.documentList ?? d.documents)
     ? (d.documentList ?? d.documents) as Row[]
     : [];
+
+  // Locations where an item's assigned inventory was put away
+  function itemLocations(item: Row): string {
+    const sku = String(item.productSku ?? "");
+    const lot = String(item.lotNo ?? "");
+    const list = itemLocationMap[sku] ?? [];
+    const matches = lot ? list.filter((l) => l.lot === lot) : list;
+    if (matches.length === 0) return "-";
+    return matches.map((l) => `${l.locationCode} (${l.qty})`).join(", ");
+  }
 
   return (
     <div className="p-8">
@@ -819,6 +856,7 @@ export default function ReceivingPage() {
                               <th className="px-3 py-2 text-right text-slate-500 font-medium">Order Qty</th>
                               <th className="px-3 py-2 text-right text-slate-500 font-medium">Assigned</th>
                               <th className="px-3 py-2 text-right text-slate-500 font-medium">Unassigned</th>
+                              <th className="px-3 py-2 text-left text-slate-500 font-medium">Location</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -832,6 +870,7 @@ export default function ReceivingPage() {
                                 <td className="px-3 py-2 text-right font-semibold">{String(item.orderQty ?? "-")}</td>
                                 <td className="px-3 py-2 text-right text-slate-500">{String(item.assignedQty ?? "-")}</td>
                                 <td className="px-3 py-2 text-right text-slate-500">{String(item.unassignedQty ?? "-")}</td>
+                                <td className="px-3 py-2 font-mono text-slate-600">{itemLocations(item)}</td>
                               </tr>
                             ))}
                           </tbody>
