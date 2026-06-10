@@ -9,6 +9,7 @@ import {
   emptyRecvInfo,
   hasRecvInfo,
 } from "@/lib/receiving-info";
+import { buildLocationOccupancyLookup, getLocationOccupancyInfo } from "@/lib/wms";
 
 type Row = Record<string, unknown>;
 
@@ -59,7 +60,8 @@ export default function ReceivingPage() {
   const [detail, setDetail] = useState<Row | null>(null);
   const [detailRaw, setDetailRaw] = useState<unknown>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [itemLocationMap, setItemLocationMap] = useState<Record<string, { locationCode: string; qty: number }[]>>({});
+  const [itemLocationMap, setItemLocationMap] = useState<Record<string, { locationCode: string; qty: number; occupancy: string }[]>>({});
+  const [locationOccupancyLookup, setLocationOccupancyLookup] = useState<Map<string, string>>(new Map());
   const [expandedLocRows, setExpandedLocRows] = useState<Set<number>>(new Set());
   const [activeTab, setActiveTab] = useState<"info" | "items" | "docs" | "recvInfo" | "raw">("info");
   const [statusModal, setStatusModal] = useState(false);
@@ -156,14 +158,29 @@ export default function ReceivingPage() {
     try {
       // fetch detail + items in parallel
       const warehouseCode = String(row.warehouseCode ?? "");
-      const customerCode = String(row.customerCode ?? "");
 
-      const [detailRes, itemsRes] = await Promise.all([
+      const [detailRes, itemsRes, locRes] = await Promise.all([
         fetch(`/api/wms/receiving/${code}`, { headers }),
         fetch(`/api/wms/receiving/items/${code}`, { headers }),
+        fetch("/api/wms/warehouse/location/list", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ page: 1, pageSize: 9999, warehouseCode, search: "", sortField: "WarehouseCode", sortDir: "asc" }),
+        }),
       ]);
       const detailJson = await detailRes.json();
       const itemsJson = await itemsRes.json().catch(() => null);
+      const locJson = await locRes.json().catch(() => null);
+
+      const locArr: Row[] = Array.isArray(locJson?.data?.list)
+        ? locJson.data.list
+        : Array.isArray(locJson?.data)
+        ? locJson.data
+        : Array.isArray(locJson)
+        ? locJson
+        : [];
+      const occLookup = buildLocationOccupancyLookup(locArr);
+      setLocationOccupancyLookup(occLookup);
 
       const d: Row = (detailJson?.data ?? detailJson) as Row;
       const itemList: Row[] = Array.isArray(itemsJson?.data?.items)
@@ -189,7 +206,7 @@ export default function ReceivingPage() {
         ? itemsJson.assignments
         : [];
 
-      const newLocMap: Record<string, { locationCode: string; qty: number }[]> = {};
+      const newLocMap: Record<string, { locationCode: string; qty: number; occupancy: string }[]> = {};
       for (const a of assignments) {
         const itemId = String(a.itemId ?? "");
         if (!itemId) continue;
@@ -197,7 +214,14 @@ export default function ReceivingPage() {
           .map((v) => String(v ?? "").padStart(2, "0"))
           .join("-");
         const qty = Number(a.qty ?? 0);
-        (newLocMap[itemId] ??= []).push({ locationCode, qty });
+        const occupancy = getLocationOccupancyInfo(occLookup, {
+          zoneNm: a.zoneNm,
+          aisleNm: a.aisleNm,
+          bayNm: a.bayNm,
+          levelNm: a.levelNm,
+          positionNm: a.positionNm,
+        });
+        (newLocMap[itemId] ??= []).push({ locationCode, qty, occupancy });
       }
       setItemLocationMap(newLocMap);
     } catch {
@@ -213,6 +237,7 @@ export default function ReceivingPage() {
     setDetail(null);
     setDetailRaw(null);
     setItemLocationMap({});
+    setLocationOccupancyLookup(new Map());
     setExpandedLocRows(new Set());
     setStatusModal(false);
     setNewStatus("");
@@ -388,10 +413,27 @@ export default function ReceivingPage() {
     : [];
 
   // Locations where this receiving item's inventory was put away
-  function itemLocations(item: Row): string[] {
+  function itemLocations(item: Row): { locationCode: string; qty: number; occupancy: string }[] {
     const itemId = String(item.itemId ?? item.id ?? item.receiveItemId ?? "");
-    const list = itemLocationMap[itemId] ?? [];
-    return list.map((l) => `${l.locationCode} (${l.qty})`);
+    return itemLocationMap[itemId] ?? [];
+  }
+
+  function occupancyBadge(occupancy: string) {
+    const upper = occupancy.toUpperCase();
+    if (!upper) return null;
+    const isPicking = upper.includes("PICK");
+    const isStorage = upper.includes("STOR") || upper.includes("RESERVE");
+    const colorClass = isPicking
+      ? "bg-emerald-100 text-emerald-700"
+      : isStorage
+      ? "bg-indigo-100 text-indigo-700"
+      : "bg-slate-100 text-slate-600";
+    const label = isPicking ? "Picking" : isStorage ? "Storage" : occupancy;
+    return (
+      <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${colorClass}`}>
+        {label}
+      </span>
+    );
   }
 
   function toggleLocRow(i: number) {
@@ -885,7 +927,10 @@ export default function ReceivingPage() {
                                   ) : (
                                     <div className="flex flex-col gap-0.5">
                                       {visibleLocs.map((loc, li) => (
-                                        <span key={li}>{loc}</span>
+                                        <span key={li} className="flex items-center gap-1.5">
+                                          <span>{loc.locationCode} ({loc.qty})</span>
+                                          {occupancyBadge(loc.occupancy)}
+                                        </span>
                                       ))}
                                       {hiddenCount > 0 && (
                                         <button
