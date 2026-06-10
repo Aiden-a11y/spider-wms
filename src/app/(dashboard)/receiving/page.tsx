@@ -180,11 +180,10 @@ export default function ReceivingPage() {
       setDetailRaw({ detail: detailJson, items: itemsJson });
       setDetail(merged);
 
-      // Fetch assigned locations for items that have been put away
+      // Fetch assigned locations for this order's SKUs
       setItemLocationMap({});
       const skusToFetch = Array.from(new Set(
         itemList
-          .filter((it) => Number(it.assignedQty ?? 0) > 0)
           .map((it) => String(it.productSku ?? ""))
           .filter(Boolean)
       ));
@@ -389,14 +388,15 @@ export default function ReceivingPage() {
     ? (d.documentList ?? d.documents) as Row[]
     : [];
 
-  // Locations where an item's assigned inventory was put away
+  // Locations where an item's inventory was put away
   function itemLocations(item: Row): string {
     const sku = String(item.productSku ?? "");
-    const lot = String(item.lotNo ?? "");
+    const lot = String(item.lotNo ?? "").trim();
     const list = itemLocationMap[sku] ?? [];
-    const matches = lot ? list.filter((l) => l.lot === lot) : list;
-    if (matches.length === 0) return "-";
-    return matches.map((l) => `${l.locationCode} (${l.qty})`).join(", ");
+    if (list.length === 0) return "-";
+    const matches = lot ? list.filter((l) => (l.lot ?? "").trim() === lot) : list;
+    const display = matches.length > 0 ? matches : list;
+    return display.map((l) => `${l.locationCode} (${l.qty})`).join(", ");
   }
 
   return (
