@@ -61,6 +61,7 @@ export default function ReceivingPage() {
   const [detailRaw, setDetailRaw] = useState<unknown>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [itemLocationMap, setItemLocationMap] = useState<Record<string, InventoryItem[]>>({});
+  const [expandedLocRows, setExpandedLocRows] = useState<Set<number>>(new Set());
   const [activeTab, setActiveTab] = useState<"info" | "items" | "docs" | "recvInfo" | "raw">("info");
   const [statusModal, setStatusModal] = useState(false);
   const [newStatus, setNewStatus] = useState("");
@@ -182,6 +183,7 @@ export default function ReceivingPage() {
 
       // Fetch assigned locations for this order's SKUs
       setItemLocationMap({});
+      setExpandedLocRows(new Set());
       const skusToFetch = Array.from(new Set(
         itemList
           .map((it) => String(it.productSku ?? ""))
@@ -215,6 +217,7 @@ export default function ReceivingPage() {
     setDetail(null);
     setDetailRaw(null);
     setItemLocationMap({});
+    setExpandedLocRows(new Set());
     setStatusModal(false);
     setNewStatus("");
     setCancelComment("");
@@ -389,14 +392,22 @@ export default function ReceivingPage() {
     : [];
 
   // Locations where an item's inventory was put away
-  function itemLocations(item: Row): string {
+  function itemLocations(item: Row): string[] {
     const sku = String(item.productSku ?? "");
     const lot = String(item.lotNo ?? "").trim();
     const list = itemLocationMap[sku] ?? [];
-    if (list.length === 0) return "-";
+    if (list.length === 0) return [];
     const matches = lot ? list.filter((l) => (l.lot ?? "").trim() === lot) : list;
     const display = matches.length > 0 ? matches : list;
-    return display.map((l) => `${l.locationCode} (${l.qty})`).join(", ");
+    return display.map((l) => `${l.locationCode} (${l.qty})`);
+  }
+
+  function toggleLocRow(i: number) {
+    setExpandedLocRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i); else next.add(i);
+      return next;
+    });
   }
 
   return (
@@ -624,7 +635,7 @@ export default function ReceivingPage() {
       {selected && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
           <div className="absolute inset-0 bg-black/50" onClick={closeDetail} />
-          <div className="relative w-full max-w-5xl bg-white shadow-2xl flex flex-col rounded-2xl overflow-hidden" style={{ height: "90vh" }}>
+          <div className="relative w-full max-w-7xl bg-white shadow-2xl flex flex-col rounded-2xl overflow-hidden" style={{ height: "90vh" }}>
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
               <h2 className="font-semibold text-slate-900 text-sm">
@@ -856,12 +867,18 @@ export default function ReceivingPage() {
                               <th className="px-3 py-2 text-right text-slate-500 font-medium">Order Qty</th>
                               <th className="px-3 py-2 text-right text-slate-500 font-medium">Assigned</th>
                               <th className="px-3 py-2 text-right text-slate-500 font-medium">Unassigned</th>
-                              <th className="px-3 py-2 text-left text-slate-500 font-medium">Location</th>
+                              <th className="px-3 py-2 text-left text-slate-500 font-medium w-64">Location</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {items.map((item, i) => (
-                              <tr key={i} className="border-b border-slate-100 hover:bg-slate-50">
+                            {items.map((item, i) => {
+                              const locs = itemLocations(item);
+                              const expanded = expandedLocRows.has(i);
+                              const COLLAPSED_COUNT = 3;
+                              const visibleLocs = expanded ? locs : locs.slice(0, COLLAPSED_COUNT);
+                              const hiddenCount = locs.length - visibleLocs.length;
+                              return (
+                              <tr key={i} className="border-b border-slate-100 hover:bg-slate-50 align-top">
                                 <td className="px-3 py-2 text-slate-400">{item.seq != null ? String(item.seq) : i + 1}</td>
                                 <td className="px-3 py-2 font-mono font-medium text-slate-900">{String(item.productSku ?? "-")}</td>
                                 <td className="px-3 py-2 text-slate-700 max-w-xs truncate">{String(item.productName ?? "-")}</td>
@@ -870,9 +887,36 @@ export default function ReceivingPage() {
                                 <td className="px-3 py-2 text-right font-semibold">{String(item.orderQty ?? "-")}</td>
                                 <td className="px-3 py-2 text-right text-slate-500">{String(item.assignedQty ?? "-")}</td>
                                 <td className="px-3 py-2 text-right text-slate-500">{String(item.unassignedQty ?? "-")}</td>
-                                <td className="px-3 py-2 font-mono text-slate-600">{itemLocations(item)}</td>
+                                <td className="px-3 py-2 font-mono text-slate-600 w-64">
+                                  {locs.length === 0 ? (
+                                    "-"
+                                  ) : (
+                                    <div className="flex flex-col gap-0.5">
+                                      {visibleLocs.map((loc, li) => (
+                                        <span key={li}>{loc}</span>
+                                      ))}
+                                      {hiddenCount > 0 && (
+                                        <button
+                                          onClick={() => toggleLocRow(i)}
+                                          className="text-blue-600 hover:underline text-left font-sans"
+                                        >
+                                          +{hiddenCount} more
+                                        </button>
+                                      )}
+                                      {expanded && locs.length > COLLAPSED_COUNT && (
+                                        <button
+                                          onClick={() => toggleLocRow(i)}
+                                          className="text-slate-400 hover:underline text-left font-sans"
+                                        >
+                                          Show less
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
+                                </td>
                               </tr>
-                            ))}
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
