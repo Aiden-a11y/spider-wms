@@ -9,7 +9,6 @@ import {
   emptyRecvInfo,
   hasRecvInfo,
 } from "@/lib/receiving-info";
-import { normalizeInventory, type InventoryItem } from "@/lib/wms";
 
 type Row = Record<string, unknown>;
 
@@ -60,7 +59,7 @@ export default function ReceivingPage() {
   const [detail, setDetail] = useState<Row | null>(null);
   const [detailRaw, setDetailRaw] = useState<unknown>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [itemLocationMap, setItemLocationMap] = useState<Record<string, InventoryItem[]>>({});
+  const [itemLocationMap, setItemLocationMap] = useState<Record<string, { locationCode: string; qty: number }[]>>({});
   const [expandedLocRows, setExpandedLocRows] = useState<Set<number>>(new Set());
   const [activeTab, setActiveTab] = useState<"info" | "items" | "docs" | "recvInfo" | "raw">("info");
   const [statusModal, setStatusModal] = useState(false);
@@ -181,45 +180,26 @@ export default function ReceivingPage() {
       setDetailRaw({ detail: detailJson, items: itemsJson });
       setDetail(merged);
 
-      // Fetch assigned locations for this order's SKUs
-      setItemLocationMap({});
+      // Build assigned-location map from the order's putaway assignments
+      // (each assignment ties a receiving item to a specific bin location)
       setExpandedLocRows(new Set());
-      const skusToFetch = Array.from(new Set(
-        itemList
-          .map((it) => String(it.productSku ?? ""))
-          .filter(Boolean)
-      ));
-      if (skusToFetch.length > 0) {
-        const newLocMap: Record<string, InventoryItem[]> = {};
-        await Promise.all(skusToFetch.map(async (sku) => {
-          const merged: InventoryItem[] = [];
-          // Try with customerCode first, then without — customerCode mismatches
-          // can otherwise hide the correct rows or return another customer's stock.
-          for (const body of [
-            { warehouseCode, customerCode, productSku: sku },
-            { warehouseCode, productSku: sku },
-          ]) {
-            try {
-              const invRes = await fetch("/api/wms/inventory/detail", {
-                method: "POST",
-                headers,
-                body: JSON.stringify(body),
-              });
-              const invJson = await invRes.json().catch(() => null);
-              merged.push(...normalizeInventory(invJson).filter((it) => it.locationCode));
-            } catch { /* skip */ }
-          }
-          // Dedupe (same location/lot/qty can appear in both queries)
-          const seen = new Set<string>();
-          newLocMap[sku] = merged.filter((it) => {
-            const key = `${it.locationCode}__${it.lot}__${it.qty}`;
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-          });
-        }));
-        setItemLocationMap(newLocMap);
+      const assignments: Row[] = Array.isArray(itemsJson?.data?.assignments)
+        ? itemsJson.data.assignments
+        : Array.isArray(itemsJson?.assignments)
+        ? itemsJson.assignments
+        : [];
+
+      const newLocMap: Record<string, { locationCode: string; qty: number }[]> = {};
+      for (const a of assignments) {
+        const itemId = String(a.itemId ?? "");
+        if (!itemId) continue;
+        const locationCode = [a.zoneNm, a.aisleNm, a.bayNm, a.levelNm, a.positionNm]
+          .map((v) => String(v ?? "").padStart(2, "0"))
+          .join("-");
+        const qty = Number(a.qty ?? 0);
+        (newLocMap[itemId] ??= []).push({ locationCode, qty });
       }
+      setItemLocationMap(newLocMap);
     } catch {
       setDetail(row);
       setDetailRaw(null);
@@ -407,16 +387,11 @@ export default function ReceivingPage() {
     ? (d.documentList ?? d.documents) as Row[]
     : [];
 
-  // Locations where an item's inventory was put away
+  // Locations where this receiving item's inventory was put away
   function itemLocations(item: Row): string[] {
-    const sku = String(item.productSku ?? "");
-    const lot = String(item.lotNo ?? "").trim();
-    const list = itemLocationMap[sku] ?? [];
-    if (list.length === 0) return [];
-    // Require an exact lot match when the item has a lot — otherwise the
-    // SKU's full inventory list (across other lots/customers) is misleading.
-    const matches = lot ? list.filter((l) => (l.lot ?? "").trim() === lot) : list;
-    return matches.map((l) => `${l.locationCode} (${l.qty})`);
+    const itemId = String(item.itemId ?? item.id ?? item.receiveItemId ?? "");
+    const list = itemLocationMap[itemId] ?? [];
+    return list.map((l) => `${l.locationCode} (${l.qty})`);
   }
 
   function toggleLocRow(i: number) {
