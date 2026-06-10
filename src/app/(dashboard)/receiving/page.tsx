@@ -192,15 +192,31 @@ export default function ReceivingPage() {
       if (skusToFetch.length > 0) {
         const newLocMap: Record<string, InventoryItem[]> = {};
         await Promise.all(skusToFetch.map(async (sku) => {
-          try {
-            const invRes = await fetch("/api/wms/inventory/detail", {
-              method: "POST",
-              headers,
-              body: JSON.stringify({ warehouseCode, customerCode, productSku: sku }),
-            });
-            const invJson = await invRes.json().catch(() => null);
-            newLocMap[sku] = normalizeInventory(invJson).filter((it) => it.locationCode);
-          } catch { /* skip */ }
+          const merged: InventoryItem[] = [];
+          // Try with customerCode first, then without — customerCode mismatches
+          // can otherwise hide the correct rows or return another customer's stock.
+          for (const body of [
+            { warehouseCode, customerCode, productSku: sku },
+            { warehouseCode, productSku: sku },
+          ]) {
+            try {
+              const invRes = await fetch("/api/wms/inventory/detail", {
+                method: "POST",
+                headers,
+                body: JSON.stringify(body),
+              });
+              const invJson = await invRes.json().catch(() => null);
+              merged.push(...normalizeInventory(invJson).filter((it) => it.locationCode));
+            } catch { /* skip */ }
+          }
+          // Dedupe (same location/lot/qty can appear in both queries)
+          const seen = new Set<string>();
+          newLocMap[sku] = merged.filter((it) => {
+            const key = `${it.locationCode}__${it.lot}__${it.qty}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
         }));
         setItemLocationMap(newLocMap);
       }
@@ -397,9 +413,10 @@ export default function ReceivingPage() {
     const lot = String(item.lotNo ?? "").trim();
     const list = itemLocationMap[sku] ?? [];
     if (list.length === 0) return [];
+    // Require an exact lot match when the item has a lot — otherwise the
+    // SKU's full inventory list (across other lots/customers) is misleading.
     const matches = lot ? list.filter((l) => (l.lot ?? "").trim() === lot) : list;
-    const display = matches.length > 0 ? matches : list;
-    return display.map((l) => `${l.locationCode} (${l.qty})`);
+    return matches.map((l) => `${l.locationCode} (${l.qty})`);
   }
 
   function toggleLocRow(i: number) {
