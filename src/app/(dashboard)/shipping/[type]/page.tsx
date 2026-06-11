@@ -9,7 +9,7 @@ import {
   Building2, User, Store, Globe, MapPin, Save, CheckCircle2, ArrowLeftRight,
   ClipboardList, AlertTriangle, PackageCheck,
 } from "lucide-react";
-import { buildLocationOccupancyLookup, getLocationOccupancyInfo } from "@/lib/wms";
+import { buildLocationOccupancyLookup, getLocationOccupancyInfo, classifyOccupancy } from "@/lib/wms";
 import { supabase } from "@/lib/supabase";
 
 /* ── Shipping type config ── */
@@ -204,6 +204,16 @@ export default function ShippingTypePage() {
   const [autoAssigning,    setAutoAssigning]    = useState(false);
   const [autoAssignResult, setAutoAssignResult] = useState<"" | "ok" | "error">("");
   const [autoAssignMsg,    setAutoAssignMsg]    = useState("");
+  const [shippingItemsRaw, setShippingItemsRaw] = useState<Order[]>([]); // data.items (shippingItemId, unassignedQty)
+
+  /* ── Manual Assign modal state ── */
+  const [assignModalItem,  setAssignModalItem]  = useState<Order | null>(null);
+  const [assignStockOptions, setAssignStockOptions] = useState<Order[]>([]);
+  const [assignStockLoading, setAssignStockLoading] = useState(false);
+  const [assignSelectedIdx, setAssignSelectedIdx] = useState<number | null>(null);
+  const [assignQty,        setAssignQty]        = useState<number | "">("");
+  const [assigningManual,  setAssigningManual]  = useState(false);
+  const [assignModalError, setAssignModalError] = useState("");
 
   /* ── Change Status state ── */
   const [statusModal,    setStatusModal]    = useState(false);
@@ -311,6 +321,7 @@ export default function ShippingTypePage() {
     setSelected(order);
     setDetail(null);
     setItemsRaw([]);
+    setShippingItemsRaw([]);
     setActiveTab("info");
     setDetailLoading(true);
     setOccupancyMap(new Map());
@@ -420,6 +431,14 @@ export default function ShippingTypePage() {
       return null;
     }
 
+    // Helper: extract line-item list (shippingItemId/unassignedQty) from response
+    function parseShippingItems(json: unknown): Record<string, unknown>[] {
+      if (!json || typeof json !== "object") return [];
+      const j = json as Record<string, unknown>;
+      const list = (j?.data as Record<string, unknown>)?.items ?? j?.items;
+      return Array.isArray(list) ? (list as Record<string, unknown>[]) : [];
+    }
+
     // Try GET endpoints first (the confirmed working one is shipping/items/{code})
     let itemsFetched = false;
     for (const ep of itemEndpoints) {
@@ -427,6 +446,7 @@ export default function ShippingTypePage() {
         const res  = await fetch(ep, { headers });
         const json = await res.json().catch(() => null);
         const list = parseItemList(json);
+        if (res.ok && json) setShippingItemsRaw(parseShippingItems(json));
         if (res.ok && list) { setItemsRaw(list); itemsFetched = true; break; }
       } catch { /* ignore */ }
     }
@@ -467,12 +487,13 @@ export default function ShippingTypePage() {
   }
 
   function closeDetail() {
-    setSelected(null); setDetail(null); setItemsRaw([]);
+    setSelected(null); setDetail(null); setItemsRaw([]); setShippingItemsRaw([]);
     setEditMode(false); setEditData({}); setSaveError("");
     setTaskItems([]); setTaskType(TASK_TYPES[0]); setTaskQty(1);
     setOccupancyMap(new Map()); setPickingSaved(false);
     setAutoAssigning(false); setAutoAssignResult(""); setAutoAssignMsg("");
     setStatusModal(false); setNewStatus(""); setCancelComment(""); setOutDate(""); setNeedOutDate(false); setStatusError("");
+    closeAssignModal();
   }
 
   /* ── Start Packing: save address data from detail and navigate ── */
@@ -527,7 +548,56 @@ export default function ShippingTypePage() {
     router.push(`/packing?order=${encodeURIComponent(orderCode)}`);
   }
 
-  /* ── Auto Assign: call WMS endpoint, then reload picking items ── */
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  /* Fetch & rank candidate locations for a SKU: GOOD condition, availQty > 0,
+     sorted by occupancy preference (soft, B2C→picking / B2B→storage) then FEFO */
+  async function fetchRankedStock(whCode: string, custCode: string, sku: string, orderType: string) {
+    const res = await fetch(
+      `/api/wms/shipping/available-stock/${encodeURIComponent(whCode)}/${encodeURIComponent(custCode)}?productSku=${encodeURIComponent(sku)}`,
+      { headers }
+    );
+    const json = await res.json().catch(() => ({}));
+    const list: Order[] = Array.isArray((json as Record<string, unknown>)?.data) ? (json as Record<string, unknown>).data as Order[] : [];
+    const candidates = list.filter(
+      (s) => String(s.itemCondition ?? "").toUpperCase() === "GOOD" && Number(s.availQty ?? 0) > 0
+    );
+    const preferredKind = orderType === "B2C" ? "picking" : orderType === "B2B" ? "storage" : null;
+    candidates.sort((a, b) => {
+      if (preferredKind) {
+        const aKind = classifyOccupancy(getLocationOccupancyInfo(occupancyMap, a as Record<string, unknown>));
+        const bKind = classifyOccupancy(getLocationOccupancyInfo(occupancyMap, b as Record<string, unknown>));
+        const aPref = aKind === preferredKind ? 0 : 1;
+        const bPref = bKind === preferredKind ? 0 : 1;
+        if (aPref !== bPref) return aPref - bPref;
+      }
+      const expA = String(a.expireDate ?? "") || "99999999";
+      const expB = String(b.expireDate ?? "") || "99999999";
+      return expA.localeCompare(expB);
+    });
+    return candidates;
+  }
+
+  /* Commit one location+qty allocation to one shipping line item */
+  async function postAssign(item: Order, stock: Order, qty: number, code: string, whCode: string, custCode: string) {
+    const body = {
+      shippingOrderCode: code,
+      shippingItemId: item.shippingItemId,
+      customerCode: custCode,
+      warehouseCode: whCode,
+      warehouseCd: stock.location,
+      productSku: item.productSku,
+      lotNo: stock.lotNo ?? "",
+      expireDate: stock.expireDate ?? "",
+      itemCondition: stock.itemCondition ?? "GOOD",
+      qty,
+    };
+    const res = await fetch("/api/wms/shipping/assign", { method: "POST", headers, body: JSON.stringify(body) });
+    const json = await res.json().catch(() => ({}));
+    return { ok: res.ok && ((json as Record<string, unknown>)?.isSuccess ?? true), message: String((json as Record<string, unknown>)?.message ?? (json as Record<string, unknown>)?.msg ?? "") };
+  }
+
+  /* ── Auto Assign: FEFO + GOOD-condition allocation using available-stock + assign ── */
   async function runAutoAssign() {
     if (!selected) return;
     const code = String(
@@ -537,47 +607,143 @@ export default function ShippingTypePage() {
 
     const whCode   = String(selected.warehouseCode ?? selected.warehouse ?? warehouseCode ?? "");
     const custCode = String(selected.customerCode ?? "");
+    const orderType = String(selected.orderType ?? params.type ?? "").toUpperCase();
 
     setAutoAssigning(true);
     setAutoAssignResult("");
     setAutoAssignMsg("");
 
-    // Confirmed WMS endpoint: POST /shipping/auto-assign
-    // Payload: { warehouseCode, customerCode, orderCodes: [code] }
-    let succeeded = false;
-    try {
-      const body = { warehouseCode: whCode, customerCode: custCode, orderCodes: [code] };
-      const res  = await fetch("/api/wms/shipping/auto-assign", {
-        method: "POST", headers, body: JSON.stringify(body),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (res.ok) {
-        setAutoAssignResult("ok");
-        setAutoAssignMsg(String((json as Record<string, unknown>)?.message ?? (json as Record<string, unknown>)?.msg ?? "Auto assign completed"));
-        succeeded = true;
-      } else {
-        setAutoAssignResult("error");
-        setAutoAssignMsg(String((json as Record<string, unknown>)?.message ?? (json as Record<string, unknown>)?.msg ?? `HTTP ${res.status}`));
-        succeeded = true; // endpoint found, WMS rejected the request
-      }
-    } catch (e) {
-      setAutoAssignResult("error");
-      setAutoAssignMsg(String(e instanceof Error ? e.message : "Network error"));
+    const pending = shippingItemsRaw.filter((it) => Number(it.unassignedQty ?? 0) > 0);
+
+    if (pending.length === 0) {
+      setAutoAssigning(false);
+      setAutoAssignResult("ok");
+      setAutoAssignMsg("No unassigned items to allocate.");
+      return;
     }
 
-    if (!succeeded) {
-      setAutoAssignResult("error");
-      setAutoAssignMsg("Auto-assign request failed. Check network connection.");
+    let assignedCount = 0;
+    const issues: string[] = [];
+
+    for (const item of pending) {
+      const sku = String(item.productSku ?? "");
+      let remaining = Number(item.unassignedQty ?? 0);
+      let candidates: Order[] = [];
+      try {
+        candidates = await fetchRankedStock(whCode, custCode, sku, orderType);
+      } catch (e) {
+        issues.push(`${sku}: stock lookup failed (${e instanceof Error ? e.message : "error"})`);
+        continue;
+      }
+
+      for (const stock of candidates) {
+        if (remaining <= 0) break;
+        const allocQty = Math.min(remaining, Number(stock.availQty ?? 0));
+        if (allocQty <= 0) continue;
+
+        const { ok, message } = await postAssign(item, stock, allocQty, code, whCode, custCode);
+        if (ok) {
+          remaining -= allocQty;
+          assignedCount++;
+        } else {
+          issues.push(`${sku}: ${message || "assign failed"}`);
+          break;
+        }
+        await sleep(250); // pace requests
+      }
+
+      if (remaining > 0) {
+        issues.push(`${sku}: ${remaining} unit(s) could not be allocated (insufficient GOOD stock)`);
+      }
+      await sleep(250);
     }
 
     setAutoAssigning(false);
+    if (issues.length === 0) {
+      setAutoAssignResult("ok");
+      setAutoAssignMsg(`Assigned ${assignedCount} location${assignedCount === 1 ? "" : "s"}.`);
+    } else {
+      setAutoAssignResult("error");
+      setAutoAssignMsg(`Assigned ${assignedCount}, ${issues.length} issue(s): ${issues.join("; ")}`);
+    }
 
-    // Reload picking items after successful assign
-    if (succeeded) {
+    setItemsRaw([]);
+    setShippingItemsRaw([]);
+    setPickingSaved(false);
+    await openDetail(selected);
+  }
+
+  /* ── Manual Assign modal ── */
+  function closeAssignModal() {
+    setAssignModalItem(null);
+    setAssignStockOptions([]);
+    setAssignSelectedIdx(null);
+    setAssignQty("");
+    setAssignModalError("");
+  }
+
+  async function openAssignModal(item: Order) {
+    if (!selected) return;
+    setAssignModalItem(item);
+    setAssignStockOptions([]);
+    setAssignSelectedIdx(null);
+    setAssignQty("");
+    setAssignModalError("");
+    setAssignStockLoading(true);
+
+    const whCode   = String(selected.warehouseCode ?? selected.warehouse ?? warehouseCode ?? "");
+    const custCode = String(selected.customerCode ?? "");
+    const orderType = String(selected.orderType ?? params.type ?? "").toUpperCase();
+    const sku = String(item.productSku ?? "");
+
+    try {
+      const candidates = await fetchRankedStock(whCode, custCode, sku, orderType);
+      setAssignStockOptions(candidates);
+      if (candidates.length > 0) {
+        setAssignSelectedIdx(0);
+        const remaining = Number(item.unassignedQty ?? 0);
+        setAssignQty(Math.min(remaining, Number(candidates[0].availQty ?? 0)));
+      } else {
+        setAssignModalError("No available GOOD-condition stock found for this SKU.");
+      }
+    } catch (e) {
+      setAssignModalError(e instanceof Error ? e.message : "Failed to load stock options");
+    }
+    setAssignStockLoading(false);
+  }
+
+  async function confirmManualAssign() {
+    if (!selected || !assignModalItem || assignSelectedIdx == null) return;
+    const stock = assignStockOptions[assignSelectedIdx];
+    if (!stock) return;
+    const qty = Number(assignQty || 0);
+    if (qty <= 0) {
+      setAssignModalError("Quantity must be greater than 0.");
+      return;
+    }
+
+    const code = String(selected.shippingOrderCode ?? selected.orderCode ?? selected.outboundCode ?? "");
+    const whCode   = String(selected.warehouseCode ?? selected.warehouse ?? warehouseCode ?? "");
+    const custCode = String(selected.customerCode ?? "");
+
+    setAssigningManual(true);
+    setAssignModalError("");
+    try {
+      const { ok, message } = await postAssign(assignModalItem, stock, qty, code, whCode, custCode);
+      if (!ok) {
+        setAssignModalError(message || "Assign failed");
+        setAssigningManual(false);
+        return;
+      }
+      closeAssignModal();
       setItemsRaw([]);
+      setShippingItemsRaw([]);
       setPickingSaved(false);
       await openDetail(selected);
+    } catch (e) {
+      setAssignModalError(e instanceof Error ? e.message : "Assign failed");
     }
+    setAssigningManual(false);
   }
 
   /* ── Change Status ── */
@@ -1319,6 +1485,14 @@ ${labels}
       ? (d.itemList ?? d.items ?? d.shippingItemList) as Order[]
       : [];
 
+  /* Picking table rows = assigned items + synthetic rows for unassigned remainders */
+  const pickingRows: Order[] = [
+    ...itemList,
+    ...shippingItemsRaw
+      .filter((it) => Number(it.unassignedQty ?? 0) > 0)
+      .map((it) => ({ ...it, _unassigned: true, qty: it.unassignedQty, assignedQty: 0, remainQty: it.unassignedQty })),
+  ];
+
   /* Fields to skip in "extra" section */
   const SKIP_FIELDS = new Set([
     "shippingOrderCode","orderCode","outboundCode","status","orderStatus","statusName",
@@ -1772,6 +1946,111 @@ ${labels}
               </div>
             )}
 
+            {/* ── Manual Assign Sub-modal ── */}
+            {assignModalItem && (
+              <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/30 rounded-2xl">
+                <div className="bg-white rounded-xl shadow-xl w-[28rem] p-6 max-h-[80vh] overflow-y-auto">
+                  <h3 className="font-semibold text-slate-900 text-sm mb-1 flex items-center gap-2">
+                    <MapPin className="w-4 h-4 text-slate-400" />
+                    Assign Location
+                  </h3>
+                  <p className="text-xs text-slate-500 mb-4">
+                    SKU <span className="font-mono">{String(assignModalItem.productSku ?? "")}</span>
+                    {" "}— unassigned {Number(assignModalItem.unassignedQty ?? 0).toLocaleString()}
+                  </p>
+
+                  {assignStockLoading ? (
+                    <div className="flex items-center justify-center py-10 text-slate-400">
+                      <RefreshCw className="w-5 h-5 animate-spin" />
+                    </div>
+                  ) : assignStockOptions.length === 0 ? (
+                    <p className="text-sm text-slate-400 text-center py-8">
+                      {assignModalError || "No available stock found."}
+                    </p>
+                  ) : (
+                    <>
+                      <div className="space-y-2 mb-4">
+                        {assignStockOptions.map((stock, i) => {
+                          const locParts = [
+                            stock.zoneNm ?? stock.zone ?? "",
+                            stock.aisleNm ?? stock.aisle ?? "",
+                            stock.bayNm ?? stock.bay ?? "",
+                            stock.levelNm ?? stock.level ?? "",
+                            stock.positionNm ?? stock.position ?? "",
+                          ].map(String).filter(Boolean);
+                          const location = locParts.length > 0 ? locParts.join("-") : String(stock.location ?? "");
+                          const occupancyInfo = getLocationOccupancyInfo(occupancyMap, stock as Record<string, unknown>);
+                          const kind = classifyOccupancy(occupancyInfo);
+                          return (
+                            <label key={i} className={`flex items-center gap-3 border rounded-lg px-3 py-2 cursor-pointer transition-colors ${assignSelectedIdx === i ? "border-blue-400 bg-blue-50" : "border-slate-200 hover:bg-slate-50"}`}>
+                              <input
+                                type="radio"
+                                name="assign-location"
+                                checked={assignSelectedIdx === i}
+                                onChange={() => {
+                                  setAssignSelectedIdx(i);
+                                  const remaining = Number(assignModalItem.unassignedQty ?? 0);
+                                  setAssignQty(Math.min(remaining, Number(stock.availQty ?? 0)));
+                                }}
+                                className="text-blue-600 focus:ring-blue-500"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono text-sm text-slate-800">{location || "-"}</span>
+                                  {occupancyInfo && (
+                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium border ${kind === "picking" ? "bg-emerald-50 text-emerald-700 border-emerald-100" : kind === "storage" ? "bg-purple-50 text-purple-700 border-purple-100" : "bg-slate-50 text-slate-500 border-slate-200"}`}>
+                                      {occupancyInfo}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-xs text-slate-400 font-mono">
+                                  Lot {String(stock.lotNo ?? "-")} · Exp {String(stock.expireDate ?? "-")}
+                                </div>
+                              </div>
+                              <div className="text-sm font-semibold text-slate-700 tabular-nums">
+                                {Number(stock.availQty ?? 0).toLocaleString()}
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+
+                      <div className="mb-4">
+                        <label className="text-xs text-slate-500 uppercase tracking-wide mb-1.5 block">Quantity</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={assignSelectedIdx != null ? Math.min(Number(assignModalItem.unassignedQty ?? 0), Number(assignStockOptions[assignSelectedIdx]?.availQty ?? 0)) : undefined}
+                          value={assignQty}
+                          onChange={(e) => setAssignQty(e.target.value === "" ? "" : Number(e.target.value))}
+                          className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  {assignModalError && assignStockOptions.length > 0 && (
+                    <p className="text-xs text-red-600 mb-3">{assignModalError}</p>
+                  )}
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={closeAssignModal}
+                      className="flex-1 text-sm border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-lg py-2 font-medium transition-colors"
+                    >Cancel</button>
+                    <button
+                      onClick={confirmManualAssign}
+                      disabled={assigningManual || assignSelectedIdx == null || !assignQty || Number(assignQty) <= 0}
+                      className="flex-1 text-sm bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white rounded-lg py-2 font-medium transition-colors flex items-center justify-center gap-1.5"
+                    >
+                      {assigningManual && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                      {assigningManual ? "Assigning…" : "Confirm"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Tabs */}
             <div className="flex border-b border-slate-200 px-6 flex-shrink-0 overflow-x-auto">
               {(["info", "address", "package", "additional", "picking", "raw"] as const).map((tab) => {
@@ -1780,7 +2059,7 @@ ${labels}
                   : tab === "address"  ? "Address"
                   : tab === "package"  ? "Package"
                   : tab === "additional" ? "Additional"
-                  : tab === "picking"  ? `Picking${itemList.length ? ` (${itemList.length})` : ""}`
+                  : tab === "picking"  ? `Picking${pickingRows.length ? ` (${pickingRows.length})` : ""}`
                   : "Raw";
                 return (
                   <button key={tab} onClick={() => setActiveTab(tab)}
@@ -1992,7 +2271,7 @@ ${labels}
                 {/* ── Picking tab ── */}
                 {activeTab === "picking" && (
                   <div className="p-6 space-y-4">
-                    {itemList.length === 0 ? (
+                    {pickingRows.length === 0 ? (
                       <div className="text-center py-16 text-slate-400">
                         <MapPin className="w-8 h-8 mx-auto mb-3 opacity-40" />
                         <p className="text-sm font-medium">No picking data available</p>
@@ -2004,24 +2283,24 @@ ${labels}
                         <div className="flex items-center gap-6 bg-slate-50 rounded-xl px-4 py-3 text-sm">
                           <div>
                             <span className="text-slate-500 text-xs">Total Lines</span>
-                            <p className="font-semibold text-slate-800">{itemList.length}</p>
+                            <p className="font-semibold text-slate-800">{pickingRows.length}</p>
                           </div>
                           <div>
                             <span className="text-slate-500 text-xs">Total Qty</span>
                             <p className="font-semibold text-slate-800 tabular-nums">
-                              {itemList.reduce((s, item) => s + Number(item.qty ?? item.totalQty ?? 0), 0).toLocaleString()}
+                              {pickingRows.reduce((s, item) => s + Number(item.qty ?? item.totalQty ?? 0), 0).toLocaleString()}
                             </p>
                           </div>
                           <div>
                             <span className="text-slate-500 text-xs">Assigned</span>
                             <p className="font-semibold text-green-700 tabular-nums">
-                              {itemList.reduce((s, item) => s + Number(item.assignedQty ?? item.assigned ?? item.qty ?? 0), 0).toLocaleString()}
+                              {pickingRows.reduce((s, item) => s + Number(item.assignedQty ?? item.assigned ?? item.qty ?? 0), 0).toLocaleString()}
                             </p>
                           </div>
                           <div>
                             <span className="text-slate-500 text-xs">Remain</span>
                             <p className="font-semibold text-amber-600 tabular-nums">
-                              {itemList.reduce((s, item) => s + Number(item.remainQty ?? item.remain ?? 0), 0).toLocaleString()}
+                              {pickingRows.reduce((s, item) => s + Number(item.remainQty ?? item.remain ?? 0), 0).toLocaleString()}
                             </p>
                           </div>
                           <div className="ml-auto flex items-center gap-2">
@@ -2063,7 +2342,8 @@ ${labels}
                               </tr>
                             </thead>
                             <tbody>
-                              {itemList.map((item, i) => {
+                              {pickingRows.map((item, i) => {
+                                const isUnassigned = !!item._unassigned;
                                 // Readable location from Nm fields (confirmed: zoneNm/aisleNm/bayNm/levelNm/positionNm)
                                 const locParts = [
                                   item.zoneNm ?? item.zoneName ?? item.zone ?? "",
@@ -2083,16 +2363,22 @@ ${labels}
                                 const status   = String(item.status ?? item.itemStatus ?? item.itemCondition ?? "");
                                 const isOk     = status.toUpperCase() === "OK" || remain === 0;
                                 return (
-                                  <tr key={i} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+                                  <tr key={i} className={`border-b border-slate-100 last:border-0 hover:bg-slate-50 ${isUnassigned ? "bg-amber-50/40" : ""}`}>
                                     <td className="px-3 py-2.5 text-slate-400">{i + 1}</td>
                                     <td className="px-3 py-2.5 font-mono text-slate-800 whitespace-nowrap">
-                                      <span className="flex items-center gap-1">
-                                        <MapPin className="w-3 h-3 text-slate-400 flex-shrink-0" />
-                                        {location || "-"}
-                                      </span>
+                                      {isUnassigned ? (
+                                        <span className="text-amber-600 italic">(미배정)</span>
+                                      ) : (
+                                        <span className="flex items-center gap-1">
+                                          <MapPin className="w-3 h-3 text-slate-400 flex-shrink-0" />
+                                          {location || "-"}
+                                        </span>
+                                      )}
                                     </td>
                                     <td className="px-3 py-2.5 whitespace-nowrap">
-                                      {occupancyInfo ? (
+                                      {isUnassigned ? (
+                                        <span className="text-slate-300">—</span>
+                                      ) : occupancyInfo ? (
                                         <span className="text-xs bg-purple-50 text-purple-700 border border-purple-100 px-2 py-0.5 rounded-full font-medium">
                                           {occupancyInfo}
                                         </span>
@@ -2108,9 +2394,18 @@ ${labels}
                                     <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-green-700">{assigned.toLocaleString()}</td>
                                     <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${remain > 0 ? "text-amber-600" : "text-slate-300"}`}>{remain.toLocaleString()}</td>
                                     <td className="px-3 py-2.5 text-center">
-                                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${isOk ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>
-                                        {status || (isOk ? "OK" : "—")}
-                                      </span>
+                                      {isUnassigned ? (
+                                        <button
+                                          onClick={() => openAssignModal(item)}
+                                          className="text-xs font-semibold px-2.5 py-1 rounded-full bg-blue-600 hover:bg-blue-700 text-white transition-colors"
+                                        >
+                                          Assign
+                                        </button>
+                                      ) : (
+                                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${isOk ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>
+                                          {status || (isOk ? "OK" : "—")}
+                                        </span>
+                                      )}
                                     </td>
                                   </tr>
                                 );
@@ -2120,13 +2415,13 @@ ${labels}
                               <tr className="bg-slate-50 border-t border-slate-200">
                                 <td colSpan={7} className="px-3 py-2.5 text-xs font-semibold text-slate-500 uppercase">Total</td>
                                 <td className="px-3 py-2.5 text-right tabular-nums font-bold text-slate-800">
-                                  {itemList.reduce((s, item) => s + Number(item.qty ?? item.totalQty ?? 0), 0).toLocaleString()}
+                                  {pickingRows.reduce((s, item) => s + Number(item.qty ?? item.totalQty ?? 0), 0).toLocaleString()}
                                 </td>
                                 <td className="px-3 py-2.5 text-right tabular-nums font-bold text-green-700">
-                                  {itemList.reduce((s, item) => s + Number(item.assignedQty ?? item.assigned ?? item.qty ?? 0), 0).toLocaleString()}
+                                  {pickingRows.reduce((s, item) => s + Number(item.assignedQty ?? item.assigned ?? item.qty ?? 0), 0).toLocaleString()}
                                 </td>
                                 <td className="px-3 py-2.5 text-right tabular-nums font-bold text-amber-600">
-                                  {itemList.reduce((s, item) => s + Number(item.remainQty ?? item.remain ?? 0), 0).toLocaleString()}
+                                  {pickingRows.reduce((s, item) => s + Number(item.remainQty ?? item.remain ?? 0), 0).toLocaleString()}
                                 </td>
                                 <td />
                               </tr>
