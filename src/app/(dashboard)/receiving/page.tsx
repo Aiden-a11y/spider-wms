@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo } from "react";
 import { useAuth } from "@/contexts/auth-context";
-import { RefreshCw, AlertCircle, PackageCheck, X, Search, ArrowLeftRight, ChevronLeft, ChevronRight, CheckCircle2, ClipboardList, Save } from "lucide-react";
+import { RefreshCw, AlertCircle, PackageCheck, X, Search, ArrowLeftRight, ChevronLeft, ChevronRight, CheckCircle2, ClipboardList, Save, Download } from "lucide-react";
 import {
   type ReceivingInfo,
   CONTAINER_SIZES,
@@ -418,6 +418,14 @@ export default function ReceivingPage() {
     return itemLocationMap[itemId] ?? [];
   }
 
+  function occupancyLabel(occupancy: string) {
+    const upper = occupancy.toUpperCase();
+    if (!upper) return "";
+    const isPicking = upper.includes("PICK");
+    const isStorage = upper.includes("STOR") || upper.includes("RESERVE");
+    return isPicking ? "Picking" : isStorage ? "Storage" : occupancy;
+  }
+
   function occupancyBadge(occupancy: string) {
     const upper = occupancy.toUpperCase();
     if (!upper) return null;
@@ -428,12 +436,55 @@ export default function ReceivingPage() {
       : isStorage
       ? "bg-indigo-100 text-indigo-700"
       : "bg-slate-100 text-slate-600";
-    const label = isPicking ? "Picking" : isStorage ? "Storage" : occupancy;
     return (
       <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${colorClass}`}>
-        {label}
+        {occupancyLabel(occupancy)}
       </span>
     );
+  }
+
+  async function exportItemsToExcel() {
+    const ExcelJS = (await import("exceljs")).default;
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Products");
+
+    const headerRow = ["#", "SKU", "Product", "LOT", "Expire", "Order Qty", "Assigned", "Unassigned", "Location", "Qty", "Occupancy"];
+    ws.addRow(headerRow);
+    ws.getRow(1).font = { bold: true };
+    ws.columns = [
+      { width: 6 }, { width: 16 }, { width: 36 }, { width: 12 }, { width: 10 },
+      { width: 10 }, { width: 10 }, { width: 10 }, { width: 18 }, { width: 8 }, { width: 12 },
+    ];
+
+    items.forEach((item, i) => {
+      const locs = itemLocations(item);
+      const base = [
+        item.seq != null ? String(item.seq) : i + 1,
+        String(item.productSku ?? "-"),
+        String(item.productName ?? "-"),
+        String(item.lotNo ?? "-"),
+        String(item.expireDate ?? "-"),
+        Number(item.orderQty ?? 0),
+        Number(item.assignedQty ?? 0),
+        Number(item.unassignedQty ?? 0),
+      ];
+      if (locs.length === 0) {
+        ws.addRow([...base, "-", "-", "-"]);
+      } else {
+        for (const loc of locs) {
+          ws.addRow([...base, loc.locationCode, loc.qty, occupancyLabel(loc.occupancy) || "-"]);
+        }
+      }
+    });
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Receiving_${String(d.receiveOrderCode ?? d.orderCode ?? "items")}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   function toggleLocRow(i: number) {
@@ -889,6 +940,16 @@ export default function ReceivingPage() {
                     {items.length === 0 ? (
                       <p className="text-slate-400 text-sm text-center py-10">No items data</p>
                     ) : (
+                      <div>
+                        <div className="flex justify-end mb-3">
+                          <button
+                            onClick={exportItemsToExcel}
+                            className="flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-1.5 hover:bg-slate-50 transition-colors"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            Export
+                          </button>
+                        </div>
                       <div className="overflow-x-auto">
                         <table className="w-full text-xs">
                           <thead>
@@ -901,7 +962,8 @@ export default function ReceivingPage() {
                               <th className="px-3 py-2 text-right text-slate-500 font-medium">Order Qty</th>
                               <th className="px-3 py-2 text-right text-slate-500 font-medium">Assigned</th>
                               <th className="px-3 py-2 text-right text-slate-500 font-medium">Unassigned</th>
-                              <th className="px-3 py-2 text-left text-slate-500 font-medium w-64">Location</th>
+                              <th className="px-3 py-2 text-left text-slate-500 font-medium w-48">Location</th>
+                              <th className="px-3 py-2 text-left text-slate-500 font-medium w-28">Occupancy</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -911,6 +973,7 @@ export default function ReceivingPage() {
                               const COLLAPSED_COUNT = 3;
                               const visibleLocs = expanded ? locs : locs.slice(0, COLLAPSED_COUNT);
                               const hiddenCount = locs.length - visibleLocs.length;
+                              const extraRows = (hiddenCount > 0 ? 1 : 0) + (expanded && locs.length > COLLAPSED_COUNT ? 1 : 0);
                               return (
                               <tr key={i} className="border-b border-slate-100 hover:bg-slate-50 align-top">
                                 <td className="px-3 py-2 text-slate-400">{item.seq != null ? String(item.seq) : i + 1}</td>
@@ -921,16 +984,13 @@ export default function ReceivingPage() {
                                 <td className="px-3 py-2 text-right font-semibold">{String(item.orderQty ?? "-")}</td>
                                 <td className="px-3 py-2 text-right text-slate-500">{String(item.assignedQty ?? "-")}</td>
                                 <td className="px-3 py-2 text-right text-slate-500">{String(item.unassignedQty ?? "-")}</td>
-                                <td className="px-3 py-2 font-mono text-slate-600 w-64">
+                                <td className="px-3 py-2 font-mono text-slate-600 w-48">
                                   {locs.length === 0 ? (
                                     "-"
                                   ) : (
                                     <div className="flex flex-col gap-0.5">
                                       {visibleLocs.map((loc, li) => (
-                                        <span key={li} className="flex items-center gap-1.5">
-                                          <span>{loc.locationCode} ({loc.qty})</span>
-                                          {occupancyBadge(loc.occupancy)}
-                                        </span>
+                                        <span key={li}>{loc.locationCode} ({loc.qty})</span>
                                       ))}
                                       {hiddenCount > 0 && (
                                         <button
@@ -951,11 +1011,28 @@ export default function ReceivingPage() {
                                     </div>
                                   )}
                                 </td>
+                                <td className="px-3 py-2 w-28">
+                                  {locs.length === 0 ? (
+                                    "-"
+                                  ) : (
+                                    <div className="flex flex-col gap-0.5">
+                                      {visibleLocs.map((loc, li) => (
+                                        <span key={li} className="flex items-center h-[18px]">
+                                          {occupancyBadge(loc.occupancy) ?? <span className="text-slate-300">-</span>}
+                                        </span>
+                                      ))}
+                                      {Array.from({ length: extraRows }, (_, ei) => (
+                                        <span key={`pad-${ei}`} className="h-[18px]" />
+                                      ))}
+                                    </div>
+                                  )}
+                                </td>
                               </tr>
                               );
                             })}
                           </tbody>
                         </table>
+                      </div>
                       </div>
                     )}
                   </div>
