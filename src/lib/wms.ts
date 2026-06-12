@@ -90,8 +90,9 @@ export function getLocationOccupancyInfo(
   return "";
 }
 
-export function classifyOccupancy(occupancyInfo: string): "picking" | "storage" | "other" {
+export function classifyOccupancy(occupancyInfo: string): "shelf" | "picking" | "storage" | "other" {
   const upper = occupancyInfo.toUpperCase();
+  if (upper.includes("SHELF")) return "shelf";
   if (upper.includes("PICK")) return "picking";
   if (upper.includes("STOR") || upper.includes("RESERVE") || upper.includes("PALLET")) return "storage";
   return "other";

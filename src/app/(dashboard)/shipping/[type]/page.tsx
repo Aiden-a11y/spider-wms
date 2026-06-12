@@ -550,8 +550,11 @@ export default function ShippingTypePage() {
 
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-  /* Fetch & rank candidate locations for a SKU: GOOD condition, availQty > 0,
-     sorted by occupancy preference (soft, B2C→picking / B2B→storage) then FEFO */
+  /* Fetch & rank candidate locations for a SKU: GOOD condition, availQty > 0, FEFO.
+     B2C orders are hard-restricted to Shelf locations — auto-assign should never
+     pull B2C orders from Pallet; if no Shelf stock exists, `needsReplenish` is
+     set so the caller can flag a Pallet→Shelf replenishment instead of assigning.
+     B2B keeps a soft preference for Storage/Pallet locations. */
   async function fetchRankedStock(whCode: string, custCode: string, sku: string, orderType: string) {
     const res = await fetch(
       `/api/wms/shipping/available-stock/${encodeURIComponent(whCode)}/${encodeURIComponent(custCode)}?productSku=${encodeURIComponent(sku)}`,
@@ -559,11 +562,26 @@ export default function ShippingTypePage() {
     );
     const json = await res.json().catch(() => ({}));
     const list: Order[] = Array.isArray((json as Record<string, unknown>)?.data) ? (json as Record<string, unknown>).data as Order[] : [];
-    const candidates = list.filter(
+    const goodStock = list.filter(
       (s) => String(s.itemCondition ?? "").toUpperCase() === "GOOD" && Number(s.availQty ?? 0) > 0
     );
-    const preferredKind = orderType === "B2C" ? "picking" : orderType === "B2B" ? "storage" : null;
-    candidates.sort((a, b) => {
+
+    const byFefo = (a: Order, b: Order) => {
+      const expA = String(a.expireDate ?? "") || "99999999";
+      const expB = String(b.expireDate ?? "") || "99999999";
+      return expA.localeCompare(expB);
+    };
+
+    if (orderType === "B2C") {
+      const shelfStock = goodStock.filter(
+        (s) => classifyOccupancy(getLocationOccupancyInfo(occupancyMap, s as Record<string, unknown>)) === "shelf"
+      );
+      shelfStock.sort(byFefo);
+      return { candidates: shelfStock, needsReplenish: shelfStock.length === 0 && goodStock.length > 0 };
+    }
+
+    const preferredKind = orderType === "B2B" ? "storage" : null;
+    goodStock.sort((a, b) => {
       if (preferredKind) {
         const aKind = classifyOccupancy(getLocationOccupancyInfo(occupancyMap, a as Record<string, unknown>));
         const bKind = classifyOccupancy(getLocationOccupancyInfo(occupancyMap, b as Record<string, unknown>));
@@ -571,11 +589,9 @@ export default function ShippingTypePage() {
         const bPref = bKind === preferredKind ? 0 : 1;
         if (aPref !== bPref) return aPref - bPref;
       }
-      const expA = String(a.expireDate ?? "") || "99999999";
-      const expB = String(b.expireDate ?? "") || "99999999";
-      return expA.localeCompare(expB);
+      return byFefo(a, b);
     });
-    return candidates;
+    return { candidates: goodStock, needsReplenish: false };
   }
 
   /* Commit one location+qty allocation to one shipping line item */
@@ -629,8 +645,11 @@ export default function ShippingTypePage() {
       const sku = String(item.productSku ?? "");
       let remaining = Number(item.unassignedQty ?? 0);
       let candidates: Order[] = [];
+      let needsReplenish = false;
       try {
-        candidates = await fetchRankedStock(whCode, custCode, sku, orderType);
+        const ranked = await fetchRankedStock(whCode, custCode, sku, orderType);
+        candidates = ranked.candidates;
+        needsReplenish = ranked.needsReplenish;
       } catch (e) {
         issues.push(`${sku}: stock lookup failed (${e instanceof Error ? e.message : "error"})`);
         continue;
@@ -653,7 +672,11 @@ export default function ShippingTypePage() {
       }
 
       if (remaining > 0) {
-        issues.push(`${sku}: ${remaining} unit(s) could not be allocated (insufficient GOOD stock)`);
+        if (needsReplenish) {
+          issues.push(`${sku}: ${remaining} unit(s) need replenishment from Pallet to Shelf (no Shelf stock available)`);
+        } else {
+          issues.push(`${sku}: ${remaining} unit(s) could not be allocated (insufficient GOOD stock)`);
+        }
       }
       await sleep(250);
     }
@@ -697,12 +720,14 @@ export default function ShippingTypePage() {
     const sku = String(item.productSku ?? "");
 
     try {
-      const candidates = await fetchRankedStock(whCode, custCode, sku, orderType);
+      const { candidates, needsReplenish } = await fetchRankedStock(whCode, custCode, sku, orderType);
       setAssignStockOptions(candidates);
       if (candidates.length > 0) {
         setAssignSelectedIdx(0);
         const remaining = Number(item.unassignedQty ?? 0);
         setAssignQty(Math.min(remaining, Number(candidates[0].availQty ?? 0)));
+      } else if (needsReplenish) {
+        setAssignModalError("No Shelf stock available for this SKU (B2C requires Shelf) — replenish from Pallet to Shelf first.");
       } else {
         setAssignModalError("No available GOOD-condition stock found for this SKU.");
       }
@@ -2005,7 +2030,7 @@ ${labels}
                                 <div className="flex items-center gap-2">
                                   <span className="font-mono text-sm text-slate-800">{location || "-"}</span>
                                   {occupancyInfo && (
-                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium border ${kind === "picking" ? "bg-emerald-50 text-emerald-700 border-emerald-100" : kind === "storage" ? "bg-purple-50 text-purple-700 border-purple-100" : "bg-slate-50 text-slate-500 border-slate-200"}`}>
+                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium border ${kind === "shelf" ? "bg-blue-50 text-blue-700 border-blue-100" : kind === "picking" ? "bg-emerald-50 text-emerald-700 border-emerald-100" : kind === "storage" ? "bg-purple-50 text-purple-700 border-purple-100" : "bg-slate-50 text-slate-500 border-slate-200"}`}>
                                       {occupancyInfo}
                                     </span>
                                   )}
