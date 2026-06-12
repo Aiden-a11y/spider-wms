@@ -92,66 +92,30 @@ export default function ProductsPage() {
     setLoading(true);
     setError("");
     try {
-      // 1. Get all warehouses
-      const whRes = await fetch("/api/wms/combo/warehouse", { headers });
-      const whJson = await whRes.json();
-      const warehouses: { id: string }[] = (Array.isArray(whJson?.data) ? whJson.data : Array.isArray(whJson) ? whJson : [])
-        .map((w: Record<string, unknown>) => ({ id: String(w.code ?? w.id ?? "") }))
-        .filter((w: { id: string }) => w.id);
-      if (warehouses.length === 0) throw new Error("No warehouses found");
-
-      // 2. Collect customers from ALL endpoints (same as previous sync logic)
-      const custMap: Record<string, { code: string; name: string }> = {};
-      const parseCustomers = (json: unknown) => {
-        const arr = Array.isArray((json as Record<string,unknown>)?.data)
-          ? ((json as Record<string,unknown>).data as Record<string,unknown>[])
-          : Array.isArray(json) ? (json as Record<string,unknown>[]) : [];
-        arr.forEach((c) => {
-          const code = String(c.code ?? c.customerCode ?? "");
-          const name = String(c.name ?? c.customerName ?? code);
-          if (code && !custMap[code]) custMap[code] = { code, name };
-        });
-      };
-
-      const custEndpoints: string[] = [];
-      for (const wh of warehouses) {
-        custEndpoints.push(
-          `/api/wms/combo/customer-by-warehouse/${wh.id}`,
-          `/api/wms/combo/customer-by-ordertype/B2B?warehouseCode=${wh.id}`,
-          `/api/wms/combo/customer-by-ordertype/B2C?warehouseCode=${wh.id}`,
-        );
-      }
-      custEndpoints.push("/api/wms/combo/customer");
-
-      await Promise.all(custEndpoints.map(ep =>
-        fetch(ep, { headers }).then(r => r.json()).then(parseCustomers).catch(() => {})
-      ));
-
-      const customers = Object.values(custMap);
-      if (customers.length === 0) throw new Error("No customers found");
-
-      // 3. Fetch products per customer across all warehouses (paginated)
+      // 1. Fetch all products in one paginated sweep (no per-customer
+      // iteration — some customer codes like DEMO1/SSUSA/STL have products
+      // in the master but never appear in the combo customer endpoints,
+      // so iterating those would silently drop their products).
       const all: ProductMaster[] = [];
-      const whCode = warehouses[0].id;   // product list only needs one warehouse code
-
-      for (const cust of customers) {
-        let page = 1;
-        while (true) {
-          const res = await fetch("/api/wms/product/list", {
-            method: "POST", headers,
-            body: JSON.stringify({ warehouseCode: whCode, customerCode: cust.code, page, pageNum: page, pageSize: 500, size: 500 }),
-          });
-          const json = await res.json() as Record<string, unknown>;
-          const data = (json?.data as Record<string, unknown>) ?? {};
-          const items: Record<string, unknown>[] =
-            Array.isArray(data?.list)  ? (data.list  as Record<string, unknown>[]) :
-            Array.isArray(data?.items) ? (data.items as Record<string, unknown>[]) :
-            Array.isArray(json?.data)  ? (json.data  as Record<string, unknown>[]) : [];
-          if (items.length === 0) break;
-          items.forEach((p) => all.push({
+      let page = 1;
+      while (true) {
+        const res = await fetch("/api/wms/product/list", {
+          method: "POST", headers,
+          body: JSON.stringify({ warehouseCode: "", customerCode: "", page, pageNum: page, pageSize: 500, size: 500 }),
+        });
+        const json = await res.json() as Record<string, unknown>;
+        const data = (json?.data as Record<string, unknown>) ?? {};
+        const items: Record<string, unknown>[] =
+          Array.isArray(data?.list)  ? (data.list  as Record<string, unknown>[]) :
+          Array.isArray(data?.items) ? (data.items as Record<string, unknown>[]) :
+          Array.isArray(json?.data)  ? (json.data  as Record<string, unknown>[]) : [];
+        if (items.length === 0) break;
+        items.forEach((p) => {
+          const customerCode = String(p.customerCode ?? "");
+          all.push({
             sku:                String(p.productSku ?? p.sku ?? ""),
-            customer_code:      cust.code,
-            customer_name:      cust.name,
+            customer_code:      customerCode,
+            customer_name:      customerCode,
             product_name:       String(p.productName      ?? ""),
             product_short_name: String(p.productShortName ?? ""),
             barcode:            String(p.barcode ?? p.upcCode ?? ""),
@@ -162,13 +126,54 @@ export default function ProductsPage() {
             status:             String(p.status  ?? p.useYn ?? "Active"),
             item_store_comment: String(p.itemStoreComment ?? ""),
             description:        String(p.description ?? ""),
-          }));
-          const total = Number(data?.total ?? data?.totalCount ?? 0);
-          if (items.length < 500 || (total > 0 && all.filter(x => x.customer_code === cust.code).length >= total)) break;
-          page++;
-          if (page > 20) break;
-        }
+          });
+        });
+        const total = Number(data?.total ?? data?.totalCount ?? 0);
+        if (items.length < 500 || (total > 0 && all.length >= total)) break;
+        page++;
+        if (page > 20) break;
       }
+
+      // 2. Best-effort: enrich customer display names from the combo endpoints
+      try {
+        const whRes = await fetch("/api/wms/combo/warehouse", { headers });
+        const whJson = await whRes.json();
+        const warehouses: { id: string }[] = (Array.isArray(whJson?.data) ? whJson.data : Array.isArray(whJson) ? whJson : [])
+          .map((w: Record<string, unknown>) => ({ id: String(w.code ?? w.id ?? "") }))
+          .filter((w: { id: string }) => w.id);
+
+        const custMap: Record<string, string> = {};
+        const parseCustomers = (json: unknown) => {
+          const arr = Array.isArray((json as Record<string,unknown>)?.data)
+            ? ((json as Record<string,unknown>).data as Record<string,unknown>[])
+            : Array.isArray(json) ? (json as Record<string,unknown>[]) : [];
+          arr.forEach((c) => {
+            const code = String(c.code ?? c.customerCode ?? "");
+            const name = String(c.name ?? c.customerName ?? code);
+            if (code && !custMap[code]) custMap[code] = name;
+          });
+        };
+
+        const custEndpoints: string[] = [];
+        for (const wh of warehouses) {
+          custEndpoints.push(
+            `/api/wms/combo/customer-by-warehouse/${wh.id}`,
+            `/api/wms/combo/customer-by-ordertype/B2B?warehouseCode=${wh.id}`,
+            `/api/wms/combo/customer-by-ordertype/B2C?warehouseCode=${wh.id}`,
+          );
+        }
+        custEndpoints.push("/api/wms/combo/customer");
+
+        await Promise.all(custEndpoints.map(ep =>
+          fetch(ep, { headers }).then(r => r.json()).then(parseCustomers).catch(() => {})
+        ));
+
+        all.forEach((p) => {
+          const name = custMap[p.customer_code];
+          if (name) p.customer_name = name;
+        });
+      } catch { /* customer name enrichment is optional */ }
+
       setAllProducts(all.filter(p => p.sku));
 
       // 4. Load UOM from Supabase (only dashboard-specific data)
