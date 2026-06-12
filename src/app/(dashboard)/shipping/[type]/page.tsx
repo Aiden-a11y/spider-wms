@@ -1751,7 +1751,7 @@ ${labels}
       {selected && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
           <div className="absolute inset-0 bg-black/50" onClick={closeDetail} />
-          <div className="relative w-full max-w-4xl bg-white shadow-2xl flex flex-col rounded-2xl overflow-hidden" style={{ height: "88vh" }}>
+          <div className="relative w-full max-w-7xl bg-white shadow-2xl flex flex-col rounded-2xl overflow-hidden" style={{ height: "88vh" }}>
 
             {/* Modal header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 flex-shrink-0">
@@ -2367,7 +2367,7 @@ ${labels}
                                     <td className="px-3 py-2.5 text-slate-400">{i + 1}</td>
                                     <td className="px-3 py-2.5 font-mono text-slate-800 whitespace-nowrap">
                                       {isUnassigned ? (
-                                        <span className="text-amber-600 italic">(미배정)</span>
+                                        <span className="text-amber-600 italic">(Unassigned)</span>
                                       ) : (
                                         <span className="flex items-center gap-1">
                                           <MapPin className="w-3 h-3 text-slate-400 flex-shrink-0" />
