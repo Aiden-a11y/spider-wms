@@ -1485,9 +1485,16 @@ ${labels}
       ? (d.itemList ?? d.items ?? d.shippingItemList) as Order[]
       : [];
 
-  /* Picking table rows = assigned items + synthetic rows for unassigned remainders */
+  /* Picking table rows = assigned items (with a real location) + synthetic rows
+     for unassigned remainders. When an order has no assignments yet, the WMS
+     `assignments` array is empty and `itemList` falls back to the raw line
+     items — those have no location and would otherwise duplicate the
+     "(Unassigned)" rows below for the same SKU. */
+  const hasLocation = (item: Order) =>
+    Boolean(item.location ?? item.locationCode ?? item.zoneNm ?? item.zoneName ?? item.zone);
+
   const pickingRows: Order[] = [
-    ...itemList,
+    ...itemList.filter(hasLocation),
     ...shippingItemsRaw
       .filter((it) => Number(it.unassignedQty ?? 0) > 0)
       .map((it) => ({ ...it, _unassigned: true, qty: it.unassignedQty, assignedQty: 0, remainQty: it.unassignedQty })),
