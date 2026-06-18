@@ -825,20 +825,56 @@ export default function ShippingTypePage() {
       const cand = candidates[i];
       setDetectProgress({ done: i + 1, total: candidates.length });
       try {
-        const res = await fetch(`/api/wms/shipping/items/${cand.orderCode}`, { headers });
-        const json = await res.json().catch(() => ({}));
-        const data = (json?.data ?? {}) as Record<string, unknown>;
-        const rawItems: Record<string, unknown>[] =
-          Array.isArray(data?.items) ? data.items as Record<string, unknown>[] :
-          Array.isArray(json?.items) ? json.items as Record<string, unknown>[] : [];
+        // Try multiple endpoints / response shapes to get order line items
+        let rawItems: Record<string, unknown>[] = [];
+
+        const tryEndpoints = [
+          `/api/wms/shipping/items/${cand.orderCode}`,
+          `/api/wms/shipping/${type}/items/${cand.orderCode}`,
+        ];
+        for (const ep of tryEndpoints) {
+          if (rawItems.length > 0) break;
+          const res = await fetch(ep, { headers });
+          const json = await res.json().catch(() => ({}));
+          if (!res.ok) continue;
+          const j = json as Record<string, unknown>;
+          const d = (j?.data ?? {}) as Record<string, unknown>;
+          // Try every known response shape for order line items
+          const candidates_ = [
+            d?.items, j?.items,
+            d?.list, j?.list,
+            // assignments can serve as fallback — dedupe by productSku, use orderQty
+            d?.assignments, j?.assignments,
+          ];
+          for (const c of candidates_) {
+            if (Array.isArray(c) && c.length > 0) {
+              rawItems = c as Record<string, unknown>[];
+              break;
+            }
+          }
+        }
+
+        // Also try POST item/list endpoint as last resort
+        if (rawItems.length === 0) {
+          const res = await fetch(`/api/wms/shipping/${type}/item/list`, {
+            method: "POST", headers,
+            body: JSON.stringify({ shippingOrderCode: cand.orderCode, pageNum: 1, pageSize: 500 }),
+          });
+          const json = await res.json().catch(() => ({}));
+          const j = json as Record<string, unknown>;
+          const d = (j?.data ?? {}) as Record<string, unknown>;
+          const c = d?.list ?? j?.list ?? d?.items ?? j?.items;
+          if (Array.isArray(c)) rawItems = c as Record<string, unknown>[];
+        }
 
         if (rawItems.length === 0) continue;
 
-        // Aggregate qty per SKU
+        // Aggregate ordered qty per SKU (orderQty = what was ordered, not what's assigned)
         const skuMap = new Map<string, { name: string; qty: number }>();
         for (const it of rawItems) {
           const sku  = String(it.productSku ?? it.sku ?? "");
           const name = String(it.productName ?? it.itemName ?? "");
+          // orderQty is the order quantity; qty may be location-specific in assignments
           const qty  = Number(it.orderQty ?? it.qty ?? 0);
           if (!sku) continue;
           const prev = skuMap.get(sku);
