@@ -104,7 +104,7 @@ type TaskItem = { type: string; qty: number };
 
 type BatchCandidate = {
   fingerprint: string;
-  orders: { orderCode: string; customerCode: string }[];
+  orders: { orderCode: string; customerCode: string; orderNo?: string }[];
   skuList: { sku: string; name: string; qty: number }[];
 };
 
@@ -814,6 +814,7 @@ export default function ShippingTypePage() {
     const candidates = orders.map((o) => ({
       orderCode: String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? ""),
       customerCode: String(o.customerCode ?? ""),
+      orderNo: String(o.shippingOrderNo ?? o.orderNo ?? o.orderNumber ?? "") || undefined,
     })).filter((c) => c.orderCode);
 
     setDetectProgress({ done: 0, total: candidates.length });

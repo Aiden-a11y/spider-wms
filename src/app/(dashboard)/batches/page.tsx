@@ -523,12 +523,12 @@ export default function BatchesPage() {
                   {/* Order list */}
                   <details className="px-5 pb-4">
                     <summary className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer select-none py-2 font-medium">
-                      View {batch.orderCount} order codes
+                      View {batch.orderCount} order numbers
                     </summary>
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       {batch.orders.map((o) => (
                         <span key={o.orderCode} className="font-mono text-xs bg-white border border-slate-200 px-2.5 py-1 rounded-lg text-slate-700 font-medium">
-                          {o.orderCode}
+                          {o.orderNo ?? o.orderCode}
                         </span>
                       ))}
                     </div>

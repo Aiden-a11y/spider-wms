@@ -4,7 +4,7 @@ import redis from "@/lib/redis";
 export interface Batch {
   id: string;
   fingerprint: string;
-  orders: { orderCode: string; customerCode: string }[];
+  orders: { orderCode: string; customerCode: string; orderNo?: string }[];
   skuList: { sku: string; name: string; qty: number }[];
   orderCount: number;
   type: string;
