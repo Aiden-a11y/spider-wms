@@ -331,7 +331,27 @@ export default function ClustersPage() {
           }
         }
 
-        if (needsReplenishment) replenishmentBins.push(binNo);
+        // Collect replenishment SKU list from rawAssignments (Case B) or rawItems (Case C)
+        let replenishmentItems: { sku: string; name: string; qty: number; locationCode?: string }[] = [];
+        if (needsReplenishment) {
+          replenishmentBins.push(binNo);
+          if (rawAssignments.length > 0) {
+            // Case B: assigned to non-shelf — show current location so staff knows where to pull from
+            replenishmentItems = rawAssignments.map((a) => ({
+              sku: String(a.productSku ?? a.sku ?? ""),
+              name: String(a.productName ?? a.skuName ?? a.itemName ?? ""),
+              qty: Number(a.qty ?? a.assignQty ?? a.assignedQty ?? 0),
+              locationCode: String(a.locationCode ?? a.location ?? ""),
+            })).filter((r) => r.sku);
+          } else if (rawItems.length > 0) {
+            // Case C: no shelf stock — show what's needed
+            replenishmentItems = rawItems.map((it) => ({
+              sku: String(it.productSku ?? it.sku ?? ""),
+              name: String(it.productName ?? it.skuName ?? it.itemName ?? ""),
+              qty: Number(it.unassignedQty ?? it.qty ?? 0),
+            })).filter((r) => r.sku && r.qty > 0);
+          }
+        }
 
         // 4. Build bin items (empty if replenishment needed)
         const binItems: B2CClusterItem[] = shelfAssignments.map((a) => ({
@@ -361,6 +381,7 @@ export default function ClustersPage() {
           consigneeTelLNo: String(o.consigneeTelLNo ?? o.consigneeCellNo ?? ""),
           items: binItems,
           needsReplenishment,
+          ...(replenishmentItems.length > 0 ? { replenishmentItems } : {}),
         });
 
         // 5. Accumulate location groups
@@ -517,6 +538,53 @@ export default function ClustersPage() {
                 {/* Expanded: bins + location groups */}
                 {isExpanded && (
                   <div className="border-t border-slate-100">
+
+                    {/* Replenishment summary */}
+                    {cluster.replenishmentBins && cluster.replenishmentBins.length > 0 && (() => {
+                      // Aggregate SKUs across all replenishment bins
+                      const skuMap: Record<string, { name: string; qty: number; locations: string[] }> = {};
+                      cluster.bins.forEach((bin) => {
+                        if (!bin.needsReplenishment || !bin.replenishmentItems) return;
+                        bin.replenishmentItems.forEach((ri) => {
+                          if (!skuMap[ri.sku]) skuMap[ri.sku] = { name: ri.name, qty: 0, locations: [] };
+                          skuMap[ri.sku].qty += ri.qty;
+                          if (ri.locationCode && !skuMap[ri.sku].locations.includes(ri.locationCode))
+                            skuMap[ri.sku].locations.push(ri.locationCode);
+                        });
+                      });
+                      const rows = Object.entries(skuMap);
+                      if (rows.length === 0) return null;
+                      return (
+                        <div className="px-5 py-3 border-b border-amber-100 bg-amber-50/60">
+                          <p className="text-xs font-bold text-amber-700 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                            <AlertCircle className="w-3.5 h-3.5" /> Replenishment Summary — Move to Shelf
+                          </p>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr className="text-amber-600 font-semibold">
+                                  <th className="text-left py-1 pr-4">SKU</th>
+                                  <th className="text-left py-1 pr-4">Product</th>
+                                  <th className="text-right py-1 pr-4 w-16">Total Qty</th>
+                                  <th className="text-left py-1">Current Location</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {rows.map(([sku, info]) => (
+                                  <tr key={sku} className="border-t border-amber-100">
+                                    <td className="font-mono font-bold text-slate-700 py-1.5 pr-4">{sku}</td>
+                                    <td className="text-slate-600 py-1.5 pr-4 max-w-[180px] truncate">{info.name || "—"}</td>
+                                    <td className="text-right font-bold text-amber-700 py-1.5 pr-4">{info.qty}</td>
+                                    <td className="font-mono text-slate-500 py-1.5">{info.locations.join(", ") || "—"}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
                     {/* Bin list */}
                     <div className="px-5 py-3 border-b border-slate-100">
                       <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">Bins ({cluster.bins.length})</p>
@@ -531,10 +599,22 @@ export default function ClustersPage() {
                             <div className="flex-1 min-w-0">
                               <p className="font-mono text-xs font-bold text-slate-700 truncate">{bin.orderNo || bin.orderCode}</p>
                               {bin.consigneeName && <p className="text-xs text-slate-400 truncate">{bin.consigneeName}</p>}
-                              {bin.needsReplenishment
-                                ? <p className="text-xs font-semibold text-amber-600 flex items-center gap-1 mt-0.5"><AlertCircle className="w-3 h-3" /> Replenishment needed</p>
-                                : <p className="text-xs text-slate-400">{bin.items.length} item{bin.items.length !== 1 ? "s" : ""}</p>
-                              }
+                              {bin.needsReplenishment ? (
+                                <div className="mt-1 space-y-0.5">
+                                  {bin.replenishmentItems && bin.replenishmentItems.length > 0
+                                    ? bin.replenishmentItems.map((ri, ri_i) => (
+                                        <p key={ri_i} className="text-xs text-amber-700 font-mono flex items-center gap-1">
+                                          <span className="font-bold">{ri.sku}</span>
+                                          <span className="text-amber-500">×{ri.qty}</span>
+                                          {ri.locationCode && <span className="text-slate-400">@ {ri.locationCode}</span>}
+                                        </p>
+                                      ))
+                                    : <p className="text-xs font-semibold text-amber-600 flex items-center gap-1"><AlertCircle className="w-3 h-3" /> Replenishment needed</p>
+                                  }
+                                </div>
+                              ) : (
+                                <p className="text-xs text-slate-400">{bin.items.length} item{bin.items.length !== 1 ? "s" : ""}</p>
+                              )}
                             </div>
                           </div>
                         ))}
