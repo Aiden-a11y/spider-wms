@@ -31,6 +31,7 @@ import {
   AlertTriangle,
   SlidersHorizontal,
   BookOpen,
+  ShoppingCart,
 } from "lucide-react";
 
 type NavChild = { href: string; label: string; icon: React.ElementType };
@@ -65,6 +66,7 @@ const nav: NavItem[] = [
       { href: "/shipping/b2s", label: "B2S Shipping", icon: Store },
       { href: "/shipping/b2e", label: "B2E Shipping", icon: Globe },
       { href: "/packing", label: "Packing", icon: PackageCheck },
+      { href: "/clusters", label: "Cluster Pick", icon: ShoppingCart },
     ],
   },
   {
@@ -111,6 +113,7 @@ export default function Sidebar() {
     if (pathname === "/locations" || pathname.startsWith("/locations/")) s.add("Locations");
     if (pathname.startsWith("/shipping")) s.add("Shipping");
     if (pathname.startsWith("/packing")) s.add("Shipping");
+    if (pathname.startsWith("/clusters")) s.add("Shipping");
     if (pathname === "/billing" || pathname.startsWith("/billing/")) s.add("Billing");
     return s;
   });
