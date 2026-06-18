@@ -12,6 +12,7 @@ import type {
   B2CCluster, B2CClusterBin, B2CClusterLocationGroup, B2CClusterTask, B2CClusterItem,
 } from "@/lib/b2c-cluster";
 import { binColor, sortLocationGroups } from "@/lib/b2c-cluster";
+import { buildLocationOccupancyLookup, getLocationOccupancyInfo, classifyOccupancy } from "@/lib/wms";
 
 const MAX_BINS = 25;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -61,6 +62,29 @@ export default function ClustersPage() {
   const [loadingClusters, setLoadingClusters] = useState(false);
   const [expandedCluster, setExpandedCluster] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // ── Occupancy map ─────────────────────────────────────────────────────────
+  const [occupancyMap, setOccupancyMap] = useState<Map<string, string>>(new Map());
+
+  useEffect(() => {
+    if (!warehouseCode) return;
+    fetch("/api/wms/warehouse/location/list", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ page: 1, pageSize: 9999, warehouseCode }),
+    })
+      .then((r) => r.json())
+      .then((j) => {
+        const arr: Record<string, unknown>[] =
+          Array.isArray(j?.data?.list) ? j.data.list :
+          Array.isArray(j?.data) ? j.data : [];
+        if (arr.length > 0) setOccupancyMap(buildLocationOccupancyLookup(arr));
+      })
+      .catch(() => {});
+  }, [warehouseCode, headers]);
+
+  const isShelfLoc = (s: Record<string, unknown>) =>
+    classifyOccupancy(getLocationOccupancyInfo(occupancyMap, s)) === "shelf";
 
   // ── Replenishment assign ──────────────────────────────────────────────────
   const [assigningKeys, setAssigningKeys] = useState<Set<string>>(new Set());
@@ -276,9 +300,7 @@ export default function ClustersPage() {
         await sleep(80);
 
         // 2. Filter to shelf zone assignments
-        let shelfAssignments = rawAssignments.filter((a) =>
-          isShelf(a.zoneNm ?? a.zoneName ?? a.zone)
-        );
+        let shelfAssignments = rawAssignments.filter((a) => isShelfLoc(a));
 
         // 3. If no shelf assignments → check available shelf stock or flag replenishment
         let needsReplenishment = false;
@@ -319,7 +341,7 @@ export default function ClustersPage() {
             const stockJson = await stockRes.json().catch(() => ({})) as Record<string, unknown>;
             const stockList = (Array.isArray(stockJson?.data) ? stockJson.data : []) as Record<string, unknown>[];
             const shelfStock = stockList
-              .filter((s) => isShelf(s.zoneNm ?? s.zoneName) && Number(s.availQty ?? 0) > 0)
+              .filter((s) => isShelfLoc(s) && Number(s.availQty ?? 0) > 0)
               .sort((a, b) => {
                 const expA = String(a.expireDate ?? "") || "99999999";
                 const expB = String(b.expireDate ?? "") || "99999999";
