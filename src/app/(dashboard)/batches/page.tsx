@@ -273,7 +273,7 @@ export default function BatchesPage() {
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <button
-                    onClick={() => router.push(`/batches/print?id=${encodeURIComponent(batch.id)}`)}
+                    onClick={() => router.push(`/batches-print?id=${encodeURIComponent(batch.id)}`)}
                     className="p-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
                     title="Print Pick Tickets"
                   >
