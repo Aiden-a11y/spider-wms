@@ -114,7 +114,7 @@ const CSS = `
 
 /* ── Single ticket ── */
 function BinTicket({ bin, cluster }: { bin: B2CClusterBin; cluster: B2CCluster }) {
-  const qrText = strOr(bin.orderNo, bin.orderCode);
+  const qrText = strOr(bin.orderCode, bin.orderNo);
   const qrUrl = useQR(qrText);
   const color = binColor(bin.binNo);
   const addrLines = buildAddress(bin);
