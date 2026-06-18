@@ -119,9 +119,7 @@ function BinTicket({ bin, cluster }: { bin: B2CClusterBin; cluster: B2CCluster }
   const color = binColor(bin.binNo);
   const addrLines = buildAddress(bin);
 
-  // Decide what to show in items table
   const hasItems = bin.items.length > 0;
-  const hasReplenItems = !hasItems && bin.replenishmentItems && bin.replenishmentItems.length > 0;
 
   return (
     <div className="ticket">
@@ -161,10 +159,7 @@ function BinTicket({ bin, cluster }: { bin: B2CClusterBin; cluster: B2CCluster }
       <hr className="divider" />
 
       {/* Items */}
-      <div className="section-label">
-        Items
-        {bin.needsReplenishment && <span className="replen-badge">REPLENISHMENT NEEDED</span>}
-      </div>
+      <div className="section-label">Items</div>
       <table className="items-table">
         <thead>
           <tr>
@@ -175,25 +170,22 @@ function BinTicket({ bin, cluster }: { bin: B2CClusterBin; cluster: B2CCluster }
           </tr>
         </thead>
         <tbody>
-          {hasItems && bin.items.map((item, i) => (
-            <tr key={i} style={{ background: i % 2 === 0 ? "#fff" : "#f9fafb" }}>
-              <td className="col-loc">{item.locationCode || "—"}</td>
-              <td className="col-sku">{item.sku}</td>
-              <td style={{ fontSize: "6pt" }}>{item.name || "—"}</td>
-              <td className="col-qty">{item.qty}</td>
-            </tr>
-          ))}
-          {hasReplenItems && bin.replenishmentItems!.map((ri, i) => (
-            <tr key={i} style={{ background: i % 2 === 0 ? "#fffbeb" : "#fef3c7" }}>
-              <td className="col-loc" style={{ color: "#b45309" }}>{ri.locationCode || "—"}</td>
-              <td className="col-sku" style={{ color: "#b45309" }}>{ri.sku}</td>
-              <td style={{ fontSize: "6pt", color: "#92400e" }}>{ri.name || "—"}</td>
-              <td className="col-qty" style={{ color: "#b45309" }}>{ri.qty}</td>
-            </tr>
-          ))}
-          {!hasItems && !hasReplenItems && (
-            <tr><td colSpan={4} className="no-items">No items assigned</td></tr>
-          )}
+          {hasItems
+            ? bin.items.map((item, i) => (
+                <tr key={i} style={{ background: i % 2 === 0 ? "#fff" : "#f9fafb" }}>
+                  <td className="col-loc">{item.locationCode || "—"}</td>
+                  <td className="col-sku">{item.sku}</td>
+                  <td style={{ fontSize: "6pt" }}>{item.name || "—"}</td>
+                  <td className="col-qty">{item.qty}</td>
+                </tr>
+              ))
+            : (
+                <tr>
+                  <td colSpan={4} className="no-items">
+                    {bin.needsReplenishment ? "Awaiting replenishment" : "No items assigned"}
+                  </td>
+                </tr>
+              )}
         </tbody>
       </table>
 
