@@ -2,7 +2,8 @@
 
 import { useEffect, useState, useMemo } from "react";
 import { useAuth } from "@/contexts/auth-context";
-import { Layers, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Loader2, CheckCircle2, AlertCircle, X } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Layers, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Loader2, CheckCircle2, AlertCircle, X, Printer } from "lucide-react";
 import type { Batch } from "@/app/api/batch/route";
 
 type StockOption = {
@@ -37,6 +38,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export default function BatchesPage() {
   const { user } = useAuth();
+  const router = useRouter();
   const headers = useMemo(
     () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
     [user]
@@ -262,6 +264,13 @@ export default function BatchesPage() {
                   <p className="text-xs text-slate-400 mt-1">{new Date(batch.createdAt).toLocaleString()}</p>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    onClick={() => router.push(`/batches/print?id=${encodeURIComponent(batch.id)}`)}
+                    className="p-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+                    title="Print Pick Tickets"
+                  >
+                    <Printer className="w-4 h-4" />
+                  </button>
                   <button
                     onClick={() => deleteBatch(batch.id)}
                     disabled={isDeleting}
