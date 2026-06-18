@@ -58,50 +58,81 @@ function PrintInner() {
         if (!found) { setError("Batch not found"); setLoading(false); return; }
         setBatch(found);
 
+        // ── Step 1: bulk fetch order list to build address lookup map ──────────
+        function extractList(json: unknown): Record<string, unknown>[] {
+          if (!json || typeof json !== "object") return [];
+          const j = json as Record<string, unknown>;
+          const arr =
+            (j.data as Record<string, unknown>)?.list ??
+            (j.data as Record<string, unknown>)?.items ??
+            j.data ??
+            j.list ??
+            j.items ??
+            (Array.isArray(j) ? j : []);
+          return Array.isArray(arr) ? arr as Record<string, unknown>[] : [];
+        }
+
+        const orderMap = new Map<string, Record<string, unknown>>();
+        const custCodesSet = found.orders.map((o) => o.customerCode).filter(Boolean);
+        const custCodes = custCodesSet.filter((v, i, a) => a.indexOf(v) === i);
+
+        const orderType = found.type?.toUpperCase();
+
+        // Try bulk list endpoints — one call covers all orders of same type/warehouse
+        for (const body of [
+          { page: 1, pageSize: 500, warehouseCode: found.warehouseCode, orderType },
+          { page: 1, pageSize: 500, warehouseCode: found.warehouseCode, orderType, customerCode: custCodes[0] },
+          { page: 1, pageSize: 500, warehouseCode: found.warehouseCode },
+        ]) {
+          for (const ep of [
+            `/api/wms/shipping/${found.type}/list`,
+            `/api/wms/shipping/list`,
+            `/api/wms/outbound/list`,
+          ]) {
+            try {
+              const res = await fetch(ep, { method: "POST", headers, body: JSON.stringify(body) });
+              const json = await res.json().catch(() => null);
+              if (!res.ok || !json) continue;
+              const list = extractList(json);
+              list.forEach((o) => {
+                const oc = String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? "");
+                if (oc && !orderMap.has(oc)) orderMap.set(oc, o);
+              });
+              if (orderMap.size > 0) break;
+            } catch { /* try next */ }
+          }
+          if (orderMap.size > 0) break;
+        }
+
         const results = await Promise.all(
           found.orders.map(async (order) => {
             const code = order.orderCode;
-            const custCode = order.customerCode;
-            let orderData: Record<string, unknown> = {};
+            let orderData: Record<string, unknown> = orderMap.get(code) ?? {};
             let items: { sku: string; name: string; qty: number }[] = [];
 
-            // Address from detail endpoints
-            for (const ep of [
-              `/api/wms/shipping/${found.type}/detail/${encodeURIComponent(code)}`,
-              `/api/wms/shipping/detail/${encodeURIComponent(code)}`,
-              `/api/wms/outbound/detail/${encodeURIComponent(code)}`,
-            ]) {
-              try {
-                const res = await fetch(ep, { headers });
-                const json = await res.json().catch(() => null) as Record<string, unknown> | null;
-                if (!res.ok || !json) continue;
-                const d = ((json?.data ?? json) as Record<string, unknown>);
-                if (f(d, "consigneeName", "receiverName") || f(d, "consigneeAddress1", "deliveryAddress")) {
-                  orderData = d; break;
-                }
-              } catch { /* try next */ }
+            // If not found in list, try individual detail endpoints
+            if (!f(orderData, "consigneeName", "receiverName", "consigneeAddress1", "deliveryAddress")) {
+              for (const ep of [
+                `/api/wms/shipping/${encodeURIComponent(code)}`,                        // confirmed 200 OK
+                `/api/wms/shipping/${found.type}/${encodeURIComponent(code)}`,
+                `/api/wms/shipping/${found.type}/detail/${encodeURIComponent(code)}`,
+                `/api/wms/shipping/detail/${encodeURIComponent(code)}`,
+                `/api/wms/outbound/${found.type}/detail/${encodeURIComponent(code)}`,
+                `/api/wms/outbound/detail/${encodeURIComponent(code)}`,
+              ]) {
+                try {
+                  const res = await fetch(ep, { headers });
+                  const json = await res.json().catch(() => null) as Record<string, unknown> | null;
+                  if (!res.ok || !json) continue;
+                  const d = ((json?.data ?? json) as Record<string, unknown>);
+                  if (f(d, "consigneeName", "receiverName", "consigneeAddress1", "deliveryAddress")) {
+                    orderData = d; break;
+                  }
+                } catch { /* try next */ }
+              }
             }
 
-            // Fallback: search list
-            if (!f(orderData, "consigneeName", "receiverName")) {
-              try {
-                const body = { page: 1, pageSize: 500, warehouseCode: found.warehouseCode, customerCode: custCode };
-                const res = await fetch(`/api/wms/shipping/${found.type}/list`, { method: "POST", headers, body: JSON.stringify(body) });
-                const json = await res.json().catch(() => null) as Record<string, unknown> | null;
-                if (res.ok && json) {
-                  const d = (json?.data ?? {}) as Record<string, unknown>;
-                  const list: Record<string, unknown>[] = (
-                    Array.isArray(d.list) ? d.list :
-                    Array.isArray(d.items) ? d.items :
-                    Array.isArray(json?.data) ? json?.data as Record<string, unknown>[] : []
-                  ) as Record<string, unknown>[];
-                  const match = list.find((r) => String(r.shippingOrderCode ?? r.orderCode ?? "") === code);
-                  if (match) orderData = match;
-                }
-              } catch { /* ignore */ }
-            }
-
-            // Items
+            // Items: try items endpoint first, then assignments
             for (const ep of [
               `/api/wms/shipping/items/${encodeURIComponent(code)}`,
               `/api/wms/shipping/${found.type}/items/${encodeURIComponent(code)}`,
@@ -135,7 +166,7 @@ function PrintInner() {
             setLoadedCount((c) => c + 1);
 
             return {
-              orderCode: code, customerCode: custCode,
+              orderCode: code, customerCode: order.customerCode,
               consigneeName: f(orderData, "consigneeName", "receiverName", "customerName"),
               address1:      f(orderData, "consigneeAddress1", "deliveryAddress"),
               address2:      f(orderData, "consigneeAddress2"),
