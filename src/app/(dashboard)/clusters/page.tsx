@@ -146,8 +146,14 @@ export default function ClustersPage() {
   useEffect(() => { loadClusters(); }, [loadClusters]);
 
   // ── Selection helpers ─────────────────────────────────────────────────────
+  const clusteredCodes = useMemo(() => {
+    const set: Record<string, true> = {};
+    clusters.forEach((c) => c.bins.forEach((b) => { set[b.orderCode] = true; }));
+    return set;
+  }, [clusters]);
+
   const filteredOrders = useMemo(() => {
-    let list = orders;
+    let list = orders.filter((o) => !clusteredCodes[orderCodeOf(o)]);
     if (search) {
       const q = search.toLowerCase();
       list = list.filter((o) =>
