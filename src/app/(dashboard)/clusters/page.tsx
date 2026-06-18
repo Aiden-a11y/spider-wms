@@ -216,14 +216,21 @@ export default function ClustersPage() {
         const rawItems = (Array.isArray(d.items) ? d.items
           : Array.isArray(itemsJson?.items) ? itemsJson.items : []) as Record<string, unknown>[];
 
+        // Diagnostic: show what zones exist
+        const zoneSet: Record<string, true> = {};
+        rawAssignments.forEach((a) => { zoneSet[String(a.zoneNm ?? a.zoneName ?? a.zone ?? "—")] = true; });
+        const zoneNames = Object.keys(zoneSet).join(", ") || "(none)";
+        setCreateStep(`[${binNo}/${selected.length}] ${code} — ${rawAssignments.length} assignments, zones: ${zoneNames}`);
+        await sleep(100);
+
         // 2. Filter to shelf zone assignments
         let shelfAssignments = rawAssignments.filter((a) =>
           isShelf(a.zoneNm ?? a.zoneName ?? a.zone)
         );
 
-        // 3. If no shelf assignments, auto-assign from available stock (shelf only)
+        // 3a. If no shelf assignments but items exist → auto-assign from available shelf stock
         if (shelfAssignments.length === 0 && rawItems.length > 0) {
-          setCreateStep(`[${binNo}/${selected.length}] ${code} — assigning shelf locations…`);
+          setCreateStep(`[${binNo}/${selected.length}] ${code} — no shelf assignments, trying available stock…`);
           const custCode = String(o.customerCode ?? "");
 
           for (const item of rawItems) {
@@ -270,6 +277,13 @@ export default function ClustersPage() {
             });
             await sleep(200);
           }
+        }
+
+        // 3b. Fallback: if still no shelf assignments, use ALL assignments (any zone)
+        if (shelfAssignments.length === 0 && rawAssignments.length > 0) {
+          setCreateStep(`[${binNo}/${selected.length}] ${code} — shelf not found, using all zone assignments (${zoneNames})`);
+          shelfAssignments = rawAssignments;
+          await sleep(300);
         }
 
         // 4. Build bin items
@@ -409,6 +423,11 @@ export default function ClustersPage() {
                       <span className="text-base font-extrabold text-slate-900">{cluster.bins.length} bins</span>
                       <span className="text-sm text-slate-400">· {cluster.locationGroups.length} locations</span>
                       <span className="text-sm text-slate-400">· {cluster.warehouseCode}</span>
+                      {cluster.locationGroups.length === 0 && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-700">
+                          <AlertCircle className="w-3 h-3" /> No assignments found — delete and recreate
+                        </span>
+                      )}
                       {cluster.status === "completed" && (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-700">
                           <CheckCircle2 className="w-3 h-3" /> Completed
