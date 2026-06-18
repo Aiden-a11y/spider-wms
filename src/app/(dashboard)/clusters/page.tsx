@@ -42,6 +42,7 @@ export default function ClustersPage() {
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedCodes, setSelectedCodes] = useState<Record<string, boolean>>({});
+  const [colFilter, setColFilter] = useState({ orderCode: "", customer: "", consignee: "", qty: "", date: "" });
 
   // ── Clusters ──────────────────────────────────────────────────────────────
   const [clusters, setClusters] = useState<B2CCluster[]>([]);
@@ -127,18 +128,56 @@ export default function ClustersPage() {
 
   // ── Selection helpers ─────────────────────────────────────────────────────
   const filteredOrders = useMemo(() => {
-    if (!search) return orders;
-    const q = search.toLowerCase();
-    return orders.filter((o) =>
-      orderCodeOf(o).toLowerCase().includes(q) ||
-      String(o.customerName ?? "").toLowerCase().includes(q) ||
-      String(o.consigneeName ?? "").toLowerCase().includes(q) ||
-      String(o.shippingOrderNo ?? "").toLowerCase().includes(q)
-    );
-  }, [orders, search]);
+    let list = orders;
+    if (search) {
+      const q = search.toLowerCase();
+      list = list.filter((o) =>
+        orderCodeOf(o).toLowerCase().includes(q) ||
+        String(o.customerName ?? "").toLowerCase().includes(q) ||
+        String(o.consigneeName ?? "").toLowerCase().includes(q) ||
+        String(o.shippingOrderNo ?? "").toLowerCase().includes(q)
+      );
+    }
+    if (colFilter.orderCode) {
+      const q = colFilter.orderCode.toLowerCase();
+      list = list.filter((o) =>
+        orderCodeOf(o).toLowerCase().includes(q) ||
+        String(o.shippingOrderNo ?? "").toLowerCase().includes(q)
+      );
+    }
+    if (colFilter.customer) {
+      const q = colFilter.customer.toLowerCase();
+      list = list.filter((o) =>
+        String(o.customerName ?? "").toLowerCase().includes(q) ||
+        String(o.customerCode ?? "").toLowerCase().includes(q)
+      );
+    }
+    if (colFilter.consignee) {
+      const q = colFilter.consignee.toLowerCase();
+      list = list.filter((o) => String(o.consigneeName ?? "").toLowerCase().includes(q));
+    }
+    if (colFilter.qty) {
+      const n = Number(colFilter.qty);
+      if (!isNaN(n)) list = list.filter((o) => Number(o.totalQty ?? o.qty ?? 0) >= n);
+    }
+    if (colFilter.date) {
+      list = list.filter((o) => String(o.orderDate ?? "").includes(colFilter.date));
+    }
+    return list;
+  }, [orders, search, colFilter]);
+
+  const totalFilteredQty = useMemo(
+    () => filteredOrders.reduce((sum, o) => sum + Number(o.totalQty ?? o.qty ?? 0), 0),
+    [filteredOrders]
+  );
 
   const selectedList = filteredOrders.filter((o) => selectedCodes[orderCodeOf(o)]);
   const canCreate = selectedList.length > 0 && selectedList.length <= MAX_BINS;
+
+  function setCol(key: keyof typeof colFilter, val: string) {
+    setColFilter((p) => ({ ...p, [key]: val }));
+  }
+  const hasColFilter = Object.values(colFilter).some(Boolean);
 
   function toggleSelect(code: string) {
     setSelectedCodes((p) => ({ ...p, [code]: !p[code] }));
@@ -479,7 +518,25 @@ export default function ClustersPage() {
       {/* ── Order selection ── */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-bold text-slate-500 uppercase tracking-wide">Select B2C Orders</h2>
+          <div className="flex items-center gap-3">
+            <h2 className="text-sm font-bold text-slate-500 uppercase tracking-wide">Select B2C Orders</h2>
+            {!loadingOrders && orders.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">
+                  {filteredOrders.length} orders
+                </span>
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700">
+                  Total Qty: {totalFilteredQty.toLocaleString()}
+                </span>
+                {hasColFilter && (
+                  <button onClick={() => setColFilter({ orderCode: "", customer: "", consignee: "", qty: "", date: "" })}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors border border-slate-200">
+                    <X className="w-3 h-3" /> Clear filters
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             {selectedList.length > 0 && (
               <span className="text-xs text-slate-500">{selectedList.length} / {MAX_BINS} selected</span>
@@ -536,6 +593,35 @@ export default function ClustersPage() {
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wide">Consignee</th>
                 <th className="px-4 py-3 text-right text-xs font-semibold text-slate-400 uppercase tracking-wide w-16">Qty</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wide w-28">Date</th>
+              </tr>
+              <tr className="bg-white border-b border-slate-100">
+                <th />
+                <th className="px-3 py-1.5">
+                  <input value={colFilter.orderCode} onChange={(e) => setCol("orderCode", e.target.value)}
+                    placeholder="Filter…"
+                    className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs text-slate-700 placeholder:text-slate-300 focus:outline-none focus:ring-1 focus:ring-blue-400 font-normal" />
+                </th>
+                <th className="px-3 py-1.5">
+                  <input value={colFilter.customer} onChange={(e) => setCol("customer", e.target.value)}
+                    placeholder="Filter…"
+                    className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs text-slate-700 placeholder:text-slate-300 focus:outline-none focus:ring-1 focus:ring-blue-400 font-normal" />
+                </th>
+                <th className="px-3 py-1.5">
+                  <input value={colFilter.consignee} onChange={(e) => setCol("consignee", e.target.value)}
+                    placeholder="Filter…"
+                    className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs text-slate-700 placeholder:text-slate-300 focus:outline-none focus:ring-1 focus:ring-blue-400 font-normal" />
+                </th>
+                <th className="px-3 py-1.5">
+                  <input value={colFilter.qty} onChange={(e) => setCol("qty", e.target.value)}
+                    placeholder="≥"
+                    type="number" min={0}
+                    className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs text-slate-700 placeholder:text-slate-300 focus:outline-none focus:ring-1 focus:ring-blue-400 font-normal text-right" />
+                </th>
+                <th className="px-3 py-1.5">
+                  <input value={colFilter.date} onChange={(e) => setCol("date", e.target.value)}
+                    placeholder="e.g. 2026-06"
+                    className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs text-slate-700 placeholder:text-slate-300 focus:outline-none focus:ring-1 focus:ring-blue-400 font-normal" />
+                </th>
               </tr>
             </thead>
             <tbody>
