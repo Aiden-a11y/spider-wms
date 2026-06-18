@@ -279,9 +279,12 @@ export default function ClustersPage() {
           await sleep(400);
         }
 
+        type ReplenItem = NonNullable<B2CClusterBin["replenishmentItems"]>[number];
+        let replenishmentItems: ReplenItem[] = [];
+        const custCode = String(o.customerCode ?? "");
+
         if (!needsReplenishment && shelfAssignments.length === 0 && rawItems.length > 0) {
           setCreateStep(`[${binNo}/${selected.length}] ${code} — checking shelf stock…`);
-          const custCode = String(o.customerCode ?? "");
           let anyShelfStockFound = false;
 
           for (const item of rawItems) {
@@ -329,41 +332,58 @@ export default function ClustersPage() {
             await sleep(200);
           }
 
-          // No shelf stock at all → replenishment needed
+          // No shelf stock → look up ALL storage locations for replenishment
           if (!anyShelfStockFound && shelfAssignments.length === 0) {
             needsReplenishment = true;
-            setCreateStep(`[${binNo}/${selected.length}] ${code} — ⚠ No shelf stock. Replenishment required.`);
+            setCreateStep(`[${binNo}/${selected.length}] ${code} — ⚠ No shelf stock. Finding storage locations…`);
+            for (const item of rawItems) {
+              const sku = String(item.productSku ?? item.sku ?? "");
+              if (!sku) continue;
+              const unassignedQty = Number(item.unassignedQty ?? item.qty ?? 0);
+              if (unassignedQty <= 0) continue;
+
+              const sRes = await fetch(
+                `/api/wms/shipping/available-stock/${encodeURIComponent(warehouseCode)}/${encodeURIComponent(custCode)}?productSku=${encodeURIComponent(sku)}`,
+                { headers }
+              );
+              const sJson = await sRes.json().catch(() => ({})) as Record<string, unknown>;
+              const allStock = (Array.isArray(sJson?.data) ? sJson.data : []) as Record<string, unknown>[];
+              const best = allStock
+                .filter((s) => Number(s.availQty ?? 0) > 0)
+                .sort((a, b) => (String(a.expireDate ?? "") || "9").localeCompare(String(b.expireDate ?? "") || "9"))[0];
+
+              replenishmentItems.push({
+                sku,
+                name: String(item.productName ?? item.skuName ?? item.itemName ?? ""),
+                qty: unassignedQty,
+                locationCode: best ? String(best.location ?? best.locationCode ?? "") : "",
+                locationId: best ? String(best.inKey ?? best.locationId ?? "") : "",
+                lotNo: best ? String(best.lotNo ?? "") : "",
+                expireDate: best ? String(best.expireDate ?? "") : "",
+                itemCondition: best ? String(best.itemCondition ?? "GOOD") : "",
+                shippingItemId: Number(item.shippingItemId ?? 0) || undefined,
+              });
+            }
             await sleep(400);
           }
         }
 
-        // Collect replenishment SKU list from rawAssignments (Case B) or rawItems (Case C)
-        type ReplenItem = NonNullable<B2CClusterBin["replenishmentItems"]>[number];
-        let replenishmentItems: ReplenItem[] = [];
-        if (needsReplenishment) {
-          replenishmentBins.push(binNo);
-          if (rawAssignments.length > 0) {
-            replenishmentItems = rawAssignments.map((a) => ({
-              sku: String(a.productSku ?? a.sku ?? ""),
-              name: String(a.productName ?? a.skuName ?? a.itemName ?? ""),
-              qty: Number(a.qty ?? a.assignQty ?? a.assignedQty ?? 0),
-              locationCode: String(a.locationCode ?? a.location ?? ""),
-              locationId: String(a.inKey ?? a.locationId ?? ""),
-              lotNo: String(a.lotNo ?? ""),
-              expireDate: String(a.expireDate ?? ""),
-              itemCondition: String(a.itemCondition ?? "GOOD"),
-              shippingItemId: Number(a.shippingItemId ?? 0) || undefined,
-            })).filter((r) => r.sku);
-          } else if (rawItems.length > 0) {
-            replenishmentItems = rawItems.map((it) => ({
-              sku: String(it.productSku ?? it.sku ?? ""),
-              name: String(it.productName ?? it.skuName ?? it.itemName ?? ""),
-              qty: Number(it.unassignedQty ?? it.qty ?? 0),
-              locationCode: "",
-              shippingItemId: Number(it.shippingItemId ?? 0) || undefined,
-            })).filter((r) => r.sku && r.qty > 0);
-          }
+        // Case B: assigned to non-shelf → build replenishmentItems from rawAssignments
+        if (needsReplenishment && rawAssignments.length > 0 && replenishmentItems.length === 0) {
+          replenishmentItems = rawAssignments.map((a) => ({
+            sku: String(a.productSku ?? a.sku ?? ""),
+            name: String(a.productName ?? a.skuName ?? a.itemName ?? ""),
+            qty: Number(a.qty ?? a.assignQty ?? a.assignedQty ?? 0),
+            locationCode: String(a.locationCode ?? a.location ?? ""),
+            locationId: String(a.inKey ?? a.locationId ?? ""),
+            lotNo: String(a.lotNo ?? ""),
+            expireDate: String(a.expireDate ?? ""),
+            itemCondition: String(a.itemCondition ?? "GOOD"),
+            shippingItemId: Number(a.shippingItemId ?? 0) || undefined,
+          })).filter((r) => r.sku);
         }
+
+        if (needsReplenishment) replenishmentBins.push(binNo);
 
         // 4. Build bin items (empty if replenishment needed)
         const binItems: B2CClusterItem[] = shelfAssignments.map((a) => ({
