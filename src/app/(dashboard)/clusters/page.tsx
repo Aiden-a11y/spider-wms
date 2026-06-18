@@ -5,7 +5,7 @@ import { useAuth } from "@/contexts/auth-context";
 import { useRouter } from "next/navigation";
 import {
   Layers, RefreshCw, Trash2, Loader2, CheckCircle2, AlertCircle,
-  Printer, Plus, Search, ChevronDown, ChevronUp, X, Download, PackageCheck,
+  Printer, Plus, Search, ChevronDown, ChevronUp, X, Download, PackageCheck, Tag,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import type {
@@ -661,10 +661,16 @@ export default function ClustersPage() {
                             </div>
                             <div className="flex items-center gap-2">
                               <button
+                                onClick={() => window.open(`/clusters-replen-print?id=${encodeURIComponent(cluster.id)}`, "_blank")}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-amber-300 text-amber-700 hover:bg-amber-50 transition-colors"
+                              >
+                                <Tag className="w-3.5 h-3.5" /> Print Labels
+                              </button>
+                              <button
                                 onClick={() => downloadReplenishment(cluster)}
                                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors"
                               >
-                                <Download className="w-3.5 h-3.5" /> Download Excel
+                                <Download className="w-3.5 h-3.5" /> Excel
                               </button>
                               {pendingRows.length > 0 && (
                                 <button
