@@ -43,6 +43,7 @@ export interface B2CClusterBin {
   consigneeNationalCode?: string;
   consigneeTelLNo?: string;
   items: B2CClusterItem[];
+  needsReplenishment?: boolean;
 }
 
 export interface B2CCluster {
@@ -54,6 +55,7 @@ export interface B2CCluster {
   completedAt?: string;
   bins: B2CClusterBin[];
   locationGroups: B2CClusterLocationGroup[];
+  replenishmentBins?: number[];
 }
 
 export const BIN_COLORS = [

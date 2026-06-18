@@ -198,6 +198,7 @@ export default function ClustersPage() {
 
     const selected = selectedList.slice(0, MAX_BINS);
     const bins: B2CClusterBin[] = [];
+    const replenishmentBins: number[] = [];
     const locMap = new Map<string, { locationCode: string; locationId: string; tasks: B2CClusterTask[] }>();
 
     try {
@@ -221,17 +222,19 @@ export default function ClustersPage() {
         rawAssignments.forEach((a) => { zoneSet[String(a.zoneNm ?? a.zoneName ?? a.zone ?? "—")] = true; });
         const zoneNames = Object.keys(zoneSet).join(", ") || "(none)";
         setCreateStep(`[${binNo}/${selected.length}] ${code} — ${rawAssignments.length} assignments, zones: ${zoneNames}`);
-        await sleep(100);
+        await sleep(80);
 
         // 2. Filter to shelf zone assignments
         let shelfAssignments = rawAssignments.filter((a) =>
           isShelf(a.zoneNm ?? a.zoneName ?? a.zone)
         );
 
-        // 3a. If no shelf assignments but items exist → auto-assign from available shelf stock
+        // 3. If no shelf assignments but items exist → check available shelf stock
+        let needsReplenishment = false;
         if (shelfAssignments.length === 0 && rawItems.length > 0) {
-          setCreateStep(`[${binNo}/${selected.length}] ${code} — no shelf assignments, trying available stock…`);
+          setCreateStep(`[${binNo}/${selected.length}] ${code} — checking shelf stock…`);
           const custCode = String(o.customerCode ?? "");
+          let anyShelfStockFound = false;
 
           for (const item of rawItems) {
             const sku = String(item.productSku ?? item.sku ?? "");
@@ -256,6 +259,7 @@ export default function ClustersPage() {
             const best = shelfStock[0];
             if (!best) continue;
 
+            anyShelfStockFound = true;
             const assignBody = {
               shippingOrderCode: code,
               shippingItemId: item.shippingItemId,
@@ -270,23 +274,24 @@ export default function ClustersPage() {
             };
             await fetch("/api/wms/shipping/assign", { method: "POST", headers, body: JSON.stringify(assignBody) });
             shelfAssignments.push({
-              ...item,
-              ...best,
+              ...item, ...best,
               locationCode: best.location,
               productSku: sku,
             });
             await sleep(200);
           }
+
+          // No shelf stock at all → replenishment needed
+          if (!anyShelfStockFound && shelfAssignments.length === 0) {
+            needsReplenishment = true;
+            setCreateStep(`[${binNo}/${selected.length}] ${code} — ⚠ No shelf stock. Replenishment required.`);
+            await sleep(400);
+          }
         }
 
-        // 3b. Fallback: if still no shelf assignments, use ALL assignments (any zone)
-        if (shelfAssignments.length === 0 && rawAssignments.length > 0) {
-          setCreateStep(`[${binNo}/${selected.length}] ${code} — shelf not found, using all zone assignments (${zoneNames})`);
-          shelfAssignments = rawAssignments;
-          await sleep(300);
-        }
+        if (needsReplenishment) replenishmentBins.push(binNo);
 
-        // 4. Build bin items
+        // 4. Build bin items (empty if replenishment needed)
         const binItems: B2CClusterItem[] = shelfAssignments.map((a) => ({
           sku: String(a.productSku ?? a.sku ?? ""),
           name: String(a.productName ?? a.skuName ?? a.itemName ?? ""),
@@ -313,6 +318,7 @@ export default function ClustersPage() {
           consigneeNationalCode: String(o.consigneeNationalCode ?? ""),
           consigneeTelLNo: String(o.consigneeTelLNo ?? o.consigneeCellNo ?? ""),
           items: binItems,
+          needsReplenishment,
         });
 
         // 5. Accumulate location groups
@@ -334,7 +340,7 @@ export default function ClustersPage() {
           });
         }
 
-        if (i < selected.length - 1) await sleep(400 + Math.random() * 200);
+        if (i < selected.length - 1) await sleep(300 + Math.random() * 200);
       }
 
       setCreateStep("Building cluster…");
@@ -350,6 +356,7 @@ export default function ClustersPage() {
         status: "active",
         bins,
         locationGroups,
+        ...(replenishmentBins.length > 0 ? { replenishmentBins } : {}),
       };
 
       await fetch("/api/cluster", {
@@ -423,9 +430,10 @@ export default function ClustersPage() {
                       <span className="text-base font-extrabold text-slate-900">{cluster.bins.length} bins</span>
                       <span className="text-sm text-slate-400">· {cluster.locationGroups.length} locations</span>
                       <span className="text-sm text-slate-400">· {cluster.warehouseCode}</span>
-                      {cluster.locationGroups.length === 0 && (
+                      {cluster.replenishmentBins && cluster.replenishmentBins.length > 0 && (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-700">
-                          <AlertCircle className="w-3 h-3" /> No assignments found — delete and recreate
+                          <AlertCircle className="w-3 h-3" />
+                          Replenishment needed: Bin {cluster.replenishmentBins.join(", ")}
                         </span>
                       )}
                       {cluster.status === "completed" && (
@@ -472,7 +480,8 @@ export default function ClustersPage() {
                       <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">Bins ({cluster.bins.length})</p>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         {cluster.bins.map((bin) => (
-                          <div key={bin.binNo} className="flex items-start gap-2 p-2.5 rounded-xl border border-slate-100 bg-slate-50">
+                          <div key={bin.binNo}
+                            className={`flex items-start gap-2 p-2.5 rounded-xl border ${bin.needsReplenishment ? "border-amber-200 bg-amber-50" : "border-slate-100 bg-slate-50"}`}>
                             <div className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
                               style={{ backgroundColor: binColor(bin.binNo) }}>
                               {bin.binNo}
@@ -480,7 +489,10 @@ export default function ClustersPage() {
                             <div className="flex-1 min-w-0">
                               <p className="font-mono text-xs font-bold text-slate-700 truncate">{bin.orderNo || bin.orderCode}</p>
                               {bin.consigneeName && <p className="text-xs text-slate-400 truncate">{bin.consigneeName}</p>}
-                              <p className="text-xs text-slate-400">{bin.items.length} item{bin.items.length !== 1 ? "s" : ""}</p>
+                              {bin.needsReplenishment
+                                ? <p className="text-xs font-semibold text-amber-600 flex items-center gap-1 mt-0.5"><AlertCircle className="w-3 h-3" /> Replenishment needed</p>
+                                : <p className="text-xs text-slate-400">{bin.items.length} item{bin.items.length !== 1 ? "s" : ""}</p>
+                              }
                             </div>
                           </div>
                         ))}
