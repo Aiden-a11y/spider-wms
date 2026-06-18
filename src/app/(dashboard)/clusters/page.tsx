@@ -24,6 +24,17 @@ function isShelf(zoneNm: unknown): boolean {
   return String(zoneNm ?? "").toLowerCase().includes("shelf");
 }
 
+function readableLocation(s: Record<string, unknown>): string {
+  const parts = [
+    s.zoneNm ?? s.zoneName ?? s.zone ?? "",
+    s.aisleNm ?? s.aisleName ?? s.aisle ?? "",
+    s.bayNm ?? s.bayName ?? s.bay ?? "",
+    s.levelNm ?? s.levelName ?? s.level ?? "",
+    s.positionNm ?? s.positionName ?? s.position ?? "",
+  ].map(String).filter(Boolean);
+  return parts.length > 0 ? parts.join("-") : String(s.location ?? s.locationCode ?? "");
+}
+
 export default function ClustersPage() {
   const { user } = useAuth();
   const router = useRouter();
@@ -326,7 +337,7 @@ export default function ClustersPage() {
             await fetch("/api/wms/shipping/assign", { method: "POST", headers, body: JSON.stringify(assignBody) });
             shelfAssignments.push({
               ...item, ...best,
-              locationCode: best.location,
+              locationCode: readableLocation(best),
               productSku: sku,
             });
             await sleep(200);
@@ -356,7 +367,7 @@ export default function ClustersPage() {
                 sku,
                 name: String(item.productName ?? item.skuName ?? item.itemName ?? ""),
                 qty: unassignedQty,
-                locationCode: best ? String(best.location ?? best.locationCode ?? "") : "",
+                locationCode: best ? readableLocation(best) : "",
                 locationId: best ? String(best.inKey ?? best.locationId ?? "") : "",
                 lotNo: best ? String(best.lotNo ?? "") : "",
                 expireDate: best ? String(best.expireDate ?? "") : "",
@@ -374,7 +385,7 @@ export default function ClustersPage() {
             sku: String(a.productSku ?? a.sku ?? ""),
             name: String(a.productName ?? a.skuName ?? a.itemName ?? ""),
             qty: Number(a.qty ?? a.assignQty ?? a.assignedQty ?? 0),
-            locationCode: String(a.locationCode ?? a.location ?? ""),
+            locationCode: readableLocation(a),
             locationId: String(a.inKey ?? a.locationId ?? ""),
             lotNo: String(a.lotNo ?? ""),
             expireDate: String(a.expireDate ?? ""),
@@ -390,7 +401,7 @@ export default function ClustersPage() {
           sku: String(a.productSku ?? a.sku ?? ""),
           name: String(a.productName ?? a.skuName ?? a.itemName ?? ""),
           qty: Number(a.qty ?? a.assignQty ?? a.assignedQty ?? 0),
-          locationCode: String(a.locationCode ?? a.location ?? ""),
+          locationCode: readableLocation(a),
           locationId: String(a.inKey ?? a.locationId ?? ""),
           lotNo: String(a.lotNo ?? ""),
           expireDate: String(a.expireDate ?? ""),
@@ -498,7 +509,7 @@ export default function ClustersPage() {
         locationCode: row.item.locationCode,
         locationId: row.item.locationId,
         inKey: row.item.locationId,
-        warehouseCd: row.item.locationCode,
+        warehouseCd: row.item.locationId || row.item.locationCode,
         productSku: row.item.sku,
         qty: row.item.qty,
         lotNo: row.item.lotNo ?? "",
