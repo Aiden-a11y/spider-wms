@@ -7,7 +7,7 @@ import Link from "next/link";
 import {
   RefreshCw, AlertCircle, Truck, Search, Download, X,
   Building2, User, Store, Globe, MapPin, Save, CheckCircle2, ArrowLeftRight,
-  ClipboardList, AlertTriangle, PackageCheck,
+  ClipboardList, AlertTriangle, PackageCheck, Layers, Loader2, ExternalLink,
 } from "lucide-react";
 import { buildLocationOccupancyLookup, getLocationOccupancyInfo, classifyOccupancy } from "@/lib/wms";
 import { supabase } from "@/lib/supabase";
@@ -101,6 +101,12 @@ const TASK_TYPES = [
 ] as const;
 
 type TaskItem = { type: string; qty: number };
+
+type BatchCandidate = {
+  fingerprint: string;
+  orders: { orderCode: string; customerCode: string }[];
+  skuList: { sku: string; name: string; qty: number }[];
+};
 
 type AllocRow = {
   locationKey: string;
@@ -205,6 +211,14 @@ export default function ShippingTypePage() {
   const [autoAssignResult, setAutoAssignResult] = useState<"" | "ok" | "error">("");
   const [autoAssignMsg,    setAutoAssignMsg]    = useState("");
   const [shippingItemsRaw, setShippingItemsRaw] = useState<Order[]>([]); // data.items (shippingItemId, unassignedQty)
+
+  /* ── Batch picking state ── */
+  const [batchPanel,       setBatchPanel]       = useState(false);
+  const [detectingBatches, setDetectingBatches] = useState(false);
+  const [detectProgress,   setDetectProgress]   = useState({ done: 0, total: 0 });
+  const [batchCandidates,  setBatchCandidates]  = useState<BatchCandidate[]>([]);
+  const [creatingBatch,    setCreatingBatch]     = useState<string | null>(null); // fingerprint being created
+  const [createdBatchIds,  setCreatedBatchIds]   = useState<Record<string, string>>({}); // fingerprint → id
 
   /* ── Manual Assign modal state ── */
   const [assignModalItem,  setAssignModalItem]  = useState<Order | null>(null);
@@ -694,6 +708,95 @@ export default function ShippingTypePage() {
     setShippingItemsRaw([]);
     setPickingSaved(false);
     await openDetail(selected);
+  }
+
+  /* ── Batch picking ── */
+  async function detectBatches() {
+    if (orders.length === 0) return;
+    setBatchPanel(true);
+    setDetectingBatches(true);
+    setBatchCandidates([]);
+    setCreatedBatchIds({});
+
+    const candidates = orders.map((o) => ({
+      orderCode: String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? ""),
+      customerCode: String(o.customerCode ?? ""),
+    })).filter((c) => c.orderCode);
+
+    setDetectProgress({ done: 0, total: candidates.length });
+
+    // Fetch items for each order and compute fingerprint
+    const fingerMap = new Map<string, { orders: typeof candidates; skuList: { sku: string; name: string; qty: number }[] }>();
+
+    for (let i = 0; i < candidates.length; i++) {
+      const cand = candidates[i];
+      setDetectProgress({ done: i + 1, total: candidates.length });
+      try {
+        const res = await fetch(`/api/wms/shipping/items/${cand.orderCode}`, { headers });
+        const json = await res.json().catch(() => ({}));
+        const data = (json?.data ?? {}) as Record<string, unknown>;
+        const rawItems: Record<string, unknown>[] =
+          Array.isArray(data?.items) ? data.items as Record<string, unknown>[] :
+          Array.isArray(json?.items) ? json.items as Record<string, unknown>[] : [];
+
+        if (rawItems.length === 0) continue;
+
+        // Aggregate qty per SKU
+        const skuMap = new Map<string, { name: string; qty: number }>();
+        for (const it of rawItems) {
+          const sku  = String(it.productSku ?? it.sku ?? "");
+          const name = String(it.productName ?? it.itemName ?? "");
+          const qty  = Number(it.orderQty ?? it.qty ?? 0);
+          if (!sku) continue;
+          const prev = skuMap.get(sku);
+          skuMap.set(sku, { name, qty: (prev?.qty ?? 0) + qty });
+        }
+
+        // Build fingerprint: sorted "sku:qty" pairs
+        const skuList = Array.from(skuMap.entries())
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([sku, { name, qty }]) => ({ sku, name, qty }));
+        const fingerprint = skuList.map(({ sku, qty }) => `${sku}:${qty}`).join("|");
+
+        const existing = fingerMap.get(fingerprint);
+        if (existing) {
+          existing.orders.push(cand);
+        } else {
+          fingerMap.set(fingerprint, { orders: [cand], skuList });
+        }
+      } catch { /* skip */ }
+    }
+
+    const result: BatchCandidate[] = Array.from(fingerMap.entries())
+      .filter(([, v]) => v.orders.length >= 5)
+      .sort(([, a], [, b]) => b.orders.length - a.orders.length)
+      .map(([fingerprint, { orders: ords, skuList }]) => ({ fingerprint, orders: ords, skuList }));
+
+    setBatchCandidates(result);
+    setDetectingBatches(false);
+  }
+
+  async function createBatch(candidate: BatchCandidate) {
+    setCreatingBatch(candidate.fingerprint);
+    try {
+      const res = await fetch("/api/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fingerprint: candidate.fingerprint,
+          orders: candidate.orders,
+          skuList: candidate.skuList,
+          type: type,
+          warehouseCode,
+          createdBy: user?.userId ?? "",
+        }),
+      });
+      const json = await res.json();
+      if (json?.id) {
+        setCreatedBatchIds((prev) => ({ ...prev, [candidate.fingerprint]: json.id }));
+      }
+    } catch { /* ignore */ }
+    setCreatingBatch(null);
   }
 
   /* ── Manual Assign modal ── */
@@ -1580,6 +1683,13 @@ ${labels}
               </button>
             );
           })()}
+          <button
+            onClick={detectBatches}
+            disabled={orders.length === 0}
+            className="flex items-center gap-2 text-sm font-medium rounded-lg px-3 py-2 transition-colors border border-violet-200 text-violet-700 bg-violet-50 hover:bg-violet-100 disabled:opacity-40"
+          >
+            <Layers className="w-4 h-4" /> Batch Pick
+          </button>
           <button onClick={downloadExcel} disabled={filtered.length === 0}
             className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors disabled:opacity-40">
             <Download className="w-4 h-4" /> Export
@@ -2776,6 +2886,122 @@ ${labels}
                   })()}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Batch Pick Panel ── */}
+      {batchPanel && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+          <div className="absolute inset-0 bg-black/50" onClick={() => { if (!detectingBatches) setBatchPanel(false); }} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
+            {/* header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-violet-600 flex items-center justify-center shadow-sm">
+                  <Layers className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900">Batch Pick Candidates</h2>
+                  <p className="text-xs text-slate-500">Orders with identical SKU+qty (≥5)</p>
+                </div>
+              </div>
+              <button onClick={() => setBatchPanel(false)} className="p-1 text-slate-400 hover:text-slate-700">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* body */}
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+              {detectingBatches && (
+                <div className="flex flex-col items-center justify-center py-12 gap-4">
+                  <Loader2 className="w-8 h-8 text-violet-600 animate-spin" />
+                  <p className="text-sm text-slate-600">
+                    Checking {detectProgress.done} / {detectProgress.total} orders…
+                  </p>
+                  <div className="w-48 h-2 bg-slate-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-violet-500 rounded-full transition-all"
+                      style={{ width: `${detectProgress.total ? (detectProgress.done / detectProgress.total) * 100 : 0}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {!detectingBatches && batchCandidates.length === 0 && (
+                <div className="text-center py-12">
+                  <Layers className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                  <p className="text-slate-500 text-sm">No batch candidates found.</p>
+                  <p className="text-slate-400 text-xs mt-1">Need 5+ orders with identical SKU/qty lists.</p>
+                </div>
+              )}
+
+              {!detectingBatches && batchCandidates.map((cand, ci) => {
+                const created = createdBatchIds[cand.fingerprint];
+                const isCreating = creatingBatch === cand.fingerprint;
+                return (
+                  <div key={ci} className="border border-slate-200 rounded-xl overflow-hidden">
+                    {/* candidate header */}
+                    <div className="flex items-center justify-between px-4 py-3 bg-slate-50 border-b border-slate-100">
+                      <div className="flex items-center gap-2">
+                        <span className="w-6 h-6 rounded-full bg-violet-100 text-violet-700 text-xs font-bold flex items-center justify-center">
+                          {ci + 1}
+                        </span>
+                        <span className="text-sm font-semibold text-slate-800">
+                          {cand.orders.length} orders · {cand.skuList.length} SKU{cand.skuList.length !== 1 ? "s" : ""}
+                        </span>
+                      </div>
+                      {created ? (
+                        <div className="flex items-center gap-2">
+                          <span className="flex items-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-1">
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Created
+                          </span>
+                          <a
+                            href="http://localhost:3001/outbound/cluster"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 text-xs text-violet-600 hover:text-violet-800"
+                          >
+                            Mobile <ExternalLink className="w-3 h-3" />
+                          </a>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => createBatch(cand)}
+                          disabled={isCreating}
+                          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white transition-colors disabled:opacity-60"
+                        >
+                          {isCreating ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Creating…</> : "Create Batch"}
+                        </button>
+                      )}
+                    </div>
+
+                    {/* SKU list */}
+                    <div className="px-4 py-2 space-y-1">
+                      {cand.skuList.map(({ sku, name, qty }) => (
+                        <div key={sku} className="flex items-center gap-2 text-xs">
+                          <span className="font-mono text-slate-600 w-36 truncate flex-shrink-0">{sku}</span>
+                          <span className="text-slate-800 flex-1 truncate">{name || "—"}</span>
+                          <span className="font-semibold text-slate-900 tabular-nums">{qty.toLocaleString()} ea</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* order codes */}
+                    <div className="px-4 py-2 border-t border-slate-100 bg-slate-50">
+                      <p className="text-xs text-slate-400 mb-1">Orders</p>
+                      <div className="flex flex-wrap gap-1">
+                        {cand.orders.map(({ orderCode }) => (
+                          <span key={orderCode} className="text-xs font-mono bg-white border border-slate-200 rounded px-1.5 py-0.5 text-slate-700">
+                            {orderCode}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
