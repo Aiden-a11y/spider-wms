@@ -5,8 +5,9 @@ import { useAuth } from "@/contexts/auth-context";
 import { useRouter } from "next/navigation";
 import {
   Layers, RefreshCw, Trash2, Loader2, CheckCircle2, AlertCircle,
-  Printer, Plus, Search, ChevronDown, ChevronUp, X,
+  Printer, Plus, Search, ChevronDown, ChevronUp, X, Download, PackageCheck,
 } from "lucide-react";
+import * as XLSX from "xlsx";
 import type {
   B2CCluster, B2CClusterBin, B2CClusterLocationGroup, B2CClusterTask, B2CClusterItem,
 } from "@/lib/b2c-cluster";
@@ -49,6 +50,11 @@ export default function ClustersPage() {
   const [loadingClusters, setLoadingClusters] = useState(false);
   const [expandedCluster, setExpandedCluster] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // ── Replenishment assign ──────────────────────────────────────────────────
+  const [assigningKeys, setAssigningKeys] = useState<Set<string>>(new Set());
+  const [assignedKeys, setAssignedKeys] = useState<Set<string>>(new Set());
+  const [assignErrors, setAssignErrors] = useState<Record<string, string>>({});
 
   // ── Creating ──────────────────────────────────────────────────────────────
   const [creating, setCreating] = useState(false);
@@ -332,23 +338,29 @@ export default function ClustersPage() {
         }
 
         // Collect replenishment SKU list from rawAssignments (Case B) or rawItems (Case C)
-        let replenishmentItems: { sku: string; name: string; qty: number; locationCode?: string }[] = [];
+        type ReplenItem = NonNullable<B2CClusterBin["replenishmentItems"]>[number];
+        let replenishmentItems: ReplenItem[] = [];
         if (needsReplenishment) {
           replenishmentBins.push(binNo);
           if (rawAssignments.length > 0) {
-            // Case B: assigned to non-shelf — show current location so staff knows where to pull from
             replenishmentItems = rawAssignments.map((a) => ({
               sku: String(a.productSku ?? a.sku ?? ""),
               name: String(a.productName ?? a.skuName ?? a.itemName ?? ""),
               qty: Number(a.qty ?? a.assignQty ?? a.assignedQty ?? 0),
               locationCode: String(a.locationCode ?? a.location ?? ""),
+              locationId: String(a.inKey ?? a.locationId ?? ""),
+              lotNo: String(a.lotNo ?? ""),
+              expireDate: String(a.expireDate ?? ""),
+              itemCondition: String(a.itemCondition ?? "GOOD"),
+              shippingItemId: Number(a.shippingItemId ?? 0) || undefined,
             })).filter((r) => r.sku);
           } else if (rawItems.length > 0) {
-            // Case C: no shelf stock — show what's needed
             replenishmentItems = rawItems.map((it) => ({
               sku: String(it.productSku ?? it.sku ?? ""),
               name: String(it.productName ?? it.skuName ?? it.itemName ?? ""),
               qty: Number(it.unassignedQty ?? it.qty ?? 0),
+              locationCode: "",
+              shippingItemId: Number(it.shippingItemId ?? 0) || undefined,
             })).filter((r) => r.sku && r.qty > 0);
           }
         }
@@ -446,6 +458,88 @@ export default function ClustersPage() {
     setDeletingId(null);
   }
 
+  // ── Replenishment assign helpers ──────────────────────────────────────────
+  type ReplenRow = {
+    clusterId: string; bin: B2CClusterBin;
+    item: NonNullable<B2CClusterBin["replenishmentItems"]>[number];
+  };
+
+  async function assignRow(row: ReplenRow) {
+    const key = `${row.clusterId}_${row.bin.binNo}_${row.item.sku}`;
+    setAssigningKeys((p) => new Set(p).add(key));
+    setAssignErrors((p) => { const n = { ...p }; delete n[key]; return n; });
+    try {
+      const body = {
+        shippingOrderCode: row.bin.orderCode,
+        orderCode: row.bin.orderCode,
+        shippingItemId: row.item.shippingItemId,
+        customerCode: row.bin.customerCode,
+        warehouseCode,
+        locationCode: row.item.locationCode,
+        locationId: row.item.locationId,
+        inKey: row.item.locationId,
+        warehouseCd: row.item.locationCode,
+        productSku: row.item.sku,
+        qty: row.item.qty,
+        lotNo: row.item.lotNo ?? "",
+        expireDate: row.item.expireDate ?? "",
+        itemCondition: row.item.itemCondition ?? "GOOD",
+      };
+      const res = await fetch("/api/wms/shipping/assign", {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const j = await res.json().catch(() => ({})) as Record<string, unknown>;
+      if (!res.ok || j?.isSuccess === false) {
+        throw new Error(String(j?.message ?? j?.msg ?? `HTTP ${res.status}`));
+      }
+      setAssignedKeys((p) => new Set(p).add(key));
+    } catch (e) {
+      setAssignErrors((p) => ({ ...p, [key]: e instanceof Error ? e.message : "Failed" }));
+    } finally {
+      setAssigningKeys((p) => { const n = new Set(p); n.delete(key); return n; });
+    }
+  }
+
+  async function assignAllRows(rows: ReplenRow[]) {
+    for (const row of rows) {
+      const key = `${row.clusterId}_${row.bin.binNo}_${row.item.sku}`;
+      if (assignedKeys.has(key)) continue;
+      await assignRow(row);
+      await sleep(300);
+    }
+  }
+
+  function downloadReplenishment(cluster: B2CCluster) {
+    const rows: Record<string, unknown>[] = [];
+    for (const bin of cluster.bins) {
+      if (!bin.needsReplenishment || !bin.replenishmentItems?.length) continue;
+      for (const ri of bin.replenishmentItems) {
+        rows.push({
+          "Bin #": bin.binNo,
+          "Order Code": bin.orderCode,
+          "Order No": bin.orderNo ?? "",
+          "Consignee": bin.consigneeName ?? "",
+          "SKU": ri.sku,
+          "Product": ri.name,
+          "Qty": ri.qty,
+          "Current Location": ri.locationCode ?? "",
+          "Lot No": ri.lotNo ?? "",
+          "Expire Date": ri.expireDate ?? "",
+          "Condition": ri.itemCondition ?? "",
+        });
+      }
+    }
+    if (rows.length === 0) return;
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const colWidths = [6, 22, 20, 20, 16, 30, 6, 18, 12, 14, 10];
+    ws["!cols"] = colWidths.map((w) => ({ wch: w }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Replenishment");
+    XLSX.writeFile(wb, `replenishment_${cluster.id.replace("cluster_", "")}.xlsx`);
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="p-6 max-w-7xl space-y-6">
@@ -539,45 +633,122 @@ export default function ClustersPage() {
                 {isExpanded && (
                   <div className="border-t border-slate-100">
 
-                    {/* Replenishment summary */}
+                    {/* Replenishment panel */}
                     {cluster.replenishmentBins && cluster.replenishmentBins.length > 0 && (() => {
-                      // Aggregate SKUs across all replenishment bins
-                      const skuMap: Record<string, { name: string; qty: number; locations: string[] }> = {};
+                      const allRows: ReplenRow[] = [];
                       cluster.bins.forEach((bin) => {
-                        if (!bin.needsReplenishment || !bin.replenishmentItems) return;
-                        bin.replenishmentItems.forEach((ri) => {
-                          if (!skuMap[ri.sku]) skuMap[ri.sku] = { name: ri.name, qty: 0, locations: [] };
-                          skuMap[ri.sku].qty += ri.qty;
-                          if (ri.locationCode && !skuMap[ri.sku].locations.includes(ri.locationCode))
-                            skuMap[ri.sku].locations.push(ri.locationCode);
+                        if (!bin.needsReplenishment || !bin.replenishmentItems?.length) return;
+                        bin.replenishmentItems.forEach((item) => {
+                          allRows.push({ clusterId: cluster.id, bin, item });
                         });
                       });
-                      const rows = Object.entries(skuMap);
-                      if (rows.length === 0) return null;
+                      if (allRows.length === 0) return null;
+                      const pendingRows = allRows.filter((r) => !assignedKeys.has(`${r.clusterId}_${r.bin.binNo}_${r.item.sku}`));
                       return (
-                        <div className="px-5 py-3 border-b border-amber-100 bg-amber-50/60">
-                          <p className="text-xs font-bold text-amber-700 uppercase tracking-wide mb-2 flex items-center gap-1.5">
-                            <AlertCircle className="w-3.5 h-3.5" /> Replenishment Summary — Move to Shelf
-                          </p>
+                        <div className="border-b border-amber-100">
+                          {/* Header */}
+                          <div className="px-5 py-2.5 bg-amber-50 flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-2">
+                              <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                              <span className="text-xs font-bold text-amber-700 uppercase tracking-wide">
+                                Replenishment — {allRows.length} items · {cluster.replenishmentBins.length} bins
+                              </span>
+                              {pendingRows.length < allRows.length && (
+                                <span className="text-xs text-emerald-600 font-semibold">
+                                  ({allRows.length - pendingRows.length} assigned)
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => downloadReplenishment(cluster)}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors"
+                              >
+                                <Download className="w-3.5 h-3.5" /> Download Excel
+                              </button>
+                              {pendingRows.length > 0 && (
+                                <button
+                                  onClick={() => assignAllRows(pendingRows)}
+                                  disabled={assigningKeys.size > 0}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50 transition-colors"
+                                >
+                                  {assigningKeys.size > 0
+                                    ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Assigning…</>
+                                    : <><PackageCheck className="w-3.5 h-3.5" /> Assign All ({pendingRows.length})</>}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* B2B-style table */}
                           <div className="overflow-x-auto">
-                            <table className="w-full text-xs">
+                            <table className="w-full text-xs border-collapse">
                               <thead>
-                                <tr className="text-amber-600 font-semibold">
-                                  <th className="text-left py-1 pr-4">SKU</th>
-                                  <th className="text-left py-1 pr-4">Product</th>
-                                  <th className="text-right py-1 pr-4 w-16">Total Qty</th>
-                                  <th className="text-left py-1">Current Location</th>
+                                <tr className="bg-amber-50/70 border-b border-amber-100">
+                                  <th className="px-3 py-2 text-left font-semibold text-amber-700 w-14">Bin</th>
+                                  <th className="px-3 py-2 text-left font-semibold text-amber-700">Order</th>
+                                  <th className="px-3 py-2 text-left font-semibold text-amber-700">Consignee</th>
+                                  <th className="px-3 py-2 text-left font-semibold text-amber-700">SKU</th>
+                                  <th className="px-3 py-2 text-left font-semibold text-amber-700">Product</th>
+                                  <th className="px-3 py-2 text-left font-semibold text-amber-700">Current Location</th>
+                                  <th className="px-3 py-2 text-left font-semibold text-amber-700">Lot</th>
+                                  <th className="px-3 py-2 text-left font-semibold text-amber-700">Expiry</th>
+                                  <th className="px-3 py-2 text-right font-semibold text-amber-700 w-12">Qty</th>
+                                  <th className="px-3 py-2 w-24"></th>
                                 </tr>
                               </thead>
                               <tbody>
-                                {rows.map(([sku, info]) => (
-                                  <tr key={sku} className="border-t border-amber-100">
-                                    <td className="font-mono font-bold text-slate-700 py-1.5 pr-4">{sku}</td>
-                                    <td className="text-slate-600 py-1.5 pr-4 max-w-[180px] truncate">{info.name || "—"}</td>
-                                    <td className="text-right font-bold text-amber-700 py-1.5 pr-4">{info.qty}</td>
-                                    <td className="font-mono text-slate-500 py-1.5">{info.locations.join(", ") || "—"}</td>
-                                  </tr>
-                                ))}
+                                {allRows.map((row, ri) => {
+                                  const key = `${row.clusterId}_${row.bin.binNo}_${row.item.sku}`;
+                                  const isAssigning = assigningKeys.has(key);
+                                  const isDone = assignedKeys.has(key);
+                                  const errMsg = assignErrors[key];
+                                  const c = binColor(row.bin.binNo);
+                                  return (
+                                    <tr key={ri}
+                                      className={`border-b border-amber-50 last:border-0 ${isDone ? "bg-emerald-50" : ri % 2 === 0 ? "bg-white" : "bg-amber-50/30"}`}>
+                                      <td className="px-3 py-2">
+                                        <div className="w-6 h-6 rounded flex items-center justify-center text-xs font-black text-white"
+                                          style={{ backgroundColor: c }}>
+                                          {row.bin.binNo}
+                                        </div>
+                                      </td>
+                                      <td className="px-3 py-2 font-mono text-slate-700 text-xs">{row.bin.orderNo || row.bin.orderCode}</td>
+                                      <td className="px-3 py-2 text-slate-600 max-w-[120px]">
+                                        <span className="truncate block">{row.bin.consigneeName || "—"}</span>
+                                      </td>
+                                      <td className="px-3 py-2 font-mono font-bold text-slate-800">{row.item.sku}</td>
+                                      <td className="px-3 py-2 text-slate-600 max-w-[140px]">
+                                        <span className="truncate block">{row.item.name || "—"}</span>
+                                      </td>
+                                      <td className="px-3 py-2 font-mono font-bold text-blue-700">{row.item.locationCode || "—"}</td>
+                                      <td className="px-3 py-2 font-mono text-slate-500 text-xs">{row.item.lotNo || "—"}</td>
+                                      <td className="px-3 py-2 text-slate-500 text-xs">{row.item.expireDate || "—"}</td>
+                                      <td className="px-3 py-2 text-right font-bold text-slate-800">{row.item.qty}</td>
+                                      <td className="px-3 py-2 text-right">
+                                        {isDone ? (
+                                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600">
+                                            <CheckCircle2 className="w-3.5 h-3.5" /> Done
+                                          </span>
+                                        ) : (
+                                          <div className="flex flex-col items-end gap-0.5">
+                                            <button
+                                              onClick={() => assignRow(row)}
+                                              disabled={isAssigning}
+                                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50 transition-colors whitespace-nowrap"
+                                            >
+                                              {isAssigning
+                                                ? <Loader2 className="w-3 h-3 animate-spin" />
+                                                : <PackageCheck className="w-3 h-3" />}
+                                              Assign
+                                            </button>
+                                            {errMsg && <span className="text-xs text-red-500 max-w-[100px] text-right leading-tight">{errMsg}</span>}
+                                          </div>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
                               </tbody>
                             </table>
                           </div>
