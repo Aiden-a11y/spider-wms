@@ -212,6 +212,14 @@ export default function ShippingTypePage() {
   const [autoAssignMsg,    setAutoAssignMsg]    = useState("");
   const [shippingItemsRaw, setShippingItemsRaw] = useState<Order[]>([]); // data.items (shippingItemId, unassignedQty)
 
+  /* ── Bulk Auto-Assign state (B2C multi-select) ── */
+  const [bulkAssignModal,    setBulkAssignModal]    = useState(false);
+  const [bulkAssigning,      setBulkAssigning]      = useState(false);
+  const [bulkAssignProgress, setBulkAssignProgress] = useState<{
+    current: number; total: number; currentCode: string;
+    results: { code: string; assigned: number; issues: string[] }[];
+  }>({ current: 0, total: 0, currentCode: "", results: [] });
+
   /* ── Batch picking state ── */
   const [batchPanel,       setBatchPanel]       = useState(false);
   const [detectingBatches, setDetectingBatches] = useState(false);
@@ -708,6 +716,91 @@ export default function ShippingTypePage() {
     setShippingItemsRaw([]);
     setPickingSaved(false);
     await openDetail(selected);
+  }
+
+  /* ── Bulk Auto-Assign (B2C multi-select) ── */
+  async function runBulkAutoAssign() {
+    const codes = Object.keys(selectedCodes).filter((k) => selectedCodes[k]);
+    if (codes.length === 0) return;
+
+    setBulkAssignModal(true);
+    setBulkAssigning(true);
+    setBulkAssignProgress({ current: 0, total: codes.length, currentCode: "", results: [] });
+
+    // Ensure occupancy map is loaded (needed by fetchRankedStock)
+    if (occupancyMap.size === 0 && warehouseCode) {
+      try {
+        const locRes = await fetch("/api/wms/warehouse/location/list", {
+          method: "POST", headers,
+          body: JSON.stringify({ page: 1, pageSize: 9999, warehouseCode, search: "", sortField: "WarehouseCode", sortDir: "asc" }),
+        });
+        const locJson = await locRes.json().catch(() => ({}));
+        const locArr: Record<string, unknown>[] =
+          Array.isArray(locJson?.data?.list) ? locJson.data.list :
+          Array.isArray(locJson?.data)       ? locJson.data       : [];
+        setOccupancyMap(buildLocationOccupancyLookup(locArr));
+      } catch { /* proceed without occupancy */ }
+    }
+
+    const allResults: { code: string; assigned: number; issues: string[] }[] = [];
+
+    for (let i = 0; i < codes.length; i++) {
+      const code = codes[i];
+      setBulkAssignProgress((prev) => ({ ...prev, current: i, currentCode: code }));
+
+      const order   = orders.find((o) => String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? "") === code);
+      const whCode  = String(order?.warehouseCode ?? warehouseCode ?? "");
+      const custCode = String(order?.customerCode ?? "");
+      const orderType = "B2C";
+
+      let assignedCount = 0;
+      const issues: string[] = [];
+
+      try {
+        const res = await fetch(`/api/wms/shipping/items/${code}`, { headers });
+        const json = await res.json().catch(() => ({}));
+        const j = json as Record<string, unknown>;
+        const rawItems: Record<string, unknown>[] =
+          Array.isArray((j?.data as Record<string, unknown>)?.items) ? (j.data as Record<string, unknown>).items as Record<string, unknown>[] :
+          Array.isArray(j?.items) ? j.items as Record<string, unknown>[] : [];
+
+        const pending = rawItems.filter((it) => Number(it.unassignedQty ?? 0) > 0);
+
+        for (const item of pending) {
+          const sku = String(item.productSku ?? "");
+          let remaining = Number(item.unassignedQty ?? 0);
+
+          let candidates: Order[] = [];
+          try {
+            const ranked = await fetchRankedStock(whCode, custCode, sku, orderType);
+            candidates = ranked.candidates;
+          } catch (e) {
+            issues.push(`${sku}: lookup failed (${e instanceof Error ? e.message : "error"})`);
+            continue;
+          }
+
+          for (const stock of candidates) {
+            if (remaining <= 0) break;
+            const allocQty = Math.min(remaining, Number(stock.availQty ?? 0));
+            if (allocQty <= 0) continue;
+            const { ok, message } = await postAssign(item as Order, stock, allocQty, code, whCode, custCode);
+            if (ok) { remaining -= allocQty; assignedCount++; }
+            else { issues.push(`${sku}: ${message || "assign failed"}`); break; }
+            await sleep(250);
+          }
+          if (remaining > 0) issues.push(`${sku}: ${remaining} unit(s) unallocated`);
+          await sleep(200);
+        }
+      } catch (e) {
+        issues.push(e instanceof Error ? e.message : "Error fetching items");
+      }
+
+      allResults.push({ code, assigned: assignedCount, issues });
+      setBulkAssignProgress((prev) => ({ ...prev, current: i + 1, results: [...allResults] }));
+      await sleep(300);
+    }
+
+    setBulkAssigning(false);
   }
 
   /* ── Batch picking ── */
@@ -1683,6 +1776,28 @@ ${labels}
               </button>
             );
           })()}
+          {type === "b2c" && (() => {
+            const selCount = Object.keys(selectedCodes).filter((k) => selectedCodes[k]).length;
+            return (
+              <button
+                onClick={runBulkAutoAssign}
+                disabled={selCount === 0 || bulkAssigning}
+                className={`flex items-center gap-2 text-sm font-medium rounded-lg px-3 py-2 transition-colors ${
+                  selCount > 0
+                    ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
+                    : "border border-slate-200 text-slate-400 bg-white cursor-not-allowed"
+                }`}
+              >
+                <PackageCheck className="w-4 h-4" />
+                Bulk Assign
+                {selCount > 0 && (
+                  <span className="bg-white/25 text-white text-xs font-bold rounded-full px-1.5 min-w-[20px] text-center">
+                    {selCount}
+                  </span>
+                )}
+              </button>
+            );
+          })()}
           <button
             onClick={detectBatches}
             disabled={orders.length === 0}
@@ -1781,7 +1896,7 @@ ${labels}
             <table className="w-full text-xs">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-100">
-                  {type === "b2b" && (
+                  {(type === "b2b" || type === "b2c") && (
                     <th className="px-3 py-2.5 w-10">
                       <input
                         type="checkbox"
@@ -1802,7 +1917,7 @@ ${labels}
                   </th>
                 </tr>
                 <tr className="bg-slate-50 border-b border-slate-200">
-                  {type === "b2b" && <th className="px-3 py-1.5 w-10" />}
+                  {(type === "b2b" || type === "b2c") && <th className="px-3 py-1.5 w-10" />}
                   {cols.map((c) => {
                     const opts   = colOptions[c];
                     const active = !!colFilters[c];
@@ -1832,11 +1947,11 @@ ${labels}
                   const comment = String(order.comment ?? order.orderComment ?? order.memo ?? "").trim();
                   const hasTask = comment.includes("×");
                   const orderCode_ = String(order.shippingOrderCode ?? order.orderCode ?? order.outboundCode ?? "");
-                  const isSelected = type === "b2b" && !!selectedCodes[orderCode_];
+                  const isSelected = (type === "b2b" || type === "b2c") && !!selectedCodes[orderCode_];
                   return (
                     <tr key={idx} onClick={() => openDetail(order)}
                       className={`border-b border-slate-100 last:border-0 hover:bg-blue-50 cursor-pointer transition-colors group ${isSelected ? "bg-blue-50" : ""}`}>
-                      {type === "b2b" && (
+                      {(type === "b2b" || type === "b2c") && (
                         <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
                           <input
                             type="checkbox"
@@ -2887,6 +3002,84 @@ ${labels}
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Bulk Auto-Assign Modal ── */}
+      {bulkAssignModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+          <div className="absolute inset-0 bg-black/50" onClick={() => { if (!bulkAssigning) setBulkAssignModal(false); }} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-emerald-600 flex items-center justify-center shadow-sm">
+                  <PackageCheck className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-slate-900">Bulk Auto-Assign</h2>
+                  <p className="text-xs text-slate-500">
+                    {bulkAssigning
+                      ? `Processing ${bulkAssignProgress.current} / ${bulkAssignProgress.total}…`
+                      : `Done — ${bulkAssignProgress.total} orders processed`}
+                  </p>
+                </div>
+              </div>
+              {!bulkAssigning && (
+                <button onClick={() => { setBulkAssignModal(false); setSelectedCodes({}); loadOrders(); }}
+                  className="p-1 text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
+              )}
+            </div>
+
+            {/* progress bar */}
+            <div className="px-6 py-3 border-b border-slate-100 flex-shrink-0">
+              <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                <div className="h-full bg-emerald-500 rounded-full transition-all"
+                  style={{ width: `${bulkAssignProgress.total ? (bulkAssignProgress.current / bulkAssignProgress.total) * 100 : 0}%` }} />
+              </div>
+              {bulkAssigning && bulkAssignProgress.currentCode && (
+                <p className="text-xs text-slate-400 mt-1.5 font-mono">{bulkAssignProgress.currentCode}</p>
+              )}
+            </div>
+
+            {/* results list */}
+            <div className="flex-1 overflow-y-auto px-6 py-3 space-y-2">
+              {bulkAssignProgress.results.length === 0 && bulkAssigning && (
+                <div className="flex items-center justify-center py-8 gap-2 text-slate-400">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span className="text-sm">Starting…</span>
+                </div>
+              )}
+              {bulkAssignProgress.results.map(({ code, assigned, issues }) => (
+                <div key={code} className={`rounded-xl px-4 py-3 border ${issues.length === 0 ? "bg-emerald-50 border-emerald-200" : "bg-amber-50 border-amber-200"}`}>
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono text-xs font-semibold text-slate-700">{code}</span>
+                    {issues.length === 0
+                      ? <span className="flex items-center gap-1 text-xs font-semibold text-emerald-700"><CheckCircle2 className="w-3.5 h-3.5" /> {assigned} assigned</span>
+                      : <span className="flex items-center gap-1 text-xs font-semibold text-amber-700"><AlertTriangle className="w-3.5 h-3.5" /> {assigned} assigned, {issues.length} issue(s)</span>
+                    }
+                  </div>
+                  {issues.length > 0 && (
+                    <ul className="mt-1.5 space-y-0.5">
+                      {issues.map((iss, ii) => (
+                        <li key={ii} className="text-xs text-amber-700 pl-2">• {iss}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {!bulkAssigning && (
+              <div className="px-6 py-4 border-t border-slate-100 flex-shrink-0">
+                <button
+                  onClick={() => { setBulkAssignModal(false); setSelectedCodes({}); loadOrders(); }}
+                  className="w-full h-10 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-700 transition-colors"
+                >
+                  Close & Refresh
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
