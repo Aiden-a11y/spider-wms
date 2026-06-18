@@ -24,7 +24,7 @@ type StockOption = {
 type SkuAssignState = {
   loading: boolean;
   options: StockOption[];
-  selected: string | null; // location value
+  selected: string | null;
   assigning: boolean;
   result: "ok" | "error" | null;
   message: string;
@@ -48,21 +48,45 @@ export default function BatchesPage() {
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState<Set<string>>(new Set());
-  const [skuState, setSkuState] = useState<Record<string, SkuAssignState>>({}); // key: `${batchId}:${sku}`
+  const [skuState, setSkuState] = useState<Record<string, SkuAssignState>>({});
   const [assignProgress, setAssignProgress] = useState<{ done: number; total: number; batchId: string; sku: string } | null>(null);
+  // per-batch assignment status: "checking" | "assigned" | "pending"
+  const [assignStatus, setAssignStatus] = useState<Record<string, "checking" | "assigned" | "pending">>({});
+
+  async function checkBatchAssignStatus(batch: Batch, hdrs: Record<string, string>) {
+    const firstOrder = batch.orders[0];
+    if (!firstOrder) { setAssignStatus((p) => ({ ...p, [batch.id]: "pending" })); return; }
+    try {
+      const res = await fetch(`/api/wms/shipping/items/${encodeURIComponent(firstOrder.orderCode)}`, { headers: hdrs });
+      const json = await res.json().catch(() => ({})) as Record<string, unknown>;
+      const d = (json?.data ?? {}) as Record<string, unknown>;
+      const assignments = Array.isArray(d.assignments) ? d.assignments : [];
+      setAssignStatus((p) => ({ ...p, [batch.id]: assignments.length > 0 ? "assigned" : "pending" }));
+    } catch {
+      setAssignStatus((p) => ({ ...p, [batch.id]: "pending" }));
+    }
+  }
 
   async function loadBatches() {
     setLoading(true);
+    setAssignStatus({});
     try {
       const res = await fetch("/api/batch");
       const data = await res.json();
-      if (Array.isArray(data)) setBatches(data);
+      if (Array.isArray(data)) {
+        setBatches(data);
+        // mark all as "checking" first, then check each
+        const init: Record<string, "checking"> = {};
+        data.forEach((b: Batch) => { init[b.id] = "checking"; });
+        setAssignStatus(init);
+        data.forEach((b: Batch) => checkBatchAssignStatus(b, headers));
+      }
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => { loadBatches(); }, []);
+  useEffect(() => { loadBatches(); }, []); // eslint-disable-line
 
   function toggleExpand(id: string) {
     setExpanded((prev) => {
@@ -144,7 +168,6 @@ export default function BatchesPage() {
       const orderCode = order.orderCode;
       const custCode = order.customerCode;
       try {
-        // Get shippingItemId for this order + SKU
         const itemsRes = await fetch(`/api/wms/shipping/items/${encodeURIComponent(orderCode)}`, { headers });
         const itemsJson = await itemsRes.json().catch(() => ({}));
         const ijData = ((itemsJson as Record<string, unknown>)?.data ?? {}) as Record<string, unknown>;
@@ -153,13 +176,12 @@ export default function BatchesPage() {
         ) as Record<string, unknown>[];
         const lineItem = items.find((it) => String(it.productSku ?? it.sku ?? "") === skuEntry.sku);
         if (!lineItem) {
-          issues.push(`${orderCode}: SKU ${skuEntry.sku} not found in items`);
+          issues.push(`${orderCode}: SKU ${skuEntry.sku} not found`);
           done++;
           setAssignProgress({ done, total: batch.orders.length, batchId: batch.id, sku: skuEntry.sku });
           continue;
         }
 
-        // Skip if already fully assigned
         const unassignedQty = Number(lineItem.unassignedQty ?? lineItem.qty ?? skuEntry.qty);
         if (unassignedQty <= 0) {
           done++;
@@ -196,17 +218,20 @@ export default function BatchesPage() {
 
     setAssignProgress(null);
     const key = skuKey(batch.id, skuEntry.sku);
+    const succeeded = issues.length === 0;
     setSkuState((prev) => ({
       ...prev,
       [key]: {
         ...(prev[key] ?? { loading: false, options: [], selected: null, assigning: false, result: null, message: "" }),
         assigning: false,
-        result: issues.length === 0 ? "ok" : "error",
-        message: issues.length === 0
-          ? `Assigned ${skuEntry.qty}× ${skuEntry.sku} to all ${batch.orderCount} orders from location ${locationLabel(stockOption)}. Total: ${totalQty} units.`
+        result: succeeded ? "ok" : "error",
+        message: succeeded
+          ? `Assigned ${skuEntry.qty}× ${skuEntry.sku} to all ${batch.orderCount} orders from ${locationLabel(stockOption)}. Total: ${totalQty} units.`
           : `${done - issues.length} ok, ${issues.length} failed: ${issues.slice(0, 3).join("; ")}${issues.length > 3 ? "…" : ""}`,
       },
     }));
+    // refresh assignment status badge
+    if (succeeded) setAssignStatus((p) => ({ ...p, [batch.id]: "assigned" }));
   }
 
   return (
@@ -242,36 +267,74 @@ export default function BatchesPage() {
       )}
 
       {/* Batch list */}
-      <div className="space-y-4">
+      <div className="space-y-3">
         {batches.map((batch) => {
           const isExpanded = expanded.has(batch.id);
           const isDeleting = deleting.has(batch.id);
+          const status = assignStatus[batch.id];
+          const isAssigned = status === "assigned";
+          const isChecking = status === "checking";
 
           return (
-            <div key={batch.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div key={batch.id}
+              className={`bg-white rounded-2xl border shadow-sm overflow-hidden transition-colors ${
+                isAssigned ? "border-emerald-200" : "border-slate-200"
+              }`}
+            >
               {/* Batch header */}
-              <div className="px-5 py-4 flex items-center gap-4">
+              <div className={`px-5 py-4 flex items-center gap-4 ${isAssigned ? "bg-emerald-50/50" : ""}`}>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-violet-100 text-violet-700">
+                  {/* Row 1: type badge + order count + status */}
+                  <div className="flex items-center gap-2.5 flex-wrap mb-1.5">
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-violet-100 text-violet-700 tracking-wide">
                       {batch.type?.toUpperCase()}
                     </span>
-                    <span className="text-sm font-bold text-slate-900">
-                      {batch.orderCount} orders · {batch.skuList.length} SKU{batch.skuList.length !== 1 ? "s" : ""}
+                    <span className="text-base font-extrabold text-slate-900">
+                      {batch.orderCount} orders
                     </span>
-                    <span className="text-xs text-slate-400">{batch.warehouseCode}</span>
-                  </div>
-                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
-                    {batch.skuList.map(({ sku, qty }) => (
-                      <span key={sku} className="text-xs text-slate-500">
-                        {sku} <span className="text-slate-400">×{qty}/order</span>
-                        <span className="text-violet-600 font-semibold ml-1">(total {batch.orderCount * qty})</span>
+                    <span className="text-sm font-semibold text-slate-500">
+                      · {batch.skuList.length} SKU{batch.skuList.length !== 1 ? "s" : ""}
+                    </span>
+                    <span className="text-sm text-slate-400 font-medium">{batch.warehouseCode}</span>
+
+                    {/* Assignment status badge */}
+                    {isChecking && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-400">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        Checking…
                       </span>
+                    )}
+                    {isAssigned && (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-700">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Location Assigned
+                      </span>
+                    )}
+                    {status === "pending" && (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-600 border border-amber-200">
+                        <MapPin className="w-3 h-3" />
+                        Needs Assignment
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Row 2: SKU list */}
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 mb-1.5">
+                    {batch.skuList.map(({ sku, qty }) => (
+                      <div key={sku} className="flex items-baseline gap-1.5">
+                        <span className="font-mono text-sm font-bold text-slate-800">{sku}</span>
+                        <span className="text-sm text-slate-400">×{qty}/order</span>
+                        <span className="text-sm font-bold text-violet-600">(total {batch.orderCount * qty})</span>
+                      </div>
                     ))}
                   </div>
-                  <p className="text-xs text-slate-400 mt-1">{new Date(batch.createdAt).toLocaleString()}</p>
+
+                  {/* Row 3: timestamp */}
+                  <p className="text-xs text-slate-400">{new Date(batch.createdAt).toLocaleString()}</p>
                 </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
+
+                {/* Actions */}
+                <div className="flex items-center gap-1.5 flex-shrink-0">
                   <button
                     onClick={() => router.push(`/batches-print?id=${encodeURIComponent(batch.id)}`)}
                     className="p-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
@@ -288,9 +351,18 @@ export default function BatchesPage() {
                   </button>
                   <button
                     onClick={() => toggleExpand(batch.id)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-50 text-violet-700 hover:bg-violet-100 text-sm font-medium transition-colors"
+                    className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                      isExpanded
+                        ? "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                        : isAssigned
+                          ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                          : "bg-violet-600 text-white hover:bg-violet-700"
+                    }`}
                   >
-                    {isExpanded ? <><ChevronUp className="w-3.5 h-3.5" /> Collapse</> : <><ChevronDown className="w-3.5 h-3.5" /> Assign</>}
+                    {isExpanded
+                      ? <><ChevronUp className="w-3.5 h-3.5" /> Collapse</>
+                      : <><ChevronDown className="w-3.5 h-3.5" /> {isAssigned ? "Re-Assign" : "Assign"}</>
+                    }
                   </button>
                 </div>
               </div>
@@ -298,7 +370,7 @@ export default function BatchesPage() {
               {/* Expanded: per-SKU location assignment */}
               {isExpanded && (
                 <div className="border-t border-slate-100 bg-slate-50">
-                  <div className="px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                  <div className="px-5 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">
                     Location Assignment — Total Pick
                   </div>
                   <div className="divide-y divide-slate-100">
@@ -312,25 +384,25 @@ export default function BatchesPage() {
                           {/* SKU header */}
                           <div className="flex items-start justify-between gap-4 mb-3">
                             <div>
-                              <p className="font-mono text-sm font-bold text-slate-800">{skuEntry.sku}</p>
-                              {skuEntry.name && <p className="text-xs text-slate-500 mt-0.5">{skuEntry.name}</p>}
-                              <div className="flex items-center gap-3 mt-1">
-                                <span className="text-xs text-slate-500">{skuEntry.qty}/order × {batch.orderCount} orders</span>
-                                <span className="text-sm font-bold text-violet-700">= {totalQty} total units to pick</span>
+                              <p className="font-mono text-base font-extrabold text-slate-900">{skuEntry.sku}</p>
+                              {skuEntry.name && <p className="text-sm text-slate-500 mt-0.5">{skuEntry.name}</p>}
+                              <div className="flex items-center gap-3 mt-1.5">
+                                <span className="text-sm text-slate-500">{skuEntry.qty}/order × {batch.orderCount} orders</span>
+                                <span className="text-base font-extrabold text-violet-700">= {totalQty} units total</span>
                               </div>
                             </div>
                             {state.options.length === 0 && !state.loading && (
                               <button
                                 onClick={() => loadLocations(batch, skuEntry.sku)}
-                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 text-xs font-semibold transition-colors flex-shrink-0"
+                                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 text-sm font-semibold transition-colors flex-shrink-0"
                               >
-                                <MapPin className="w-3.5 h-3.5" />
+                                <MapPin className="w-4 h-4" />
                                 Load Locations
                               </button>
                             )}
                             {state.loading && (
-                              <div className="flex items-center gap-1.5 text-xs text-slate-500">
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <div className="flex items-center gap-1.5 text-sm text-slate-500">
+                                <Loader2 className="w-4 h-4 animate-spin" />
                                 Loading…
                               </div>
                             )}
@@ -346,7 +418,7 @@ export default function BatchesPage() {
                                   return (
                                     <label
                                       key={opt.location}
-                                      className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border cursor-pointer transition-all ${
+                                      className={`flex items-center gap-3 px-3.5 py-3 rounded-xl border cursor-pointer transition-all ${
                                         isSelected
                                           ? "border-violet-400 bg-violet-50"
                                           : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
@@ -358,29 +430,29 @@ export default function BatchesPage() {
                                         value={opt.location}
                                         checked={isSelected}
                                         onChange={() => setSkuField(batch.id, skuEntry.sku, "selected", opt.location)}
-                                        className="accent-violet-600"
+                                        className="accent-violet-600 w-4 h-4"
                                       />
                                       <div className="flex-1 min-w-0">
-                                        <div className="flex items-center gap-2 flex-wrap">
-                                          <span className="font-mono text-sm font-bold text-slate-800">{label}</span>
+                                        <div className="flex items-center gap-2.5 flex-wrap">
+                                          <span className="font-mono text-sm font-extrabold text-slate-900">{label}</span>
                                           {opt.lotNo && (
-                                            <span className="text-xs text-slate-500">LOT: {opt.lotNo}</span>
+                                            <span className="text-xs font-medium text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">LOT: {opt.lotNo}</span>
                                           )}
                                           {opt.expireDate && (
-                                            <span className="text-xs text-slate-500">EXP: {opt.expireDate}</span>
+                                            <span className="text-xs font-medium text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">EXP: {opt.expireDate}</span>
                                           )}
                                         </div>
-                                        <div className="flex items-center gap-3 mt-0.5">
-                                          <span className="text-xs text-green-600 font-medium">Avail: {opt.availQty}</span>
-                                          <span className="text-xs text-slate-400">Stock: {opt.stockQty}</span>
+                                        <div className="flex items-center gap-3 mt-1">
+                                          <span className="text-sm font-bold text-green-700">Avail: {opt.availQty}</span>
+                                          <span className="text-sm text-slate-400">Stock: {opt.stockQty}</span>
                                           {Number(opt.availQty) < totalQty && (
-                                            <span className="text-xs text-amber-600 font-semibold">
-                                              ⚠ Short by {totalQty - Number(opt.availQty)}
+                                            <span className="text-sm font-bold text-amber-600">
+                                              ⚠ Short {totalQty - Number(opt.availQty)}
                                             </span>
                                           )}
                                         </div>
                                       </div>
-                                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                                      <span className={`text-xs px-2.5 py-1 rounded-full font-bold ${
                                         String(opt.itemCondition).toUpperCase() === "GOOD"
                                           ? "bg-green-100 text-green-700"
                                           : "bg-amber-100 text-amber-700"
@@ -394,28 +466,28 @@ export default function BatchesPage() {
 
                               {/* Result banner */}
                               {state.result && (
-                                <div className={`flex items-start gap-2 px-3 py-2.5 rounded-xl text-xs ${
+                                <div className={`flex items-start gap-2 px-3.5 py-3 rounded-xl text-sm ${
                                   state.result === "ok"
-                                    ? "bg-green-50 border border-green-200 text-green-700"
+                                    ? "bg-green-50 border border-green-200 text-green-800"
                                     : "bg-red-50 border border-red-200 text-red-700"
                                 }`}>
                                   {state.result === "ok"
-                                    ? <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-                                    : <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />}
-                                  <span>{state.message}</span>
+                                    ? <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                                    : <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />}
+                                  <span className="font-medium">{state.message}</span>
                                   <button
                                     onClick={() => { setSkuField(batch.id, skuEntry.sku, "result", null); setSkuField(batch.id, skuEntry.sku, "message", ""); }}
-                                    className="ml-auto flex-shrink-0"
+                                    className="ml-auto flex-shrink-0 text-slate-400 hover:text-slate-600"
                                   >
-                                    <X className="w-3.5 h-3.5" />
+                                    <X className="w-4 h-4" />
                                   </button>
                                 </div>
                               )}
 
                               {/* Progress */}
                               {isActive && assignProgress && (
-                                <div className="flex items-center gap-2 px-3 py-2 bg-violet-50 border border-violet-200 rounded-xl text-xs text-violet-700">
-                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                <div className="flex items-center gap-2 px-3.5 py-3 bg-violet-50 border border-violet-200 rounded-xl text-sm font-medium text-violet-700">
+                                  <Loader2 className="w-4 h-4 animate-spin" />
                                   Assigning {assignProgress.done} / {assignProgress.total} orders…
                                 </div>
                               )}
@@ -425,7 +497,7 @@ export default function BatchesPage() {
                                 <button
                                   onClick={() => assignSku(batch, skuEntry)}
                                   disabled={!state.selected || state.assigning || !!assignProgress}
-                                  className="w-full py-2.5 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-sm font-semibold transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                                  className="w-full py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-sm font-bold transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                                 >
                                   {state.assigning
                                     ? <><Loader2 className="w-4 h-4 animate-spin" /> Assigning…</>
@@ -436,7 +508,7 @@ export default function BatchesPage() {
                               {state.result && (
                                 <button
                                   onClick={() => loadLocations(batch, skuEntry.sku)}
-                                  className="w-full py-2 rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 text-sm font-medium transition-colors"
+                                  className="w-full py-2.5 rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 text-sm font-semibold transition-colors"
                                 >
                                   Reload Locations
                                 </button>
@@ -448,14 +520,14 @@ export default function BatchesPage() {
                     })}
                   </div>
 
-                  {/* Order list (collapsed, click to see) */}
+                  {/* Order list */}
                   <details className="px-5 pb-4">
-                    <summary className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer select-none py-2">
+                    <summary className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer select-none py-2 font-medium">
                       View {batch.orderCount} order codes
                     </summary>
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       {batch.orders.map((o) => (
-                        <span key={o.orderCode} className="font-mono text-xs bg-white border border-slate-200 px-2 py-1 rounded-lg text-slate-600">
+                        <span key={o.orderCode} className="font-mono text-xs bg-white border border-slate-200 px-2.5 py-1 rounded-lg text-slate-700 font-medium">
                           {o.orderCode}
                         </span>
                       ))}
