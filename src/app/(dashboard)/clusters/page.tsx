@@ -258,14 +258,22 @@ export default function ClustersPage() {
         // 3. If no shelf assignments → check available shelf stock or flag replenishment
         let needsReplenishment = false;
 
-        // Case: absolutely no items/assignments in the order
+        // Case A: no items at all
         if (rawAssignments.length === 0 && rawItems.length === 0) {
           needsReplenishment = true;
-          setCreateStep(`[${binNo}/${selected.length}] ${code} — ⚠ No items found in order. Replenishment required.`);
+          setCreateStep(`[${binNo}/${selected.length}] ${code} — ⚠ No items in order. Replenishment required.`);
           await sleep(400);
         }
 
-        if (shelfAssignments.length === 0 && rawItems.length > 0) {
+        // Case B: assignments exist but ALL in non-shelf zones, no unassigned items to re-assign
+        if (shelfAssignments.length === 0 && rawAssignments.length > 0 && rawItems.length === 0) {
+          const zones = Object.keys(zoneSet).join(", ");
+          needsReplenishment = true;
+          setCreateStep(`[${binNo}/${selected.length}] ${code} — ⚠ Assigned to non-shelf (${zones}). Move to shelf first.`);
+          await sleep(400);
+        }
+
+        if (!needsReplenishment && shelfAssignments.length === 0 && rawItems.length > 0) {
           setCreateStep(`[${binNo}/${selected.length}] ${code} — checking shelf stock…`);
           const custCode = String(o.customerCode ?? "");
           let anyShelfStockFound = false;
