@@ -208,20 +208,46 @@ export default function ClustersPage() {
         const binNo = i + 1;
         setCreateStep(`[${binNo}/${selected.length}] ${code} — fetching assignments…`);
 
-        // 1. Fetch items/assignments
-        const itemsRes = await fetch(`/api/wms/shipping/items/${encodeURIComponent(code)}`, { headers });
-        const itemsJson = await itemsRes.json().catch(() => ({})) as Record<string, unknown>;
-        const d = (itemsJson?.data ?? {}) as Record<string, unknown>;
-        const rawAssignments = (Array.isArray(d.assignments) ? d.assignments
-          : Array.isArray(itemsJson?.assignments) ? itemsJson.assignments : []) as Record<string, unknown>[];
-        const rawItems = (Array.isArray(d.items) ? d.items
-          : Array.isArray(itemsJson?.items) ? itemsJson.items : []) as Record<string, unknown>[];
+        // 1. Fetch items/assignments — try B2C-specific and generic endpoints
+        const parseAssignments = (j: Record<string, unknown>): Record<string, unknown>[] => {
+          const d2 = (j?.data ?? {}) as Record<string, unknown>;
+          for (const arr of [d2.assignments, j.assignments, d2.list, j.list]) {
+            if (Array.isArray(arr) && arr.length > 0) return arr as Record<string, unknown>[];
+          }
+          return [];
+        };
+        const parseLineItems = (j: Record<string, unknown>): Record<string, unknown>[] => {
+          const d2 = (j?.data ?? {}) as Record<string, unknown>;
+          for (const arr of [d2.items, j.items, d2.shippingItems, j.shippingItems, d2.orderItems, j.orderItems]) {
+            if (Array.isArray(arr) && arr.length > 0) return arr as Record<string, unknown>[];
+          }
+          return [];
+        };
+
+        let rawAssignments: Record<string, unknown>[] = [];
+        let rawItems: Record<string, unknown>[] = [];
+        for (const ep of [
+          `/api/wms/shipping/b2c/items/${encodeURIComponent(code)}`,
+          `/api/wms/shipping/items/${encodeURIComponent(code)}`,
+        ]) {
+          try {
+            const res = await fetch(ep, { headers });
+            const j = await res.json().catch(() => ({})) as Record<string, unknown>;
+            const asgn = parseAssignments(j);
+            const itms = parseLineItems(j);
+            if (asgn.length > 0 || itms.length > 0) {
+              rawAssignments = asgn;
+              rawItems = itms;
+              break;
+            }
+          } catch { /* try next */ }
+        }
 
         // Diagnostic: show what zones exist
         const zoneSet: Record<string, true> = {};
         rawAssignments.forEach((a) => { zoneSet[String(a.zoneNm ?? a.zoneName ?? a.zone ?? "—")] = true; });
         const zoneNames = Object.keys(zoneSet).join(", ") || "(none)";
-        setCreateStep(`[${binNo}/${selected.length}] ${code} — ${rawAssignments.length} assignments, zones: ${zoneNames}`);
+        setCreateStep(`[${binNo}/${selected.length}] ${code} — ${rawAssignments.length} asgn / ${rawItems.length} items, zones: ${zoneNames}`);
         await sleep(80);
 
         // 2. Filter to shelf zone assignments
@@ -229,8 +255,16 @@ export default function ClustersPage() {
           isShelf(a.zoneNm ?? a.zoneName ?? a.zone)
         );
 
-        // 3. If no shelf assignments but items exist → check available shelf stock
+        // 3. If no shelf assignments → check available shelf stock or flag replenishment
         let needsReplenishment = false;
+
+        // Case: absolutely no items/assignments in the order
+        if (rawAssignments.length === 0 && rawItems.length === 0) {
+          needsReplenishment = true;
+          setCreateStep(`[${binNo}/${selected.length}] ${code} — ⚠ No items found in order. Replenishment required.`);
+          await sleep(400);
+        }
+
         if (shelfAssignments.length === 0 && rawItems.length > 0) {
           setCreateStep(`[${binNo}/${selected.length}] ${code} — checking shelf stock…`);
           const custCode = String(o.customerCode ?? "");
