@@ -63,24 +63,38 @@ export default function ClustersPage() {
   const [expandedCluster, setExpandedCluster] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  // ── Occupancy map ─────────────────────────────────────────────────────────
+  // ── Occupancy map (all pages) ─────────────────────────────────────────────
   const [occupancyMap, setOccupancyMap] = useState<Map<string, string>>(new Map());
 
   useEffect(() => {
     if (!warehouseCode) return;
-    fetch("/api/wms/warehouse/location/list", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ page: 1, pageSize: 9999, warehouseCode }),
-    })
-      .then((r) => r.json())
-      .then((j) => {
-        const arr: Record<string, unknown>[] =
-          Array.isArray(j?.data?.list) ? j.data.list :
-          Array.isArray(j?.data) ? j.data : [];
-        if (arr.length > 0) setOccupancyMap(buildLocationOccupancyLookup(arr));
-      })
-      .catch(() => {});
+    const PAGE_SIZE = 500;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const all: Record<string, unknown>[] = [];
+        let page = 1;
+        while (true) {
+          const res = await fetch("/api/wms/warehouse/location/list", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ page, pageSize: PAGE_SIZE, warehouseCode }),
+          });
+          const j = await res.json().catch(() => ({}));
+          const chunk: Record<string, unknown>[] =
+            Array.isArray(j?.data?.list) ? j.data.list :
+            Array.isArray(j?.data) ? j.data : [];
+          all.push(...chunk);
+          const total = Number(j?.data?.total ?? j?.total ?? 0);
+          if (chunk.length < PAGE_SIZE || (total > 0 && all.length >= total)) break;
+          page++;
+        }
+        if (!cancelled && all.length > 0) setOccupancyMap(buildLocationOccupancyLookup(all));
+      } catch { /* ignore */ }
+    })();
+
+    return () => { cancelled = true; };
   }, [warehouseCode, headers]);
 
   const isShelfLoc = (s: Record<string, unknown>) => {
