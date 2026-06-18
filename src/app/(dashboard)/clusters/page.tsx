@@ -66,6 +66,8 @@ export default function ClustersPage() {
   const [assigningKeys, setAssigningKeys] = useState<Set<string>>(new Set());
   const [assignedKeys, setAssignedKeys] = useState<Set<string>>(new Set());
   const [assignErrors, setAssignErrors] = useState<Record<string, string>>({});
+  const [reAssigningId, setReAssigningId] = useState<string | null>(null);
+  const [reAssignStatus, setReAssignStatus] = useState<Record<string, string>>({});
 
   // ── Creating ──────────────────────────────────────────────────────────────
   const [creating, setCreating] = useState(false);
@@ -542,6 +544,95 @@ export default function ClustersPage() {
     }
   }
 
+  async function reAssignReplenishment(cluster: B2CCluster) {
+    setReAssigningId(cluster.id);
+    setReAssignStatus({});
+    const updatedBins = cluster.bins.map((b) => ({ ...b }));
+    const newReplenishmentBins: number[] = [];
+
+    for (const bin of cluster.bins) {
+      if (!bin.needsReplenishment || !bin.replenishmentItems?.length) continue;
+      const custCode = bin.customerCode;
+      const newItems: B2CClusterItem[] = [];
+      let allAssigned = true;
+
+      for (const ri of bin.replenishmentItems) {
+        const sku = ri.sku;
+        const qty = ri.qty;
+        if (!sku || qty <= 0) continue;
+
+        setReAssignStatus((p) => ({ ...p, [cluster.id]: `Bin ${bin.binNo} — checking shelf stock for ${sku}…` }));
+        const stockRes = await fetch(
+          `/api/wms/shipping/available-stock/${encodeURIComponent(warehouseCode)}/${encodeURIComponent(custCode)}?productSku=${encodeURIComponent(sku)}`,
+          { headers }
+        );
+        const stockJson = await stockRes.json().catch(() => ({})) as Record<string, unknown>;
+        const stockList = (Array.isArray(stockJson?.data) ? stockJson.data : []) as Record<string, unknown>[];
+        const shelfStock = stockList
+          .filter((s) => isShelf(s.zoneNm ?? s.zoneName) && Number(s.availQty ?? 0) > 0)
+          .sort((a, b) => (String(a.expireDate ?? "") || "9").localeCompare(String(b.expireDate ?? "") || "9"));
+
+        const best = shelfStock[0];
+        if (!best) { allAssigned = false; continue; }
+
+        setReAssignStatus((p) => ({ ...p, [cluster.id]: `Bin ${bin.binNo} — assigning ${sku} from ${readableLocation(best)}…` }));
+        const assignBody = {
+          shippingOrderCode: bin.orderCode,
+          shippingItemId: ri.shippingItemId,
+          customerCode: custCode,
+          warehouseCode,
+          warehouseCd: best.location,
+          productSku: sku,
+          lotNo: String(best.lotNo ?? ""),
+          expireDate: String(best.expireDate ?? ""),
+          itemCondition: String(best.itemCondition ?? "GOOD"),
+          qty,
+        };
+        const assignRes = await fetch("/api/wms/shipping/assign", { method: "POST", headers, body: JSON.stringify(assignBody) });
+        if (assignRes.ok) {
+          newItems.push({
+            sku, name: ri.name, qty,
+            locationCode: readableLocation(best),
+            locationId: String(best.inKey ?? best.locationId ?? ""),
+            lotNo: String(best.lotNo ?? ""),
+            expireDate: String(best.expireDate ?? ""),
+            itemCondition: String(best.itemCondition ?? "GOOD"),
+            shippingItemId: ri.shippingItemId,
+          });
+        } else {
+          allAssigned = false;
+        }
+        await sleep(200);
+      }
+
+      const binIdx = updatedBins.findIndex((b) => b.binNo === bin.binNo);
+      if (binIdx >= 0) {
+        updatedBins[binIdx] = {
+          ...updatedBins[binIdx],
+          items: newItems.length > 0 ? newItems : updatedBins[binIdx].items,
+          needsReplenishment: !allAssigned || newItems.length === 0,
+          replenishmentItems: allAssigned && newItems.length > 0 ? undefined : bin.replenishmentItems,
+        };
+        if (!allAssigned || newItems.length === 0) newReplenishmentBins.push(bin.binNo);
+      }
+    }
+
+    setReAssignStatus((p) => ({ ...p, [cluster.id]: "Saving…" }));
+    await fetch("/api/cluster", {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({
+        id: cluster.id,
+        bins: updatedBins,
+        replenishmentBins: newReplenishmentBins.length > 0 ? newReplenishmentBins : [],
+      }),
+    });
+
+    setReAssignStatus((p) => ({ ...p, [cluster.id]: "" }));
+    setReAssigningId(null);
+    await loadClusters();
+  }
+
   function downloadReplenishment(cluster: B2CCluster) {
     const rows: Record<string, unknown>[] = [];
     for (const bin of cluster.bins) {
@@ -690,7 +781,7 @@ export default function ClustersPage() {
                                 </span>
                               )}
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <button
                                 onClick={() => window.open(`/clusters-replen-print?id=${encodeURIComponent(cluster.id)}`, "_blank")}
                                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-amber-300 text-amber-700 hover:bg-amber-50 transition-colors"
@@ -714,6 +805,15 @@ export default function ClustersPage() {
                                     : <><PackageCheck className="w-3.5 h-3.5" /> Assign All ({pendingRows.length})</>}
                                 </button>
                               )}
+                              <button
+                                onClick={() => reAssignReplenishment(cluster)}
+                                disabled={reAssigningId === cluster.id}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                              >
+                                {reAssigningId === cluster.id
+                                  ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {reAssignStatus[cluster.id] || "Re-assigning…"}</>
+                                  : <><RefreshCw className="w-3.5 h-3.5" /> Re-assign after Replenishment</>}
+                              </button>
                             </div>
                           </div>
 
