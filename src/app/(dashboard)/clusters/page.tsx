@@ -682,11 +682,11 @@ export default function ClustersPage() {
                             <div className="flex items-center gap-2">
                               <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
                               <span className="text-xs font-bold text-amber-700 uppercase tracking-wide">
-                                Replenishment — {allRows.length} items · {cluster.replenishmentBins.length} bins
+                                Replenishment — {(() => { const s = new Set(allRows.map(r => r.item.sku)); return s.size; })()} SKUs · {cluster.replenishmentBins.length} bins
                               </span>
                               {pendingRows.length < allRows.length && (
                                 <span className="text-xs text-emerald-600 font-semibold">
-                                  ({allRows.length - pendingRows.length} assigned)
+                                  ({allRows.length - pendingRows.length} rows assigned)
                                 </span>
                               )}
                             </div>
@@ -717,78 +717,83 @@ export default function ClustersPage() {
                             </div>
                           </div>
 
-                          {/* B2B-style table */}
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-xs border-collapse">
-                              <thead>
-                                <tr className="bg-amber-50/70 border-b border-amber-100">
-                                  <th className="px-3 py-2 text-left font-semibold text-amber-700 w-14">Bin</th>
-                                  <th className="px-3 py-2 text-left font-semibold text-amber-700">Order</th>
-                                  <th className="px-3 py-2 text-left font-semibold text-amber-700">Consignee</th>
-                                  <th className="px-3 py-2 text-left font-semibold text-amber-700">SKU</th>
-                                  <th className="px-3 py-2 text-left font-semibold text-amber-700">Product</th>
-                                  <th className="px-3 py-2 text-left font-semibold text-amber-700">Current Location</th>
-                                  <th className="px-3 py-2 text-left font-semibold text-amber-700">Lot</th>
-                                  <th className="px-3 py-2 text-left font-semibold text-amber-700">Expiry</th>
-                                  <th className="px-3 py-2 text-right font-semibold text-amber-700 w-12">Qty</th>
-                                  <th className="px-3 py-2 w-24"></th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {allRows.map((row, ri) => {
-                                  const key = `${row.clusterId}_${row.bin.binNo}_${row.item.sku}`;
-                                  const isAssigning = assigningKeys.has(key);
-                                  const isDone = assignedKeys.has(key);
-                                  const errMsg = assignErrors[key];
-                                  const c = binColor(row.bin.binNo);
-                                  return (
-                                    <tr key={ri}
-                                      className={`border-b border-amber-50 last:border-0 ${isDone ? "bg-emerald-50" : ri % 2 === 0 ? "bg-white" : "bg-amber-50/30"}`}>
-                                      <td className="px-3 py-2">
-                                        <div className="w-6 h-6 rounded flex items-center justify-center text-xs font-black text-white"
-                                          style={{ backgroundColor: c }}>
-                                          {row.bin.binNo}
-                                        </div>
-                                      </td>
-                                      <td className="px-3 py-2 font-mono text-slate-700 text-xs">{row.bin.orderNo || row.bin.orderCode}</td>
-                                      <td className="px-3 py-2 text-slate-600 max-w-[120px]">
-                                        <span className="truncate block">{row.bin.consigneeName || "—"}</span>
-                                      </td>
-                                      <td className="px-3 py-2 font-mono font-bold text-slate-800">{row.item.sku}</td>
-                                      <td className="px-3 py-2 text-slate-600 max-w-[140px]">
-                                        <span className="truncate block">{row.item.name || "—"}</span>
-                                      </td>
-                                      <td className="px-3 py-2 font-mono font-bold text-blue-700">{row.item.locationCode || "—"}</td>
-                                      <td className="px-3 py-2 font-mono text-slate-500 text-xs">{row.item.lotNo || "—"}</td>
-                                      <td className="px-3 py-2 text-slate-500 text-xs">{row.item.expireDate || "—"}</td>
-                                      <td className="px-3 py-2 text-right font-bold text-slate-800">{row.item.qty}</td>
-                                      <td className="px-3 py-2 text-right">
-                                        {isDone ? (
-                                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600">
-                                            <CheckCircle2 className="w-3.5 h-3.5" /> Done
-                                          </span>
-                                        ) : (
-                                          <div className="flex flex-col items-end gap-0.5">
-                                            <button
-                                              onClick={() => assignRow(row)}
-                                              disabled={isAssigning}
-                                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50 transition-colors whitespace-nowrap"
-                                            >
-                                              {isAssigning
-                                                ? <Loader2 className="w-3 h-3 animate-spin" />
-                                                : <PackageCheck className="w-3 h-3" />}
-                                              Assign
-                                            </button>
-                                            {errMsg && <span className="text-xs text-red-500 max-w-[100px] text-right leading-tight">{errMsg}</span>}
-                                          </div>
-                                        )}
-                                      </td>
+                          {/* SKU-grouped table */}
+                          {(() => {
+                            // Group allRows by SKU
+                            const skuGroupMap: Record<string, { sku: string; name: string; locationCode: string; locationId?: string; lotNo?: string; expireDate?: string; totalQty: number; rows: ReplenRow[] }> = {};
+                            allRows.forEach((row) => {
+                              const k = row.item.sku;
+                              if (!skuGroupMap[k]) skuGroupMap[k] = { sku: row.item.sku, name: row.item.name, locationCode: row.item.locationCode || "", locationId: row.item.locationId, lotNo: row.item.lotNo, expireDate: row.item.expireDate, totalQty: 0, rows: [] };
+                              skuGroupMap[k].totalQty += row.item.qty;
+                              skuGroupMap[k].rows.push(row);
+                            });
+                            const skuGroups = Object.values(skuGroupMap);
+                            return (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-xs border-collapse">
+                                  <thead>
+                                    <tr className="bg-amber-50/70 border-b border-amber-100">
+                                      <th className="px-3 py-2 text-left font-semibold text-amber-700">SKU</th>
+                                      <th className="px-3 py-2 text-left font-semibold text-amber-700">Product</th>
+                                      <th className="px-3 py-2 text-left font-semibold text-amber-700">Current Location</th>
+                                      <th className="px-3 py-2 text-left font-semibold text-amber-700">Lot</th>
+                                      <th className="px-3 py-2 text-left font-semibold text-amber-700">Expiry</th>
+                                      <th className="px-3 py-2 text-right font-semibold text-amber-700 w-14">Total Qty</th>
+                                      <th className="px-3 py-2 text-left font-semibold text-amber-700">Bins</th>
+                                      <th className="px-3 py-2 w-24"></th>
                                     </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
-                          </div>
+                                  </thead>
+                                  <tbody>
+                                    {skuGroups.map((grp, gi) => {
+                                      const pendingGrpRows = grp.rows.filter((r) => !assignedKeys.has(`${r.clusterId}_${r.bin.binNo}_${r.item.sku}`));
+                                      const isGrpDone = pendingGrpRows.length === 0;
+                                      const isGrpAssigning = grp.rows.some((r) => assigningKeys.has(`${r.clusterId}_${r.bin.binNo}_${r.item.sku}`));
+                                      const grpErrMsgs = grp.rows.map((r) => assignErrors[`${r.clusterId}_${r.bin.binNo}_${r.item.sku}`]).filter(Boolean);
+                                      return (
+                                        <tr key={grp.sku} className={`border-b border-amber-50 last:border-0 ${isGrpDone ? "bg-emerald-50" : gi % 2 === 0 ? "bg-white" : "bg-amber-50/30"}`}>
+                                          <td className="px-3 py-2 font-mono font-bold text-slate-800">{grp.sku}</td>
+                                          <td className="px-3 py-2 text-slate-600 max-w-[160px]"><span className="truncate block">{grp.name || "—"}</span></td>
+                                          <td className="px-3 py-2 font-mono font-bold text-blue-700">{grp.locationCode || "—"}</td>
+                                          <td className="px-3 py-2 font-mono text-slate-500">{grp.lotNo || "—"}</td>
+                                          <td className="px-3 py-2 text-slate-500">{grp.expireDate || "—"}</td>
+                                          <td className="px-3 py-2 text-right font-black text-slate-900 text-sm">{grp.totalQty}</td>
+                                          <td className="px-3 py-2">
+                                            <div className="flex flex-wrap gap-1">
+                                              {grp.rows.map((r) => (
+                                                <div key={r.bin.binNo} className="w-5 h-5 rounded flex items-center justify-center text-xs font-black text-white flex-shrink-0"
+                                                  style={{ backgroundColor: binColor(r.bin.binNo) }}>
+                                                  {r.bin.binNo}
+                                                </div>
+                                              ))}
+                                            </div>
+                                          </td>
+                                          <td className="px-3 py-2 text-right">
+                                            {isGrpDone ? (
+                                              <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600">
+                                                <CheckCircle2 className="w-3.5 h-3.5" /> Done
+                                              </span>
+                                            ) : (
+                                              <div className="flex flex-col items-end gap-0.5">
+                                                <button
+                                                  onClick={() => assignAllRows(pendingGrpRows)}
+                                                  disabled={isGrpAssigning}
+                                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50 transition-colors whitespace-nowrap"
+                                                >
+                                                  {isGrpAssigning ? <Loader2 className="w-3 h-3 animate-spin" /> : <PackageCheck className="w-3 h-3" />}
+                                                  Assign ({pendingGrpRows.length})
+                                                </button>
+                                                {grpErrMsgs.length > 0 && <span className="text-xs text-red-500 max-w-[100px] text-right leading-tight">{grpErrMsgs[0]}</span>}
+                                              </div>
+                                            )}
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            );
+                          })()}
                         </div>
                       );
                     })()}
