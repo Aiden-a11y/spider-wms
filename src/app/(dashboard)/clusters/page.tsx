@@ -83,8 +83,12 @@ export default function ClustersPage() {
       .catch(() => {});
   }, [warehouseCode, headers]);
 
-  const isShelfLoc = (s: Record<string, unknown>) =>
-    classifyOccupancy(getLocationOccupancyInfo(occupancyMap, s)) === "shelf";
+  const isShelfLoc = (s: Record<string, unknown>) => {
+    const occupancy = getLocationOccupancyInfo(occupancyMap, s);
+    if (occupancy) return classifyOccupancy(occupancy) === "shelf";
+    // Fallback for locations not yet in occupancyMap: check zoneNm text
+    return String(s.zoneNm ?? s.zoneName ?? s.zone ?? "").toLowerCase().includes("shelf");
+  };
 
   // ── Replenishment assign ──────────────────────────────────────────────────
   const [assigningKeys, setAssigningKeys] = useState<Set<string>>(new Set());
