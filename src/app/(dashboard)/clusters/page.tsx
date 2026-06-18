@@ -17,6 +17,11 @@ import { buildLocationOccupancyLookup, getLocationOccupancyInfo, classifyOccupan
 const MAX_BINS = 25;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+type ReplenRow = {
+  clusterId: string; bin: B2CClusterBin;
+  item: NonNullable<B2CClusterBin["replenishmentItems"]>[number];
+};
+
 function orderCodeOf(o: Record<string, unknown>): string {
   return String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? "");
 }
@@ -110,6 +115,16 @@ export default function ClustersPage() {
   const [assignErrors, setAssignErrors] = useState<Record<string, string>>({});
   const [reAssigningId, setReAssigningId] = useState<string | null>(null);
   const [reAssignStatus, setReAssignStatus] = useState<Record<string, string>>({});
+
+  // ── Shelf location picker modal ───────────────────────────────────────────
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerRows, setPickerRows] = useState<ReplenRow[]>([]);
+  const [pickerSku, setPickerSku] = useState("");
+  const [pickerSkuName, setPickerSkuName] = useState("");
+  const [pickerStock, setPickerStock] = useState<Record<string, unknown>[]>([]);
+  const [pickerSelectedIdx, setPickerSelectedIdx] = useState(0);
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const [pickerConfirming, setPickerConfirming] = useState(false);
 
   // ── Creating ──────────────────────────────────────────────────────────────
   const [creating, setCreating] = useState(false);
@@ -231,7 +246,7 @@ export default function ClustersPage() {
       list = list.filter((o) => String(o.orderDate ?? "").includes(colFilter.date));
     }
     return list;
-  }, [orders, search, colFilter]);
+  }, [orders, clusteredCodes, search, colFilter]);
 
   const totalFilteredQty = useMemo(
     () => filteredOrders.reduce((sum, o) => sum + Number(o.totalQty ?? o.qty ?? 0), 0),
@@ -427,6 +442,41 @@ export default function ClustersPage() {
           }
         }
 
+        // Mixed case: some shelf assignments exist but other SKUs in this order are still unassigned (REMAIN)
+        if (shelfAssignments.length > 0 && rawItems.length > 0) {
+          const assignedSkuSet = new Set(shelfAssignments.map((a) => String(a.productSku ?? a.sku ?? "")));
+          for (const item of rawItems) {
+            const sku = String(item.productSku ?? item.sku ?? "");
+            if (!sku || assignedSkuSet.has(sku)) continue;
+            const unassignedQty = Number(item.remainQty ?? item.unassignedQty ?? item.remainingQty ?? 0);
+            if (unassignedQty <= 0) continue;
+
+            needsReplenishment = true;
+            const sRes = await fetch(
+              `/api/wms/shipping/available-stock/${encodeURIComponent(warehouseCode)}/${encodeURIComponent(custCode)}?productSku=${encodeURIComponent(sku)}`,
+              { headers }
+            );
+            const sJson = await sRes.json().catch(() => ({})) as Record<string, unknown>;
+            const allStock = (Array.isArray(sJson?.data) ? sJson.data : []) as Record<string, unknown>[];
+            const best = allStock
+              .filter((s) => Number(s.availQty ?? 0) > 0)
+              .sort((a, b) => (String(a.expireDate ?? "") || "9").localeCompare(String(b.expireDate ?? "") || "9"))[0];
+
+            replenishmentItems.push({
+              sku,
+              name: String(item.productName ?? item.skuName ?? item.itemName ?? ""),
+              qty: unassignedQty,
+              locationCode: best ? readableLocation(best) : "",
+              locationId: best ? String(best.inKey ?? best.locationId ?? "") : "",
+              lotNo: best ? String(best.lotNo ?? "") : "",
+              expireDate: best ? String(best.expireDate ?? "") : "",
+              itemCondition: best ? String(best.itemCondition ?? "GOOD") : "",
+              shippingItemId: Number(item.shippingItemId ?? 0) || undefined,
+            });
+            await sleep(200);
+          }
+        }
+
         // Case B: assigned to non-shelf → build replenishmentItems from rawAssignments
         if (needsReplenishment && rawAssignments.length > 0 && replenishmentItems.length === 0) {
           replenishmentItems = rawAssignments.map((a) => ({
@@ -537,11 +587,74 @@ export default function ClustersPage() {
     setDeletingId(null);
   }
 
+  // ── Shelf location picker ─────────────────────────────────────────────────
+  async function openSkuPicker(sku: string, skuName: string, rows: ReplenRow[], custCode: string) {
+    setPickerSku(sku);
+    setPickerSkuName(skuName);
+    setPickerRows(rows);
+    setPickerStock([]);
+    setPickerSelectedIdx(0);
+    setPickerLoading(true);
+    setPickerOpen(true);
+    try {
+      const res = await fetch(
+        `/api/wms/shipping/available-stock/${encodeURIComponent(warehouseCode)}/${encodeURIComponent(custCode)}?productSku=${encodeURIComponent(sku)}`,
+        { headers }
+      );
+      const j = await res.json().catch(() => ({})) as Record<string, unknown>;
+      const all = (Array.isArray(j?.data) ? j.data : []) as Record<string, unknown>[];
+      const shelf = all
+        .filter((s) => isShelfLoc(s) && Number(s.availQty ?? 0) > 0)
+        .sort((a, b) => (String(a.expireDate ?? "") || "9").localeCompare(String(b.expireDate ?? "") || "9"));
+      setPickerStock(shelf);
+    } finally {
+      setPickerLoading(false);
+    }
+  }
+
+  async function confirmSkuPicker() {
+    const stock = pickerStock[pickerSelectedIdx];
+    if (!stock) return;
+    setPickerConfirming(true);
+    for (const row of pickerRows) {
+      const key = `${row.clusterId}_${row.bin.binNo}_${row.item.sku}`;
+      if (assignedKeys.has(key)) continue;
+      setAssigningKeys((p) => new Set(p).add(key));
+      setAssignErrors((p) => { const n = { ...p }; delete n[key]; return n; });
+      try {
+        const body = {
+          shippingOrderCode: row.bin.orderCode,
+          orderCode: row.bin.orderCode,
+          shippingItemId: row.item.shippingItemId,
+          customerCode: row.bin.customerCode,
+          warehouseCode,
+          warehouseCd: String(stock.location ?? stock.inKey ?? stock.locationId ?? ""),
+          productSku: row.item.sku,
+          qty: row.item.qty,
+          lotNo: String(stock.lotNo ?? ""),
+          expireDate: String(stock.expireDate ?? ""),
+          itemCondition: String(stock.itemCondition ?? "GOOD"),
+        };
+        const res = await fetch("/api/wms/shipping/assign", {
+          method: "POST",
+          headers: { ...headers, "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const j2 = await res.json().catch(() => ({})) as Record<string, unknown>;
+        if (!res.ok || j2?.isSuccess === false) throw new Error(String(j2?.message ?? j2?.msg ?? `HTTP ${res.status}`));
+        setAssignedKeys((p) => new Set(p).add(key));
+      } catch (e) {
+        setAssignErrors((p) => ({ ...p, [key]: e instanceof Error ? e.message : "Failed" }));
+      } finally {
+        setAssigningKeys((p) => { const n = new Set(p); n.delete(key); return n; });
+      }
+      await sleep(300);
+    }
+    setPickerConfirming(false);
+    setPickerOpen(false);
+  }
+
   // ── Replenishment assign helpers ──────────────────────────────────────────
-  type ReplenRow = {
-    clusterId: string; bin: B2CClusterBin;
-    item: NonNullable<B2CClusterBin["replenishmentItems"]>[number];
-  };
 
   async function assignRow(row: ReplenRow) {
     const key = `${row.clusterId}_${row.bin.binNo}_${row.item.sku}`;
@@ -615,7 +728,7 @@ export default function ClustersPage() {
         const stockJson = await stockRes.json().catch(() => ({})) as Record<string, unknown>;
         const stockList = (Array.isArray(stockJson?.data) ? stockJson.data : []) as Record<string, unknown>[];
         const shelfStock = stockList
-          .filter((s) => isShelf(s.zoneNm ?? s.zoneName) && Number(s.availQty ?? 0) > 0)
+          .filter((s) => isShelfLoc(s) && Number(s.availQty ?? 0) > 0)
           .sort((a, b) => (String(a.expireDate ?? "") || "9").localeCompare(String(b.expireDate ?? "") || "9"));
 
         const best = shelfStock[0];
@@ -627,7 +740,7 @@ export default function ClustersPage() {
           shippingItemId: ri.shippingItemId,
           customerCode: custCode,
           warehouseCode,
-          warehouseCd: best.location,
+          warehouseCd: String(best.inKey ?? best.location ?? best.locationId ?? ""),
           productSku: sku,
           lotNo: String(best.lotNo ?? ""),
           expireDate: String(best.expireDate ?? ""),
@@ -635,7 +748,8 @@ export default function ClustersPage() {
           qty,
         };
         const assignRes = await fetch("/api/wms/shipping/assign", { method: "POST", headers, body: JSON.stringify(assignBody) });
-        if (assignRes.ok) {
+        const assignJson = await assignRes.json().catch(() => ({})) as Record<string, unknown>;
+        if (assignRes.ok && assignJson?.isSuccess !== false) {
           newItems.push({
             sku, name: ri.name, qty,
             locationCode: readableLocation(best),
@@ -648,20 +762,47 @@ export default function ClustersPage() {
         } else {
           allAssigned = false;
         }
-        await sleep(200);
+        await sleep(300);
       }
 
       const binIdx = updatedBins.findIndex((b) => b.binNo === bin.binNo);
       if (binIdx >= 0) {
         updatedBins[binIdx] = {
           ...updatedBins[binIdx],
-          items: newItems.length > 0 ? newItems : updatedBins[binIdx].items,
+          // Append newly assigned items to existing shelf items (don't replace)
+          items: newItems.length > 0
+            ? [...updatedBins[binIdx].items, ...newItems]
+            : updatedBins[binIdx].items,
           needsReplenishment: !allAssigned || newItems.length === 0,
           replenishmentItems: allAssigned && newItems.length > 0 ? undefined : bin.replenishmentItems,
         };
         if (!allAssigned || newItems.length === 0) newReplenishmentBins.push(bin.binNo);
       }
     }
+
+    // Rebuild locationGroups from all updated bins so new shelf locations appear in pick route
+    const locMap = new Map<string, { locationCode: string; locationId: string; tasks: B2CClusterLocationGroup["tasks"] }>();
+    for (const bin of updatedBins) {
+      for (const item of bin.items) {
+        if (!item.locationCode) continue;
+        if (!locMap.has(item.locationCode)) {
+          locMap.set(item.locationCode, { locationCode: item.locationCode, locationId: item.locationId ?? "", tasks: [] });
+        }
+        locMap.get(item.locationCode)!.tasks.push({
+          binNo: bin.binNo,
+          orderCode: bin.orderCode,
+          sku: item.sku,
+          skuName: item.name,
+          qty: item.qty,
+          locationId: item.locationId,
+          lotNo: item.lotNo,
+          expireDate: item.expireDate,
+          itemCondition: item.itemCondition,
+          shippingItemId: item.shippingItemId,
+        });
+      }
+    }
+    const updatedLocationGroups = sortLocationGroups(Array.from(locMap.values()));
 
     setReAssignStatus((p) => ({ ...p, [cluster.id]: "Saving…" }));
     await fetch("/api/cluster", {
@@ -670,6 +811,7 @@ export default function ClustersPage() {
       body: JSON.stringify({
         id: cluster.id,
         bins: updatedBins,
+        locationGroups: updatedLocationGroups,
         replenishmentBins: newReplenishmentBins.length > 0 ? newReplenishmentBins : [],
       }),
     });
@@ -921,7 +1063,7 @@ export default function ClustersPage() {
                                             ) : (
                                               <div className="flex flex-col items-end gap-0.5">
                                                 <button
-                                                  onClick={() => assignAllRows(pendingGrpRows)}
+                                                  onClick={() => openSkuPicker(grp.sku, grp.name, pendingGrpRows, pendingGrpRows[0]?.bin.customerCode ?? "")}
                                                   disabled={isGrpAssigning}
                                                   className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50 transition-colors whitespace-nowrap"
                                                 >
@@ -1005,6 +1147,98 @@ export default function ClustersPage() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* ── Shelf location picker modal ── */}
+      {pickerOpen && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col max-h-[80vh]">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
+              <div>
+                <p className="text-sm font-bold text-slate-900">Select Shelf Location</p>
+                <p className="text-xs text-slate-500 mt-0.5 font-mono">{pickerSku}{pickerSkuName ? ` · ${pickerSkuName}` : ""}</p>
+              </div>
+              <button onClick={() => setPickerOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Bin summary */}
+            {pickerRows.length > 0 && (
+              <div className="px-6 py-2.5 bg-slate-50 border-b border-slate-100 flex flex-shrink-0 gap-1.5 flex-wrap">
+                {pickerRows.map((r) => (
+                  <div key={r.bin.binNo}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold text-white"
+                    style={{ backgroundColor: binColor(r.bin.binNo) }}>
+                    Bin {r.bin.binNo} <span className="opacity-75">×{r.item.qty}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Stock list */}
+            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-1.5">
+              {pickerLoading ? (
+                <div className="flex items-center justify-center py-12 gap-2 text-slate-400">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span className="text-sm">Loading shelf locations…</span>
+                </div>
+              ) : pickerStock.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 gap-2 text-slate-400">
+                  <AlertCircle className="w-5 h-5 text-amber-400" />
+                  <p className="text-sm font-medium text-slate-600">No shelf stock available for this SKU</p>
+                  <p className="text-xs text-slate-400">Complete replenishment first, then re-assign</p>
+                </div>
+              ) : (
+                pickerStock.map((s, idx) => {
+                  const loc = readableLocation(s);
+                  const isSelected = pickerSelectedIdx === idx;
+                  const occupancy = getLocationOccupancyInfo(occupancyMap, s);
+                  const zone = classifyOccupancy(occupancy ?? "");
+                  return (
+                    <button key={idx} onClick={() => setPickerSelectedIdx(idx)}
+                      className={`w-full text-left px-4 py-3 rounded-xl border transition-all ${isSelected ? "border-blue-400 bg-blue-50" : "border-slate-200 bg-white hover:bg-slate-50"}`}>
+                      <div className="flex items-center gap-3">
+                        <div className={`w-4 h-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${isSelected ? "border-blue-500" : "border-slate-300"}`}>
+                          {isSelected && <div className="w-2 h-2 rounded-full bg-blue-500" />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono text-sm font-bold text-slate-900">{loc}</span>
+                            {zone === "shelf" && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Shelf</span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-3 mt-0.5 text-xs text-slate-500">
+                            {s.lotNo ? <span>Lot: <span className="font-mono">{String(s.lotNo)}</span></span> : null}
+                            {s.expireDate ? <span>Exp: {String(s.expireDate)}</span> : null}
+                            <span className="font-semibold text-slate-700">Avail: {String(s.availQty ?? 0)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-end gap-3 flex-shrink-0">
+              <button onClick={() => setPickerOpen(false)}
+                className="px-4 py-2 rounded-lg text-sm font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors">
+                Cancel
+              </button>
+              <button
+                onClick={confirmSkuPicker}
+                disabled={pickerLoading || pickerStock.length === 0 || pickerConfirming}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 transition-colors"
+              >
+                {pickerConfirming ? <><Loader2 className="w-4 h-4 animate-spin" /> Assigning…</> : <><PackageCheck className="w-4 h-4" /> Assign {pickerRows.length} bin{pickerRows.length !== 1 ? "s" : ""}</>}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
