@@ -159,6 +159,14 @@ export default function BatchesPage() {
           continue;
         }
 
+        // Skip if already fully assigned
+        const unassignedQty = Number(lineItem.unassignedQty ?? lineItem.qty ?? skuEntry.qty);
+        if (unassignedQty <= 0) {
+          done++;
+          setAssignProgress({ done, total: batch.orders.length, batchId: batch.id, sku: skuEntry.sku });
+          continue;
+        }
+
         const body = {
           shippingOrderCode: orderCode,
           shippingItemId: lineItem.shippingItemId,
@@ -169,7 +177,7 @@ export default function BatchesPage() {
           lotNo: stockOption.lotNo ?? "",
           expireDate: stockOption.expireDate ?? "",
           itemCondition: stockOption.itemCondition ?? "GOOD",
-          qty: skuEntry.qty,
+          qty: unassignedQty,
         };
         const assignRes = await fetch("/api/wms/shipping/assign", { method: "POST", headers, body: JSON.stringify(body) });
         const assignJson = await assignRes.json().catch(() => ({}));
