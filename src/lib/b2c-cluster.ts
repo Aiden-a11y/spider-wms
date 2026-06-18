@@ -44,7 +44,12 @@ export interface B2CClusterBin {
   consigneeTelLNo?: string;
   items: B2CClusterItem[];
   needsReplenishment?: boolean;
-  replenishmentItems?: { sku: string; name: string; qty: number; locationCode?: string }[];
+  replenishmentItems?: {
+    sku: string; name: string; qty: number;
+    locationCode?: string; locationId?: string;
+    lotNo?: string; expireDate?: string; itemCondition?: string;
+    shippingItemId?: number;
+  }[];
 }
 
 export interface B2CCluster {
