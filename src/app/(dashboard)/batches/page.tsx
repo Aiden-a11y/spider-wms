@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import { useRouter } from "next/navigation";
-import { Layers, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Loader2, CheckCircle2, AlertCircle, X, Printer } from "lucide-react";
+import { Layers, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Loader2, CheckCircle2, AlertCircle, X, Printer, History, CheckCheck } from "lucide-react";
 import type { Batch } from "@/app/api/batch/route";
 
 type StockOption = {
@@ -52,6 +52,8 @@ export default function BatchesPage() {
   const [assignProgress, setAssignProgress] = useState<{ done: number; total: number; batchId: string; sku: string } | null>(null);
   // per-batch assignment status: "checking" | "assigned" | "pending"
   const [assignStatus, setAssignStatus] = useState<Record<string, "checking" | "assigned" | "pending">>({});
+  const [completedBatches, setCompletedBatches] = useState<Batch[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
 
   async function checkBatchAssignStatus(batch: Batch, hdrs: Record<string, string>) {
     const firstOrder = batch.orders[0];
@@ -86,7 +88,18 @@ export default function BatchesPage() {
     }
   }
 
-  useEffect(() => { loadBatches(); }, []); // eslint-disable-line
+  async function loadHistory() {
+    setLoadingHistory(true);
+    try {
+      const res = await fetch("/api/batch?completed=1");
+      const data = await res.json();
+      if (Array.isArray(data)) setCompletedBatches(data);
+    } finally {
+      setLoadingHistory(false);
+    }
+  }
+
+  useEffect(() => { loadBatches(); loadHistory(); }, []); // eslint-disable-line
 
   function toggleExpand(id: string) {
     setExpanded((prev) => {
@@ -538,6 +551,92 @@ export default function BatchesPage() {
             </div>
           );
         })}
+      </div>
+
+      {/* ── Batch History (completed from mobile) ── */}
+      <div className="mt-10">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <History className="w-4 h-4 text-slate-400" />
+            <h2 className="text-sm font-bold text-slate-600 uppercase tracking-wide">Batch History</h2>
+            {completedBatches.length > 0 && (
+              <span className="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full font-medium">
+                {completedBatches.length}
+              </span>
+            )}
+          </div>
+          <button
+            onClick={loadHistory}
+            disabled={loadingHistory}
+            className="text-xs text-slate-400 hover:text-slate-600 flex items-center gap-1 transition-colors"
+          >
+            <RefreshCw className={`w-3 h-3 ${loadingHistory ? "animate-spin" : ""}`} />
+            Refresh
+          </button>
+        </div>
+
+        {loadingHistory && (
+          <div className="flex items-center gap-2 text-sm text-slate-400 py-4">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            Loading history…
+          </div>
+        )}
+
+        {!loadingHistory && completedBatches.length === 0 && (
+          <p className="text-sm text-slate-400 py-4">No completed batches yet. Close a batch from the mobile app to record it here.</p>
+        )}
+
+        {completedBatches.length > 0 && (
+          <div className="space-y-2">
+            {completedBatches.map((batch) => (
+              <div
+                key={batch.id}
+                className="bg-white border border-slate-200 rounded-xl px-5 py-4 flex items-center gap-4 shadow-sm"
+              >
+                <div className="w-8 h-8 bg-emerald-50 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <CheckCheck className="w-4 h-4 text-emerald-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2.5 flex-wrap mb-1">
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-slate-500 tracking-wide">
+                      {batch.type?.toUpperCase()}
+                    </span>
+                    <span className="text-sm font-bold text-slate-800">{batch.orderCount} orders</span>
+                    <span className="text-sm text-slate-400">· {batch.skuList.length} SKU{batch.skuList.length !== 1 ? "s" : ""}</span>
+                    <span className="text-sm text-slate-400">{batch.warehouseCode}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 mb-1">
+                    {batch.skuList.map(({ sku, qty }) => (
+                      <span key={sku} className="font-mono text-xs text-slate-600">
+                        {sku} ×{qty}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-3 text-xs text-slate-400">
+                    <span>Created: {new Date(batch.createdAt).toLocaleString()}</span>
+                    {batch.completedAt && (
+                      <span className="text-emerald-600 font-medium">
+                        ✓ Closed: {new Date(batch.completedAt).toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <details className="flex-shrink-0">
+                  <summary className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer select-none font-medium">
+                    Orders
+                  </summary>
+                  <div className="absolute mt-1 bg-white border border-slate-200 rounded-xl shadow-lg p-3 z-10 max-w-xs flex flex-wrap gap-1.5 max-h-40 overflow-y-auto">
+                    {batch.orders.map((o) => (
+                      <span key={o.orderCode} className="font-mono text-xs bg-slate-50 border border-slate-200 px-2 py-0.5 rounded text-slate-700">
+                        {o.orderNo ?? o.orderCode}
+                      </span>
+                    ))}
+                  </div>
+                </details>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

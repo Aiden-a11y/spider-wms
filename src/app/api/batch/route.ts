@@ -11,16 +11,23 @@ export interface Batch {
   warehouseCode: string;
   createdAt: string;
   createdBy: string;
+  status?: "active" | "completed";
+  completedAt?: string;
 }
 
 const BATCH_TTL = 172800; // 48 hours
 
-export async function GET() {
-  const keys = await redis.keys("wms:batch:*");
+export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const completed = searchParams.get("completed") === "1";
+
+  const pattern = completed ? "wms:batchdone:*" : "wms:batch:*";
+  const keys = await redis.keys(pattern);
   if (keys.length === 0) return NextResponse.json([]);
   const values = await Promise.all(keys.map((k) => redis.get(k)));
+  const sortField = completed ? "completedAt" : "createdAt";
   const batches = (values.filter(Boolean) as Batch[]).sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    (a, b) => new Date(b[sortField] ?? b.createdAt).getTime() - new Date(a[sortField] ?? a.createdAt).getTime()
   );
   return NextResponse.json(batches);
 }
