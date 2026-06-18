@@ -2,7 +2,18 @@
 
 import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+import QRCode from "qrcode";
 import type { B2CCluster, B2CClusterBin } from "@/lib/b2c-cluster";
+
+function useQR(text: string): string {
+  const [url, setUrl] = useState("");
+  useEffect(() => {
+    if (!text) return;
+    QRCode.toDataURL(text, { width: 120, margin: 1, color: { dark: "#000", light: "#fff" } })
+      .then(setUrl).catch(() => {});
+  }, [text]);
+  return url;
+}
 
 /* ── types ── */
 interface ReplenEntry {
@@ -138,13 +149,30 @@ function ReplenLabel({ label, cluster }: { label: LocationLabel; cluster: B2CClu
   const allBins = Array.from(new Set(label.entries.flatMap((e) => e.bins))).sort((a, b) => a - b);
   const dateStr = new Date(cluster.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
+  // Collect order codes for bins on this label (prefer orderNo S…, fallback orderCode)
+  const orderCodes = allBins
+    .map((bn) => cluster.bins.find((b) => b.binNo === bn))
+    .filter(Boolean)
+    .map((b) => b!.orderNo || b!.orderCode)
+    .filter(Boolean);
+  const qrText = orderCodes.join("\n");
+  const qrUrl = useQR(qrText);
+
   return (
     <div className="label">
       {/* Replenishment banner */}
       <div className="replen-header">⚠ Replenishment Required</div>
 
-      {/* Location */}
-      <div className="loc-badge">{label.locationCode}</div>
+      {/* Location + QR side by side */}
+      <div style={{ display: "flex", alignItems: "stretch", gap: "0.08in", marginBottom: "0.08in" }}>
+        <div className="loc-badge" style={{ flex: 1, marginBottom: 0 }}>{label.locationCode}</div>
+        <div style={{ width: "0.9in", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+          background: "#fff", border: "2px solid #1e293b", borderRadius: "8px", padding: "3px" }}>
+          {qrUrl
+            ? <img src={qrUrl} alt={qrText} style={{ width: "100%", height: "auto", display: "block" }} />
+            : <div style={{ width: "100%", aspectRatio: "1", background: "#f3f4f6", borderRadius: 4 }} />}
+        </div>
+      </div>
 
       {/* Meta */}
       <div className="meta-row">
