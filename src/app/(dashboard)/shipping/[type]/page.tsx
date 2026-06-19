@@ -848,6 +848,8 @@ export default function ShippingTypePage() {
           // Try every known response shape for order line items
           const candidates_ = [
             d?.items, j?.items,
+            d?.shippingItems, j?.shippingItems,
+            d?.orderItems, j?.orderItems,
             d?.list, j?.list,
             // assignments can serve as fallback — dedupe by productSku, use orderQty
             d?.assignments, j?.assignments,
