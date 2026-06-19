@@ -198,6 +198,13 @@ export default function ClustersPage() {
 
   useEffect(() => { loadOrders(); }, [loadOrders]);
 
+  // Auto-run eligibility check whenever orders finish loading
+  useEffect(() => {
+    if (!loadingOrders && filteredOrders.length > 0) {
+      runClusterCheck(); // eslint-disable-line react-hooks/exhaustive-deps
+    }
+  }, [loadingOrders]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Load clusters ─────────────────────────────────────────────────────────
   const loadClusters = useCallback(async () => {
     setLoadingClusters(true);
