@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import { useRouter } from "next/navigation";
 import {
@@ -125,6 +125,16 @@ export default function ClustersPage() {
   const [pickerSelectedIdx, setPickerSelectedIdx] = useState(0);
   const [pickerLoading, setPickerLoading] = useState(false);
   const [pickerConfirming, setPickerConfirming] = useState(false);
+
+  // ── Cluster eligibility check ─────────────────────────────────────────────
+  const [checkResults, setCheckResults] = useState<Record<string, "checking" | "yes" | "no">>({});
+  const [checkRunning, setCheckRunning] = useState(false);
+  const [checkProgress, setCheckProgress] = useState({ done: 0, total: 0 });
+  const checkAbortRef = useRef(false);
+  const stockCacheRef = useRef<Map<string, Record<string, unknown>[]>>(new Map());
+  const [replenSkus, setReplenSkus] = useState<Array<{
+    sku: string; name: string; orderCount: number; location: string;
+  }>>([]);
 
   // ── Creating ──────────────────────────────────────────────────────────────
   const [creating, setCreating] = useState(false);
@@ -270,6 +280,137 @@ export default function ClustersPage() {
     const next: Record<string, boolean> = {};
     if (!allSelected) visible.forEach((c) => { next[c] = true; });
     setSelectedCodes(next);
+  }
+
+  // ── Cluster eligibility check ─────────────────────────────────────────────
+  async function runClusterCheck() {
+    if (checkRunning) { checkAbortRef.current = true; setCheckRunning(false); return; }
+    checkAbortRef.current = false;
+    stockCacheRef.current.clear();
+    setCheckRunning(true);
+    setCheckResults({});
+    setReplenSkus([]);
+
+    const ordersToCheck = filteredOrders.slice(0, 200);
+    setCheckProgress({ done: 0, total: ordersToCheck.length });
+
+    const replenMap: Record<string, { name: string; orderCodes: Set<string>; location: string }> = {};
+
+    const getItemAssignments = (j: Record<string, unknown>): Record<string, unknown>[] => {
+      const d = (j?.data ?? {}) as Record<string, unknown>;
+      for (const arr of [d.assignments, j.assignments, d.list, j.list]) {
+        if (Array.isArray(arr) && arr.length > 0) return arr as Record<string, unknown>[];
+      }
+      return [];
+    };
+    const getLineItems = (j: Record<string, unknown>): Record<string, unknown>[] => {
+      const d = (j?.data ?? {}) as Record<string, unknown>;
+      for (const arr of [d.items, j.items, d.shippingItems, j.shippingItems, d.orderItems, j.orderItems]) {
+        if (Array.isArray(arr) && arr.length > 0) return arr as Record<string, unknown>[];
+      }
+      return [];
+    };
+
+    for (let i = 0; i < ordersToCheck.length; i++) {
+      if (checkAbortRef.current) break;
+      const o = ordersToCheck[i];
+      const code = orderCodeOf(o);
+      const custCode = String(o.customerCode ?? "");
+
+      setCheckResults((p) => ({ ...p, [code]: "checking" }));
+
+      // Fetch items + assignments for this order
+      let rawAssignments: Record<string, unknown>[] = [];
+      let rawItems: Record<string, unknown>[] = [];
+      for (const ep of [
+        `/api/wms/shipping/b2c/items/${encodeURIComponent(code)}`,
+        `/api/wms/shipping/items/${encodeURIComponent(code)}`,
+      ]) {
+        try {
+          const res = await fetch(ep, { headers });
+          const j = await res.json().catch(() => ({})) as Record<string, unknown>;
+          const asgn = getItemAssignments(j);
+          const itms = getLineItems(j);
+          if (asgn.length > 0 || itms.length > 0) { rawAssignments = asgn; rawItems = itms; break; }
+        } catch { /* try next */ }
+      }
+
+      if (rawAssignments.length === 0 && rawItems.length === 0) {
+        setCheckResults((p) => ({ ...p, [code]: "no" }));
+        setCheckProgress((p) => ({ ...p, done: i + 1 }));
+        await sleep(50);
+        continue;
+      }
+
+      const shelfAssignments = rawAssignments.filter((a) => isShelfLoc(a));
+      const assignedSkus = new Set(shelfAssignments.map((a) => String(a.productSku ?? a.sku ?? "")));
+
+      // Collect unassigned items
+      const unassigned: Array<{ sku: string; name: string }> = [];
+      if (rawAssignments.length === 0) {
+        for (const item of rawItems) {
+          const sku = String(item.productSku ?? item.sku ?? "");
+          if (!sku || Number(item.qty ?? 0) <= 0) continue;
+          unassigned.push({ sku, name: String(item.productName ?? item.skuName ?? item.itemName ?? "") });
+        }
+      } else {
+        for (const item of rawItems) {
+          const sku = String(item.productSku ?? item.sku ?? "");
+          if (!sku || assignedSkus.has(sku)) continue;
+          const remain = Number(item.remainQty ?? item.unassignedQty ?? item.remainingQty ?? 0);
+          if (remain <= 0) continue;
+          unassigned.push({ sku, name: String(item.productName ?? item.skuName ?? item.itemName ?? "") });
+        }
+      }
+
+      if (unassigned.length === 0) {
+        setCheckResults((p) => ({ ...p, [code]: "yes" }));
+        setCheckProgress((p) => ({ ...p, done: i + 1 }));
+        await sleep(30);
+        continue;
+      }
+
+      // Check shelf stock for each unassigned SKU (with cache)
+      let canCluster = true;
+      for (const { sku, name } of unassigned) {
+        if (checkAbortRef.current) break;
+        const cacheKey = `${sku}:${custCode}`;
+        let allStock: Record<string, unknown>[];
+        if (stockCacheRef.current.has(cacheKey)) {
+          allStock = stockCacheRef.current.get(cacheKey)!;
+        } else {
+          const res = await fetch(
+            `/api/wms/shipping/available-stock/${encodeURIComponent(warehouseCode)}/${encodeURIComponent(custCode)}?productSku=${encodeURIComponent(sku)}`,
+            { headers }
+          );
+          const j = await res.json().catch(() => ({})) as Record<string, unknown>;
+          allStock = (Array.isArray(j?.data) ? j.data : []) as Record<string, unknown>[];
+          stockCacheRef.current.set(cacheKey, allStock);
+          await sleep(150);
+        }
+
+        const hasShelf = allStock.some((s) => isShelfLoc(s) && Number(s.availQty ?? 0) > 0);
+        if (!hasShelf) {
+          canCluster = false;
+          if (!replenMap[sku]) {
+            const anyStock = allStock.find((s) => Number(s.availQty ?? 0) > 0);
+            replenMap[sku] = { name, orderCodes: new Set(), location: anyStock ? readableLocation(anyStock) : "—" };
+          }
+          replenMap[sku].orderCodes.add(code);
+        }
+      }
+
+      setCheckResults((p) => ({ ...p, [code]: canCluster ? "yes" : "no" }));
+      setCheckProgress((p) => ({ ...p, done: i + 1 }));
+      await sleep(80);
+    }
+
+    setReplenSkus(
+      Object.entries(replenMap)
+        .map(([sku, v]) => ({ sku, name: v.name, orderCount: v.orderCodes.size, location: v.location }))
+        .sort((a, b) => b.orderCount - a.orderCount)
+    );
+    setCheckRunning(false);
   }
 
   // ── Cluster creation ──────────────────────────────────────────────────────
@@ -1284,6 +1425,20 @@ export default function ClustersPage() {
             )}
           </div>
           <div className="flex items-center gap-2">
+            {checkRunning && (
+              <span className="text-xs text-slate-400 tabular-nums">
+                {checkProgress.done} / {checkProgress.total}
+              </span>
+            )}
+            <button
+              onClick={runClusterCheck}
+              disabled={loadingOrders || filteredOrders.length === 0}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold border transition-colors disabled:opacity-40 ${checkRunning ? "bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"}`}
+            >
+              {checkRunning
+                ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Stop</>
+                : <><Search className="w-3.5 h-3.5" /> Check</>}
+            </button>
             {selectedList.length > 0 && (
               <span className="text-xs text-slate-500">{selectedList.length} / {MAX_BINS} selected</span>
             )}
@@ -1339,6 +1494,7 @@ export default function ClustersPage() {
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wide">Consignee</th>
                 <th className="px-4 py-3 text-right text-xs font-semibold text-slate-400 uppercase tracking-wide w-16">Qty</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wide w-28">Date</th>
+                <th className="px-4 py-3 text-center text-xs font-semibold text-blue-500 uppercase tracking-wide w-20">Cluster</th>
               </tr>
               <tr className="bg-white border-b border-slate-100">
                 <th />
@@ -1368,17 +1524,18 @@ export default function ClustersPage() {
                     placeholder="e.g. 2026-06"
                     className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs text-slate-700 placeholder:text-slate-300 focus:outline-none focus:ring-1 focus:ring-blue-400 font-normal" />
                 </th>
+                <th />
               </tr>
             </thead>
             <tbody>
               {loadingOrders && (
-                <tr><td colSpan={6} className="px-4 py-12 text-center text-slate-400">
+                <tr><td colSpan={7} className="px-4 py-12 text-center text-slate-400">
                   <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />
                   Loading orders…
                 </td></tr>
               )}
               {!loadingOrders && filteredOrders.length === 0 && (
-                <tr><td colSpan={6} className="px-4 py-12 text-center text-slate-400 text-sm">No Out-Bound Request orders found</td></tr>
+                <tr><td colSpan={7} className="px-4 py-12 text-center text-slate-400 text-sm">No Out-Bound Request orders found</td></tr>
               )}
               {filteredOrders.slice(0, 200).map((o, i) => {
                 const code = orderCodeOf(o);
@@ -1408,6 +1565,15 @@ export default function ClustersPage() {
                     <td className="px-4 py-2.5 text-slate-600 text-xs">{String(o.consigneeName ?? "")}</td>
                     <td className="px-4 py-2.5 text-right font-semibold text-slate-700">{String(o.totalQty ?? o.qty ?? "")}</td>
                     <td className="px-4 py-2.5 text-slate-400 text-xs">{String(o.orderDate ?? "")}</td>
+                    <td className="px-4 py-2.5 text-center" onClick={(e) => e.stopPropagation()}>
+                      {checkResults[code] === "checking" && <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400 mx-auto" />}
+                      {checkResults[code] === "yes" && (
+                        <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-700">Y</span>
+                      )}
+                      {checkResults[code] === "no" && (
+                        <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-bold bg-red-100 text-red-600">N</span>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
@@ -1416,6 +1582,42 @@ export default function ClustersPage() {
         </div>
         {filteredOrders.length > 200 && (
           <p className="text-xs text-slate-400 mt-2 text-right">Showing first 200 of {filteredOrders.length} orders</p>
+        )}
+
+        {/* Replenishment SKU summary */}
+        {replenSkus.length > 0 && (
+          <div className="mt-4 bg-white border border-red-200 rounded-2xl shadow-sm overflow-hidden">
+            <div className="px-5 py-3 bg-red-50 border-b border-red-100 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+              <span className="text-xs font-bold text-red-700 uppercase tracking-wide">
+                Replenishment Required — {replenSkus.length} SKU{replenSkus.length !== 1 ? "s" : ""} blocking cluster eligibility
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs border-collapse">
+                <thead>
+                  <tr className="bg-red-50/50 border-b border-red-100">
+                    <th className="px-4 py-2 text-left font-semibold text-red-700">SKU</th>
+                    <th className="px-4 py-2 text-left font-semibold text-red-700">Product</th>
+                    <th className="px-4 py-2 text-center font-semibold text-red-700 w-24">Orders blocked</th>
+                    <th className="px-4 py-2 text-left font-semibold text-red-700">Current Location (for replen)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {replenSkus.map((r, i) => (
+                    <tr key={r.sku} className={`border-b border-red-50 last:border-0 ${i % 2 === 0 ? "bg-white" : "bg-red-50/20"}`}>
+                      <td className="px-4 py-2 font-mono font-bold text-slate-800">{r.sku}</td>
+                      <td className="px-4 py-2 text-slate-600 max-w-[200px]"><span className="truncate block">{r.name || "—"}</span></td>
+                      <td className="px-4 py-2 text-center">
+                        <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-bold bg-red-100 text-red-600">{r.orderCount}</span>
+                      </td>
+                      <td className="px-4 py-2 font-mono text-blue-700 font-semibold">{r.location}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         )}
       </div>
     </div>
