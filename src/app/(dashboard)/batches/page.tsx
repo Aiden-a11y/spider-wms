@@ -54,6 +54,7 @@ export default function BatchesPage() {
   const [assignStatus, setAssignStatus] = useState<Record<string, "checking" | "assigned" | "pending">>({});
   const [completedBatches, setCompletedBatches] = useState<Batch[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [expandedHistory, setExpandedHistory] = useState<Set<string>>(new Set());
 
   async function checkBatchAssignStatus(batch: Batch, hdrs: Record<string, string>) {
     const firstOrder = batch.orders[0];
@@ -588,53 +589,71 @@ export default function BatchesPage() {
 
         {completedBatches.length > 0 && (
           <div className="space-y-2">
-            {completedBatches.map((batch) => (
-              <div
-                key={batch.id}
-                className="bg-white border border-slate-200 rounded-xl px-5 py-4 flex items-center gap-4 shadow-sm"
-              >
-                <div className="w-8 h-8 bg-emerald-50 rounded-lg flex items-center justify-center flex-shrink-0">
-                  <CheckCheck className="w-4 h-4 text-emerald-600" />
+            {completedBatches.map((batch) => {
+              const isExpanded = expandedHistory.has(batch.id);
+              return (
+                <div key={batch.id} className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+                  <div className="px-5 py-4 flex items-center gap-4">
+                    <div className="w-8 h-8 bg-emerald-50 rounded-lg flex items-center justify-center flex-shrink-0">
+                      <CheckCheck className="w-4 h-4 text-emerald-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2.5 flex-wrap mb-1">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-slate-500 tracking-wide">
+                          {batch.type?.toUpperCase()}
+                        </span>
+                        <span className="text-sm font-bold text-slate-800">{batch.orderCount} orders</span>
+                        <span className="text-sm text-slate-400">· {batch.skuList.length} SKU{batch.skuList.length !== 1 ? "s" : ""}</span>
+                        <span className="text-sm text-slate-400">{batch.warehouseCode}</span>
+                      </div>
+                      <div className="flex flex-wrap gap-x-3 gap-y-0.5 mb-1">
+                        {batch.skuList.map(({ sku, qty }) => (
+                          <span key={sku} className="font-mono text-xs text-slate-600">
+                            {sku} ×{qty}
+                          </span>
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-slate-400">
+                        <span>Created: {new Date(batch.createdAt).toLocaleString()}</span>
+                        {batch.completedAt && (
+                          <span className="text-emerald-600 font-medium">
+                            ✓ Closed: {new Date(batch.completedAt).toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button
+                        onClick={() => router.push(`/batch-summary-print?id=${encodeURIComponent(batch.id)}`)}
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+                        title="Print Summary Ticket"
+                      >
+                        <Printer className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => setExpandedHistory((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(batch.id)) next.delete(batch.id); else next.add(batch.id);
+                          return next;
+                        })}
+                        className="text-xs text-slate-400 hover:text-slate-600 flex items-center gap-1 transition-colors font-medium"
+                      >
+                        {isExpanded ? <><ChevronUp className="w-3.5 h-3.5" /> Orders</> : <><ChevronDown className="w-3.5 h-3.5" /> Orders</>}
+                      </button>
+                    </div>
+                  </div>
+                  {isExpanded && (
+                    <div className="px-5 pb-4 pt-0 border-t border-slate-100 flex flex-wrap gap-1.5">
+                      {batch.orders.map((o) => (
+                        <span key={o.orderCode} className="font-mono text-xs bg-slate-50 border border-slate-200 px-2 py-1 rounded text-slate-700">
+                          {o.orderNo ?? o.orderCode}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2.5 flex-wrap mb-1">
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-slate-500 tracking-wide">
-                      {batch.type?.toUpperCase()}
-                    </span>
-                    <span className="text-sm font-bold text-slate-800">{batch.orderCount} orders</span>
-                    <span className="text-sm text-slate-400">· {batch.skuList.length} SKU{batch.skuList.length !== 1 ? "s" : ""}</span>
-                    <span className="text-sm text-slate-400">{batch.warehouseCode}</span>
-                  </div>
-                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 mb-1">
-                    {batch.skuList.map(({ sku, qty }) => (
-                      <span key={sku} className="font-mono text-xs text-slate-600">
-                        {sku} ×{qty}
-                      </span>
-                    ))}
-                  </div>
-                  <div className="flex items-center gap-3 text-xs text-slate-400">
-                    <span>Created: {new Date(batch.createdAt).toLocaleString()}</span>
-                    {batch.completedAt && (
-                      <span className="text-emerald-600 font-medium">
-                        ✓ Closed: {new Date(batch.completedAt).toLocaleString()}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <details className="flex-shrink-0">
-                  <summary className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer select-none font-medium">
-                    Orders
-                  </summary>
-                  <div className="absolute mt-1 bg-white border border-slate-200 rounded-xl shadow-lg p-3 z-10 max-w-xs flex flex-wrap gap-1.5 max-h-40 overflow-y-auto">
-                    {batch.orders.map((o) => (
-                      <span key={o.orderCode} className="font-mono text-xs bg-slate-50 border border-slate-200 px-2 py-0.5 rounded text-slate-700">
-                        {o.orderNo ?? o.orderCode}
-                      </span>
-                    ))}
-                  </div>
-                </details>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
