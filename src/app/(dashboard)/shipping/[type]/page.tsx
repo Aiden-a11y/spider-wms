@@ -811,11 +811,16 @@ export default function ShippingTypePage() {
     setBatchCandidates([]);
     setCreatedBatchIds({});
 
-    const candidates = orders.map((o) => ({
-      orderCode: String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? ""),
-      customerCode: String(o.customerCode ?? ""),
-      orderNo: String(o.shippingOrderNo ?? o.orderNo ?? o.orderNumber ?? "") || undefined,
-    })).filter((c) => c.orderCode);
+    const candidates = orders
+      .filter((o) => {
+        const st = String(o.status ?? o.orderStatus ?? "");
+        return st === "Packing Request";
+      })
+      .map((o) => ({
+        orderCode: String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? ""),
+        customerCode: String(o.customerCode ?? ""),
+        orderNo: String(o.shippingOrderNo ?? o.orderNo ?? o.orderNumber ?? "") || undefined,
+      })).filter((c) => c.orderCode);
 
     setDetectProgress({ done: 0, total: candidates.length });
 
