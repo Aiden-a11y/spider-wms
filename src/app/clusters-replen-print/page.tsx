@@ -2,20 +2,9 @@
 
 import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import QRCode from "qrcode";
 import type { B2CCluster, B2CClusterBin } from "@/lib/b2c-cluster";
 
-function useQR(text: string): string {
-  const [url, setUrl] = useState("");
-  useEffect(() => {
-    if (!text) return;
-    QRCode.toDataURL(text, { width: 140, margin: 1, color: { dark: "#000", light: "#fff" } })
-      .then(setUrl).catch(() => {});
-  }, [text]);
-  return url;
-}
-
-/* ── types ── */
+/* ── Aggregate replenishment items by location ── */
 interface ReplenEntry {
   sku: string;
   name: string;
@@ -24,17 +13,14 @@ interface ReplenEntry {
   expireDate?: string;
   bins: number[];
 }
-
 interface LocationLabel {
   locationCode: string;
   entries: ReplenEntry[];
   totalQty: number;
 }
 
-/* ── Aggregate by location → unique SKU ── */
 function buildLabels(cluster: B2CCluster): LocationLabel[] {
   const map = new Map<string, Map<string, ReplenEntry>>();
-
   cluster.bins.forEach((bin: B2CClusterBin) => {
     if (!bin.needsReplenishment || !bin.replenishmentItems?.length) return;
     bin.replenishmentItems.forEach((ri) => {
@@ -55,200 +41,235 @@ function buildLabels(cluster: B2CCluster): LocationLabel[] {
     const entries = Array.from(skuMap.values()).sort((a, b) => a.sku.localeCompare(b.sku));
     labels.push({ locationCode, entries, totalQty: entries.reduce((s, e) => s + e.qty, 0) });
   });
-
   return labels.sort((a, b) => a.locationCode.localeCompare(b.locationCode, undefined, { numeric: true }));
 }
 
-/* ── Print CSS — B&W packing-list style ── */
-const CSS = `
-  @media print {
-    @page { size: 4in 6in; margin: 0.15in; }
-    .no-print { display: none !important; }
-    .ticket { page-break-after: always; }
-    .ticket:last-child { page-break-after: avoid; }
-    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; font-family: Arial, Helvetica, sans-serif; background: #e5e7eb; }
-  .ticket {
-    width: 3.7in; min-height: 5.7in; background: #fff;
-    padding: 0.14in 0.16in; margin: 0.1in auto;
-    border: 1.5px solid #000; display: flex; flex-direction: column;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
-  }
-
-  /* ── Header ── */
-  .hdr {
-    display: flex; justify-content: space-between; align-items: flex-start;
-    border-bottom: 2px solid #000; padding-bottom: 0.07in; margin-bottom: 0.07in;
-  }
-  .hdr-left { flex: 1; min-width: 0; }
-  .hdr-title {
-    font-size: 9pt; font-weight: 900; letter-spacing: 0.5px;
-    text-transform: uppercase; margin: 0 0 2px;
-  }
-  .hdr-meta { font-size: 6pt; color: #444; line-height: 1.6; }
-  .hdr-meta b { color: #000; }
-  .qr-box { width: 0.85in; height: 0.85in; flex-shrink: 0; margin-left: 0.08in; }
-  .qr-box img { width: 100%; height: 100%; display: block; }
-  .qr-placeholder { width: 100%; height: 100%; border: 1px solid #ccc; }
-
-  /* ── Location block ── */
-  .loc-block {
-    border: 2px solid #000; padding: 0.05in 0.08in; margin-bottom: 0.07in;
-  }
-  .loc-label {
-    font-size: 5.5pt; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.8px; color: #555; margin-bottom: 1px;
-  }
-  .loc-value {
-    font-size: 18pt; font-weight: 900; font-family: 'Courier New', monospace;
-    letter-spacing: 2px; line-height: 1.1; word-break: break-all;
-  }
-
-  /* ── Items table ── */
-  .items-table { width: 100%; border-collapse: collapse; font-size: 6.5pt; margin-bottom: 0.06in; }
-  .items-table th {
-    background: #000; color: #fff; font-weight: 700;
-    padding: 3px 5px; text-align: left; border: 1px solid #000;
-    font-size: 6pt; text-transform: uppercase; letter-spacing: 0.4px;
-  }
-  .items-table th.col-qty { text-align: right; }
-  .items-table td {
-    padding: 4px 5px; border: 1px solid #888; vertical-align: top;
-  }
-  .items-table tr:nth-child(even) td { background: #f5f5f5; }
-  .col-no { width: 0.2in; text-align: center; font-weight: 700; color: #444; }
-  .col-item { }
-  .col-qty-td { text-align: right; font-weight: 900; font-size: 9pt; white-space: nowrap; width: 0.5in; }
-  .item-sku { font-family: 'Courier New', monospace; font-weight: 700; font-size: 7pt; }
-  .item-name { font-size: 6pt; color: #333; margin-top: 1px; }
-  .item-lot { font-family: 'Courier New', monospace; font-size: 5.5pt; color: #555; margin-top: 1px; }
-  .item-bins { font-size: 5.5pt; color: #555; margin-top: 2px; }
-
-  /* ── Totals row ── */
-  .totals-row td {
-    background: #000 !important; color: #fff;
-    font-weight: 700; font-size: 7pt; text-align: right;
-    padding: 3px 5px; border: 1px solid #000;
-  }
-  .totals-row .label-cell { text-align: right; font-size: 6pt; text-transform: uppercase; letter-spacing: 0.4px; }
-
-  /* ── Footer ── */
-  .footer {
-    margin-top: auto; border-top: 1.5px solid #000; padding-top: 0.06in;
-  }
-  .sig-row {
-    display: flex; gap: 0.1in; margin-bottom: 0.05in;
-  }
-  .sig-box { flex: 1; border-bottom: 1px solid #000; padding-bottom: 2px; }
-  .sig-label { font-size: 5.5pt; color: #555; text-transform: uppercase; letter-spacing: 0.5px; }
-  .generated { font-size: 5pt; color: #888; text-align: right; margin-top: 3px; }
-`;
-
-/* ── Single ticket ── */
-function ReplenTicket({
-  label, cluster, idx, total,
-}: {
+/* ── Single 4×6 ticket ── */
+function ReplenTicket({ label, cluster, idx, total }: {
   label: LocationLabel; cluster: B2CCluster; idx: number; total: number;
 }) {
   const allBins = Array.from(new Set(label.entries.flatMap((e) => e.bins))).sort((a, b) => a - b);
-  const dateStr = new Date(cluster.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-  const now = new Date().toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
-
-  // QR = order codes for bins on this label
-  const orderCodes = allBins
-    .map((bn) => cluster.bins.find((b) => b.binNo === bn))
-    .filter(Boolean)
-    .map((b) => b!.orderCode || b!.orderNo)
-    .filter(Boolean);
-  const qrText = orderCodes.join("\n");
-  const qrUrl = useQR(qrText);
-
-  const binNos = allBins.join(", ");
+  const dateStr = new Date(cluster.createdAt).toLocaleDateString("en-US", {
+    month: "short", day: "numeric", year: "numeric",
+  });
 
   return (
     <div className="ticket">
-      {/* Header */}
-      <div className="hdr">
-        <div className="hdr-left">
-          <div className="hdr-title">Replenishment Order</div>
-          <div className="hdr-meta">
-            <div><b>Cluster:</b> {cluster.id.replace("cluster_", "")}</div>
-            <div><b>Date:</b> {dateStr}</div>
-            <div><b>Total SKU:</b> {label.entries.length} &nbsp; <b>Total Qty:</b> {label.totalQty.toLocaleString()}</div>
-            <div><b>Bins:</b> {binNos}</div>
-          </div>
+      {/* ── Top strip: title + meta ── */}
+      <div className="top-strip">
+        <div className="top-left">
+          <div className="ticket-title">REPLENISHMENT</div>
+          <div className="ticket-sub">Move to Shelf · Pick for Cluster</div>
         </div>
-        <div className="qr-box">
-          {qrUrl ? <img src={qrUrl} alt={qrText} /> : <div className="qr-placeholder" />}
+        <div className="top-right">
+          <div className="page-num">{idx + 1} / {total}</div>
+          <div className="meta-line">{dateStr}</div>
+          <div className="meta-line">{cluster.warehouseCode}</div>
         </div>
       </div>
 
-      {/* Page x/y */}
-      <div style={{ fontSize: "5.5pt", color: "#555", textAlign: "right", marginBottom: "0.05in" }}>
-        {idx + 1} / {total}
-      </div>
-
-      {/* From Location */}
+      {/* ── From location ── */}
       <div className="loc-block">
-        <div className="loc-label">Pick From Location</div>
+        <div className="loc-label">FROM LOCATION</div>
         <div className="loc-value">{label.locationCode}</div>
       </div>
 
-      {/* Items table */}
+      {/* ── Bins involved ── */}
+      <div className="bins-row">
+        <span className="bins-label">BINS:</span>
+        <div className="bins-chips">
+          {allBins.map((bn) => (
+            <span key={bn} className="bin-chip">{bn}</span>
+          ))}
+        </div>
+      </div>
+
+      <div className="divider" />
+
+      {/* ── Items table ── */}
       <table className="items-table">
         <thead>
           <tr>
-            <th className="col-no">No.</th>
-            <th className="col-item">Item</th>
-            <th className="col-qty">Qty</th>
+            <th className="th th-no">#</th>
+            <th className="th th-sku">SKU</th>
+            <th className="th th-name">PRODUCT</th>
+            <th className="th th-qty">QTY</th>
           </tr>
         </thead>
         <tbody>
           {label.entries.map((entry, i) => (
-            <tr key={entry.sku}>
-              <td className="col-no">{i + 1}</td>
-              <td className="col-item">
-                <div className="item-sku">{entry.sku}</div>
-                <div className="item-name">{entry.name || "—"}</div>
+            <tr key={entry.sku} className={i % 2 === 0 ? "tr-even" : "tr-odd"}>
+              <td className="td td-no">{i + 1}</td>
+              <td className="td td-sku">{entry.sku}</td>
+              <td className="td td-name">
+                <div className="name-text">{entry.name || "—"}</div>
                 {(entry.lotNo || entry.expireDate) && (
-                  <div className="item-lot">
+                  <div className="lot-text">
                     {entry.lotNo ? `Lot: ${entry.lotNo}` : ""}
                     {entry.lotNo && entry.expireDate ? " · " : ""}
                     {entry.expireDate ? `Exp: ${entry.expireDate}` : ""}
                   </div>
                 )}
-                <div className="item-bins">Bins: {entry.bins.sort((a, b) => a - b).join(", ")}</div>
               </td>
-              <td className="col-qty-td">{entry.qty} EA</td>
+              <td className="td td-qty">{entry.qty}</td>
             </tr>
           ))}
-          <tr className="totals-row">
-            <td colSpan={2} className="label-cell">TOTAL</td>
-            <td style={{ textAlign: "right" }}>{label.totalQty} EA</td>
-          </tr>
         </tbody>
+        <tfoot>
+          <tr className="tr-total">
+            <td colSpan={3} className="td-total-label">TOTAL QTY</td>
+            <td className="td-total-val">{label.totalQty}</td>
+          </tr>
+        </tfoot>
       </table>
 
-      {/* Footer */}
+      {/* ── Footer: signature lines ── */}
       <div className="footer">
         <div className="sig-row">
-          <div className="sig-box"><div className="sig-label">Picker</div></div>
-          <div className="sig-box"><div className="sig-label">Checked</div></div>
-          <div className="sig-box"><div className="sig-label">Date / Time</div></div>
+          <div className="sig-box"><div className="sig-label">Picker</div><div className="sig-line" /></div>
+          <div className="sig-box"><div className="sig-label">Checked</div><div className="sig-line" /></div>
+          <div className="sig-box"><div className="sig-label">Time</div><div className="sig-line" /></div>
         </div>
-        <div className="generated">Generated: {now}</div>
       </div>
     </div>
   );
 }
 
-/* ── Main content ── */
+/* ── Print CSS ── */
+const CSS = `
+  @page { size: 4in 6in; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #d1d5db; font-family: Arial, Helvetica, sans-serif; }
+  @media print {
+    body { background: white; }
+    .no-print { display: none !important; }
+    .ticket { page-break-after: always; box-shadow: none !important; margin: 0 !important; border: none !important; }
+    .ticket:last-child { page-break-after: avoid; }
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+
+  /* ── Ticket wrapper ── */
+  .ticket {
+    width: 4in; height: 6in;
+    background: #fff;
+    padding: 0.18in 0.2in;
+    margin: 0.15in auto;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+    display: flex; flex-direction: column; gap: 0.06in;
+    overflow: hidden;
+  }
+
+  /* ── Top strip ── */
+  .top-strip {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    border-bottom: 2.5px solid #000; padding-bottom: 0.08in;
+  }
+  .ticket-title {
+    font-size: 13pt; font-weight: 900; letter-spacing: 1px; color: #000;
+  }
+  .ticket-sub { font-size: 7pt; color: #555; margin-top: 2px; letter-spacing: 0.3px; }
+  .top-right { text-align: right; }
+  .page-num { font-size: 8pt; font-weight: 700; color: #000; }
+  .meta-line { font-size: 6.5pt; color: #555; line-height: 1.5; }
+
+  /* ── Location ── */
+  .loc-block {
+    border: 2.5px solid #000;
+    padding: 0.04in 0.1in 0.06in;
+    background: #000;
+  }
+  .loc-label {
+    font-size: 6pt; font-weight: 700; letter-spacing: 1.5px;
+    color: #aaa; text-transform: uppercase; margin-bottom: 1px;
+  }
+  .loc-value {
+    font-size: 22pt; font-weight: 900;
+    font-family: 'Courier New', monospace;
+    letter-spacing: 2px; color: #fff; line-height: 1.1;
+    word-break: break-all;
+  }
+
+  /* ── Bins ── */
+  .bins-row {
+    display: flex; align-items: center; gap: 0.08in;
+  }
+  .bins-label {
+    font-size: 7pt; font-weight: 700; color: #333; white-space: nowrap;
+  }
+  .bins-chips { display: flex; flex-wrap: wrap; gap: 3px; }
+  .bin-chip {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 18px; height: 18px; padding: 0 4px;
+    border: 1.5px solid #000; border-radius: 3px;
+    font-size: 8pt; font-weight: 900; color: #000;
+  }
+
+  .divider { border-top: 1px solid #ccc; }
+
+  /* ── Items table ── */
+  .items-table {
+    width: 100%; border-collapse: collapse; flex: 1;
+  }
+  .th {
+    background: #111; color: #fff;
+    font-size: 7pt; font-weight: 700;
+    padding: 4px 5px; text-align: left;
+    border: 1px solid #000; letter-spacing: 0.5px;
+  }
+  .th-no  { width: 0.18in; text-align: center; }
+  .th-sku { width: 1.05in; }
+  .th-qty { width: 0.38in; text-align: right; }
+
+  .tr-even td { background: #fff; }
+  .tr-odd  td { background: #f3f4f6; }
+  .td {
+    padding: 5px 5px; border: 1px solid #ccc;
+    vertical-align: middle;
+  }
+  .td-no  { text-align: center; font-size: 8pt; font-weight: 700; color: #555; }
+  .td-sku {
+    font-family: 'Courier New', monospace;
+    font-size: 8pt; font-weight: 900; color: #000;
+    word-break: break-all;
+  }
+  .td-name { }
+  .name-text { font-size: 7.5pt; color: #111; line-height: 1.3; }
+  .lot-text  { font-size: 6pt; color: #666; margin-top: 1px; font-family: 'Courier New', monospace; }
+  .td-qty {
+    text-align: right;
+    font-size: 13pt; font-weight: 900; color: #000;
+    white-space: nowrap;
+  }
+
+  /* ── Total row ── */
+  .tr-total .td-total-label {
+    background: #111 !important; color: #fff;
+    font-size: 7pt; font-weight: 700; text-align: right;
+    padding: 4px 6px; border: 1px solid #000;
+    letter-spacing: 0.5px;
+  }
+  .tr-total .td-total-val {
+    background: #111 !important; color: #fff;
+    font-size: 14pt; font-weight: 900; text-align: right;
+    padding: 4px 5px; border: 1px solid #000;
+  }
+
+  /* ── Footer ── */
+  .footer {
+    margin-top: auto;
+    border-top: 1.5px solid #000;
+    padding-top: 0.07in;
+  }
+  .sig-row { display: flex; gap: 0.1in; }
+  .sig-box { flex: 1; }
+  .sig-label { font-size: 6pt; color: #555; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
+  .sig-line  { border-bottom: 1px solid #000; height: 14px; }
+`;
+
+/* ── Main ── */
 function PrintContent() {
   const params = useSearchParams();
   const id = params.get("id") ?? "";
-
   const [cluster, setCluster] = useState<B2CCluster | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -263,7 +284,7 @@ function PrintContent() {
   }, [id]);
 
   useEffect(() => {
-    if (cluster) setTimeout(() => window.print(), 800);
+    if (cluster) setTimeout(() => window.print(), 600);
   }, [cluster]);
 
   if (loading) return <div style={{ padding: 32, fontFamily: "sans-serif" }}>Loading…</div>;
@@ -285,7 +306,7 @@ function PrintContent() {
         position: "sticky", top: 0, zIndex: 10,
       }}>
         <span style={{ color: "#fff", fontFamily: "sans-serif", fontSize: 14, fontWeight: 600 }}>
-          Replenishment — {labels.length} location{labels.length > 1 ? "s" : ""}
+          Replenishment — {labels.length} location{labels.length !== 1 ? "s" : ""}
         </span>
         <button onClick={() => window.print()} style={{
           background: "#1d4ed8", color: "#fff", border: "none",
@@ -297,9 +318,15 @@ function PrintContent() {
         }}>← Back</button>
       </div>
 
-      <div style={{ padding: "0.1in 0" }}>
+      <div style={{ paddingBottom: "0.2in" }}>
         {labels.map((label, i) => (
-          <ReplenTicket key={label.locationCode} label={label} cluster={cluster} idx={i} total={labels.length} />
+          <ReplenTicket
+            key={label.locationCode}
+            label={label}
+            cluster={cluster}
+            idx={i}
+            total={labels.length}
+          />
         ))}
       </div>
     </>
