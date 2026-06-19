@@ -67,6 +67,7 @@ const nav: NavItem[] = [
       { href: "/shipping/b2e", label: "B2E Shipping", icon: Globe },
       { href: "/packing", label: "Packing", icon: PackageCheck },
       { href: "/clusters", label: "Cluster Pick", icon: ShoppingCart },
+      { href: "/clusters/history", label: "Cluster History", icon: History },
     ],
   },
   {
@@ -113,7 +114,7 @@ export default function Sidebar() {
     if (pathname === "/locations" || pathname.startsWith("/locations/")) s.add("Locations");
     if (pathname.startsWith("/shipping")) s.add("Shipping");
     if (pathname.startsWith("/packing")) s.add("Shipping");
-    if (pathname.startsWith("/clusters")) s.add("Shipping");
+    if (pathname === "/clusters" || pathname.startsWith("/clusters/")) s.add("Shipping");
     if (pathname === "/billing" || pathname.startsWith("/billing/")) s.add("Billing");
     return s;
   });

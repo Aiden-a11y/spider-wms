@@ -732,6 +732,20 @@ export default function ClustersPage() {
     setDeletingId(null);
   }
 
+  // ── Complete cluster ──────────────────────────────────────────────────────
+  const [completingId, setCompletingId] = useState<string | null>(null);
+
+  async function completeCluster(id: string) {
+    setCompletingId(id);
+    await fetch("/api/cluster", {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ id, status: "completed", completedAt: new Date().toISOString() }),
+    });
+    setCompletingId(null);
+    await loadClusters();
+  }
+
   // ── Shelf location picker ─────────────────────────────────────────────────
   async function openSkuPicker(sku: string, skuName: string, rows: ReplenRow[], custCode: string) {
     setPickerSku(sku);
@@ -1017,16 +1031,16 @@ export default function ClustersPage() {
       </div>
 
       {/* ── Existing clusters ── */}
-      {clusters.length > 0 && (
+      {clusters.filter((c) => c.status !== "completed").length > 0 && (
         <div className="space-y-3">
           <h2 className="text-sm font-bold text-slate-500 uppercase tracking-wide">Active Clusters</h2>
-          {clusters.map((cluster) => {
+          {clusters.filter((c) => c.status !== "completed").map((cluster) => {
             const isExpanded = expandedCluster === cluster.id;
             const isDeleting = deletingId === cluster.id;
             return (
-              <div key={cluster.id} className={`bg-white border rounded-2xl shadow-sm overflow-hidden ${cluster.status === "completed" ? "border-emerald-200" : "border-slate-200"}`}>
+              <div key={cluster.id} className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
                 {/* Card header */}
-                <div className={`px-5 py-4 flex items-start gap-4 ${cluster.status === "completed" ? "bg-emerald-50/50" : ""}`}>
+                <div className="px-5 py-4 flex items-start gap-4">
                   {/* Bin color grid */}
                   <div className="grid grid-cols-5 gap-0.5 flex-shrink-0">
                     {Array.from({ length: Math.min(cluster.bins.length, 25) }).map((_, i) => (
@@ -1048,16 +1062,8 @@ export default function ClustersPage() {
                           Replenishment needed: Bin {cluster.replenishmentBins.join(", ")}
                         </span>
                       )}
-                      {cluster.status === "completed" && (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-700">
-                          <CheckCircle2 className="w-3 h-3" /> Completed
-                        </span>
-                      )}
                     </div>
                     <p className="text-xs text-slate-400">Created: {new Date(cluster.createdAt).toLocaleString()}</p>
-                    {cluster.completedAt && (
-                      <p className="text-xs text-emerald-600">Closed: {new Date(cluster.completedAt).toLocaleString()}</p>
-                    )}
                   </div>
 
                   <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -1074,6 +1080,16 @@ export default function ClustersPage() {
                       className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50"
                     >
                       {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                    </button>
+                    <button
+                      onClick={() => completeCluster(cluster.id)}
+                      disabled={completingId === cluster.id}
+                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-semibold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                      title="Mark cluster as completed"
+                    >
+                      {completingId === cluster.id
+                        ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Completing…</>
+                        : <><CheckCircle2 className="w-3.5 h-3.5" /> Complete</>}
                     </button>
                     <button
                       onClick={() => setExpandedCluster(isExpanded ? null : cluster.id)}
@@ -1498,6 +1514,7 @@ export default function ClustersPage() {
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wide">Consignee</th>
                 <th className="px-4 py-3 text-right text-xs font-semibold text-slate-400 uppercase tracking-wide w-16">Qty</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wide w-28">Date</th>
+                <th className="px-4 py-3 text-center text-xs font-semibold text-slate-400 uppercase tracking-wide w-24">Status</th>
                 <th className="px-4 py-3 text-center text-xs font-semibold text-blue-500 uppercase tracking-wide w-20">Cluster</th>
               </tr>
               <tr className="bg-white border-b border-slate-100">
@@ -1529,17 +1546,18 @@ export default function ClustersPage() {
                     className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs text-slate-700 placeholder:text-slate-300 focus:outline-none focus:ring-1 focus:ring-blue-400 font-normal" />
                 </th>
                 <th />
+                <th />
               </tr>
             </thead>
             <tbody>
               {loadingOrders && (
-                <tr><td colSpan={7} className="px-4 py-12 text-center text-slate-400">
+                <tr><td colSpan={8} className="px-4 py-12 text-center text-slate-400">
                   <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />
                   Loading orders…
                 </td></tr>
               )}
               {!loadingOrders && filteredOrders.length === 0 && (
-                <tr><td colSpan={7} className="px-4 py-12 text-center text-slate-400 text-sm">No Out-Bound Request orders found</td></tr>
+                <tr><td colSpan={8} className="px-4 py-12 text-center text-slate-400 text-sm">No Out-Bound Request orders found</td></tr>
               )}
               {filteredOrders.map((o, i) => {
                 const code = orderCodeOf(o);
@@ -1569,6 +1587,17 @@ export default function ClustersPage() {
                     <td className="px-4 py-2.5 text-slate-600 text-xs">{String(o.consigneeName ?? "")}</td>
                     <td className="px-4 py-2.5 text-right font-semibold text-slate-700">{String(o.totalQty ?? o.qty ?? "")}</td>
                     <td className="px-4 py-2.5 text-slate-400 text-xs">{String(o.orderDate ?? "")}</td>
+                    <td className="px-4 py-2.5 text-center" onClick={(e) => e.stopPropagation()}>
+                      {(() => {
+                        const st = String(o.status ?? o.orderStatus ?? "");
+                        if (!st) return null;
+                        return (
+                          <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700 whitespace-nowrap">
+                            {st}
+                          </span>
+                        );
+                      })()}
+                    </td>
                     <td className="px-4 py-2.5 text-center" onClick={(e) => e.stopPropagation()}>
                       {checkResults[code] === "checking" && <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400 mx-auto" />}
                       {checkResults[code] === "yes" && (
