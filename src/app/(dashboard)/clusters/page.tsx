@@ -291,7 +291,7 @@ export default function ClustersPage() {
     setCheckResults({});
     setReplenSkus([]);
 
-    const ordersToCheck = filteredOrders.slice(0, 200);
+    const ordersToCheck = filteredOrders;
     setCheckProgress({ done: 0, total: ordersToCheck.length });
 
     const replenMap: Record<string, { name: string; orderCodes: Set<string>; location: string }> = {};
@@ -1537,7 +1537,7 @@ export default function ClustersPage() {
               {!loadingOrders && filteredOrders.length === 0 && (
                 <tr><td colSpan={7} className="px-4 py-12 text-center text-slate-400 text-sm">No Out-Bound Request orders found</td></tr>
               )}
-              {filteredOrders.slice(0, 200).map((o, i) => {
+              {filteredOrders.map((o, i) => {
                 const code = orderCodeOf(o);
                 const isSelected = !!selectedCodes[code];
                 const isOver = !isSelected && selectedList.length >= MAX_BINS;
@@ -1580,9 +1580,6 @@ export default function ClustersPage() {
             </tbody>
           </table>
         </div>
-        {filteredOrders.length > 200 && (
-          <p className="text-xs text-slate-400 mt-2 text-right">Showing first 200 of {filteredOrders.length} orders</p>
-        )}
 
         {/* Replenishment SKU summary */}
         {replenSkus.length > 0 && (
