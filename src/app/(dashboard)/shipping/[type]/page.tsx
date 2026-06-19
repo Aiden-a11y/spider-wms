@@ -814,7 +814,7 @@ export default function ShippingTypePage() {
     const candidates = orders
       .filter((o) => {
         const st = String(o.status ?? o.orderStatus ?? "");
-        return st === "Packing Request";
+        return st === "CA" || st === "Packing Request";
       })
       .map((o) => ({
         orderCode: String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? ""),
