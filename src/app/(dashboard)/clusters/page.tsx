@@ -105,7 +105,9 @@ export default function ClustersPage() {
   const isShelfLoc = (s: Record<string, unknown>) => {
     const occupancy = getLocationOccupancyInfo(occupancyMap, s);
     if (occupancy) return classifyOccupancy(occupancy) === "shelf";
-    // Fallback for locations not yet in occupancyMap: check zoneNm text
+    // OccupancyMap is loaded — location not found means non-shelf (avoid false positives from zone name text)
+    if (occupancyMap.size > 0) return false;
+    // OccupancyMap not yet loaded: fall back to zone name text
     return String(s.zoneNm ?? s.zoneName ?? s.zone ?? "").toLowerCase().includes("shelf");
   };
 
@@ -588,6 +590,7 @@ export default function ClustersPage() {
         }
 
         // Mixed case: some shelf assignments exist but other SKUs in this order are still unassigned (REMAIN)
+        // Try to auto-assign from shelf stock first; only flag replenishment if no shelf stock available.
         if (shelfAssignments.length > 0 && rawItems.length > 0) {
           const assignedSkuSet = new Set(shelfAssignments.map((a) => String(a.productSku ?? a.sku ?? "")));
           for (const item of rawItems) {
@@ -596,28 +599,59 @@ export default function ClustersPage() {
             const unassignedQty = Number(item.remainQty ?? item.unassignedQty ?? item.remainingQty ?? 0);
             if (unassignedQty <= 0) continue;
 
-            needsReplenishment = true;
+            setCreateStep(`[${binNo}/${selected.length}] ${code} — checking shelf stock for unassigned ${sku}…`);
             const sRes = await fetch(
               `/api/wms/shipping/available-stock/${encodeURIComponent(warehouseCode)}/${encodeURIComponent(custCode)}?productSku=${encodeURIComponent(sku)}`,
               { headers }
             );
             const sJson = await sRes.json().catch(() => ({})) as Record<string, unknown>;
             const allStock = (Array.isArray(sJson?.data) ? sJson.data : []) as Record<string, unknown>[];
-            const best = allStock
-              .filter((s) => Number(s.availQty ?? 0) > 0)
-              .sort((a, b) => (String(a.expireDate ?? "") || "9").localeCompare(String(b.expireDate ?? "") || "9"))[0];
 
-            replenishmentItems.push({
-              sku,
-              name: String(item.productName ?? item.skuName ?? item.itemName ?? ""),
-              qty: unassignedQty,
-              locationCode: best ? readableLocation(best) : "",
-              locationId: best ? String(best.inKey ?? best.locationId ?? "") : "",
-              lotNo: best ? String(best.lotNo ?? "") : "",
-              expireDate: best ? String(best.expireDate ?? "") : "",
-              itemCondition: best ? String(best.itemCondition ?? "GOOD") : "",
-              shippingItemId: Number(item.shippingItemId ?? 0) || undefined,
-            });
+            // Prefer shelf stock → auto-assign (same approach as no-shelf case)
+            const shelfStock = allStock
+              .filter((s) => isShelfLoc(s) && Number(s.availQty ?? 0) > 0)
+              .sort((a, b) => (String(a.expireDate ?? "") || "9").localeCompare(String(b.expireDate ?? "") || "9"));
+
+            const best = shelfStock[0];
+            if (best) {
+              setCreateStep(`[${binNo}/${selected.length}] ${code} — auto-assigning ${sku} from ${readableLocation(best)}…`);
+              const assignBody = {
+                shippingOrderCode: code,
+                shippingItemId: item.shippingItemId,
+                customerCode: custCode,
+                warehouseCode,
+                warehouseCd: best.location,
+                productSku: sku,
+                lotNo: String(best.lotNo ?? ""),
+                expireDate: String(best.expireDate ?? ""),
+                itemCondition: String(best.itemCondition ?? "GOOD"),
+                qty: unassignedQty,
+              };
+              await fetch("/api/wms/shipping/assign", { method: "POST", headers, body: JSON.stringify(assignBody) });
+              shelfAssignments.push({
+                ...item, ...best,
+                locationCode: readableLocation(best),
+                productSku: sku,
+              });
+            } else {
+              // No shelf stock available → true replenishment needed
+              needsReplenishment = true;
+              const anyBest = allStock
+                .filter((s) => Number(s.availQty ?? 0) > 0)
+                .sort((a, b) => (String(a.expireDate ?? "") || "9").localeCompare(String(b.expireDate ?? "") || "9"))[0];
+
+              replenishmentItems.push({
+                sku,
+                name: String(item.productName ?? item.skuName ?? item.itemName ?? ""),
+                qty: unassignedQty,
+                locationCode: anyBest ? readableLocation(anyBest) : "",
+                locationId: anyBest ? String(anyBest.inKey ?? anyBest.locationId ?? "") : "",
+                lotNo: anyBest ? String(anyBest.lotNo ?? "") : "",
+                expireDate: anyBest ? String(anyBest.expireDate ?? "") : "",
+                itemCondition: anyBest ? String(anyBest.itemCondition ?? "GOOD") : "",
+                shippingItemId: Number(item.shippingItemId ?? 0) || undefined,
+              });
+            }
             await sleep(200);
           }
         }
@@ -737,6 +771,31 @@ export default function ClustersPage() {
 
   async function completeCluster(id: string) {
     setCompletingId(id);
+    const cluster = clusters.find((c) => c.id === id);
+    if (cluster) {
+      // Group bins by customerCode to batch status-change calls
+      const grouped = new Map<string, string[]>();
+      for (const bin of cluster.bins) {
+        if (!grouped.has(bin.customerCode)) grouped.set(bin.customerCode, []);
+        grouped.get(bin.customerCode)!.push(bin.orderCode);
+      }
+      await Promise.all(
+        Array.from(grouped.entries()).map(([customerCode, orderCodes]) =>
+          fetch("/api/wms/shipping/status-change", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              warehouseCode: cluster.warehouseCode,
+              customerCode,
+              orderCodes,
+              newStatus: "CA",
+              completeDate: "",
+              cancelComment: "",
+            }),
+          }).catch(() => {})
+        )
+      );
+    }
     await fetch("/api/cluster", {
       method: "PATCH",
       headers,
@@ -878,6 +937,21 @@ export default function ClustersPage() {
         const sku = ri.sku;
         const qty = ri.qty;
         if (!sku || qty <= 0) continue;
+
+        // Skip if already assigned (manually via Assign button, or by a previous Re-assign run)
+        const alreadyInItems = bin.items.some(
+          (it) => (ri.shippingItemId && it.shippingItemId === ri.shippingItemId) || it.sku === sku
+        );
+        if (alreadyInItems) {
+          const existing = bin.items.find(
+            (it) => (ri.shippingItemId && it.shippingItemId === ri.shippingItemId) || it.sku === sku
+          )!;
+          newItems.push(existing);
+          continue;
+        }
+
+        // Skip if already added in this run (duplicate replenishmentItems entries)
+        if (newItems.some((it) => it.sku === sku)) continue;
 
         setReAssignStatus((p) => ({ ...p, [cluster.id]: `Bin ${bin.binNo} — checking shelf stock for ${sku}…` }));
         const stockRes = await fetch(

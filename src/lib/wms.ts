@@ -52,6 +52,9 @@ export function locationLookupKeys(row: LocationLike): string[] {
     row.remark,
     row.barcode,
     row.locationBarcode,
+    row.inKey,
+    row.warehouseLocationCd,
+    row.warehouseCd,
   ];
 
   for (const raw of rawKeys) {
