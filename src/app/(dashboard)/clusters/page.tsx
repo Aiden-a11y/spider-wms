@@ -198,12 +198,14 @@ export default function ClustersPage() {
 
   useEffect(() => { loadOrders(); }, [loadOrders]);
 
-  // Auto-run eligibility check whenever orders finish loading
+  // Auto-run eligibility check once both orders AND occupancyMap are ready
+  const checkTriggeredRef = useRef(false);
   useEffect(() => {
-    if (!loadingOrders && filteredOrders.length > 0) {
+    if (!loadingOrders && filteredOrders.length > 0 && occupancyMap.size > 0 && !checkTriggeredRef.current) {
+      checkTriggeredRef.current = true;
       runClusterCheck(); // eslint-disable-line react-hooks/exhaustive-deps
     }
-  }, [loadingOrders]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [loadingOrders, occupancyMap.size]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Load clusters ─────────────────────────────────────────────────────────
   const loadClusters = useCallback(async () => {
@@ -318,29 +320,12 @@ export default function ClustersPage() {
       return [];
     };
 
-    // Promise-based stock cache to deduplicate concurrent fetches of the same SKU
-    const pendingStock = new Map<string, Promise<Record<string, unknown>[]>>();
-    const getStock = (sku: string, custCode: string): Promise<Record<string, unknown>[]> => {
-      const key = `${sku}:${custCode}`;
-      if (stockCacheRef.current.has(key)) return Promise.resolve(stockCacheRef.current.get(key)!);
-      if (pendingStock.has(key)) return pendingStock.get(key)!;
-      const p = fetch(
-        `/api/wms/shipping/available-stock/${encodeURIComponent(warehouseCode)}/${encodeURIComponent(custCode)}?productSku=${encodeURIComponent(sku)}`,
-        { headers }
-      ).then((r) => r.json().catch(() => ({}))).then((j) => {
-        const stock = (Array.isArray(j?.data) ? j.data : []) as Record<string, unknown>[];
-        stockCacheRef.current.set(key, stock);
-        pendingStock.delete(key);
-        return stock;
-      });
-      pendingStock.set(key, p);
-      return p;
-    };
-
-    // Check a single order; returns true if clusterable
-    const checkOne = async (o: Record<string, unknown>): Promise<void> => {
+    for (let i = 0; i < ordersToCheck.length; i++) {
+      if (checkAbortRef.current) break;
+      const o = ordersToCheck[i];
       const code = orderCodeOf(o);
       const custCode = String(o.customerCode ?? "");
+
       setCheckResults((p) => ({ ...p, [code]: "checking" }));
 
       let rawAssignments: Record<string, unknown>[] = [];
@@ -360,7 +345,8 @@ export default function ClustersPage() {
 
       if (rawAssignments.length === 0 && rawItems.length === 0) {
         setCheckResults((p) => ({ ...p, [code]: "no" }));
-        return;
+        setCheckProgress((p) => ({ ...p, done: i + 1 }));
+        continue;
       }
 
       const shelfAssignments = rawAssignments.filter((a) => isShelfLoc(a));
@@ -384,16 +370,30 @@ export default function ClustersPage() {
       }
 
       if (unassigned.length === 0) {
+        // All items covered by shelf assignments — instant Y, no extra API call needed
         setCheckResults((p) => ({ ...p, [code]: "yes" }));
-        return;
+        setCheckProgress((p) => ({ ...p, done: i + 1 }));
+        continue;
       }
 
-      // Check shelf stock for each unassigned SKU in parallel (shared promise cache)
-      const stockResults = await Promise.all(unassigned.map(({ sku }) => getStock(sku, custCode)));
+      // Check shelf stock for each unassigned SKU (cached — same SKU across orders fetched once)
       let canCluster = true;
-      for (let si = 0; si < unassigned.length; si++) {
-        const { sku, name } = unassigned[si];
-        const allStock = stockResults[si];
+      for (const { sku, name } of unassigned) {
+        if (checkAbortRef.current) break;
+        const cacheKey = `${sku}:${custCode}`;
+        let allStock: Record<string, unknown>[];
+        if (stockCacheRef.current.has(cacheKey)) {
+          allStock = stockCacheRef.current.get(cacheKey)!;
+        } else {
+          const res = await fetch(
+            `/api/wms/shipping/available-stock/${encodeURIComponent(warehouseCode)}/${encodeURIComponent(custCode)}?productSku=${encodeURIComponent(sku)}`,
+            { headers }
+          );
+          const j = await res.json().catch(() => ({})) as Record<string, unknown>;
+          allStock = (Array.isArray(j?.data) ? j.data : []) as Record<string, unknown>[];
+          stockCacheRef.current.set(cacheKey, allStock);
+          await sleep(100);
+        }
         const hasShelf = allStock.some((s) => isShelfLoc(s) && Number(s.availQty ?? 0) > 0);
         if (!hasShelf) {
           canCluster = false;
@@ -404,17 +404,9 @@ export default function ClustersPage() {
           replenMap[sku].orderCodes.add(code);
         }
       }
-      setCheckResults((p) => ({ ...p, [code]: canCluster ? "yes" : "no" }));
-    };
 
-    // Process in batches of 3 (balance speed vs WMS 401 risk)
-    const BATCH = 3;
-    for (let i = 0; i < ordersToCheck.length; i += BATCH) {
-      if (checkAbortRef.current) break;
-      const batch = ordersToCheck.slice(i, i + BATCH);
-      await Promise.all(batch.map(checkOne));
-      setCheckProgress((p) => ({ ...p, done: Math.min(i + BATCH, ordersToCheck.length) }));
-      await sleep(120);
+      setCheckResults((p) => ({ ...p, [code]: canCluster ? "yes" : "no" }));
+      setCheckProgress((p) => ({ ...p, done: i + 1 }));
     }
 
     setReplenSkus(
