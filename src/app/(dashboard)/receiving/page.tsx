@@ -482,7 +482,9 @@ export default function ReceivingPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `Receiving_${String(d.receiveOrderCode ?? d.orderCode ?? "items")}.xlsx`;
+    const orderCode = String(d.receiveOrderCode ?? d.orderCode ?? "items");
+    const orderNo = String(d.receiveOrderNo ?? d.orderNo ?? "");
+    a.download = `Receiving_${orderCode}${orderNo ? `_${orderNo}` : ""}.xlsx`;
     a.click();
     URL.revokeObjectURL(url);
   }
