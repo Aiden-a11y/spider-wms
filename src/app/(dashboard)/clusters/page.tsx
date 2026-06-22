@@ -1810,9 +1810,29 @@ export default function ClustersPage() {
                       {(() => {
                         const st = String(o.status ?? o.orderStatus ?? "");
                         if (!st) return null;
+                        const STATUS_LABEL: Record<string, string> = {
+                          AA: "Out-Bound Request", CA: "Packing Request", DA: "Packing Complete",
+                          AR: "Auto Label Request", AC: "Auto Label Complete",
+                          LR: "Twinny Packing Req", LC: "Twinny Packing Done",
+                          HA: "Hold", CC: "Cancelled", FA: "Complete",
+                        };
+                        const STATUS_COLOR: Record<string, string> = {
+                          AA: "bg-yellow-50 text-yellow-700",
+                          CA: "bg-blue-50 text-blue-700",
+                          DA: "bg-cyan-50 text-cyan-700",
+                          AR: "bg-violet-50 text-violet-700",
+                          AC: "bg-indigo-50 text-indigo-700",
+                          LR: "bg-amber-50 text-amber-700",
+                          LC: "bg-teal-50 text-teal-700",
+                          HA: "bg-red-50 text-red-700",
+                          CC: "bg-slate-100 text-slate-500",
+                          FA: "bg-green-50 text-green-700",
+                        };
+                        const label = STATUS_LABEL[st] ?? st;
+                        const color = STATUS_COLOR[st] ?? "bg-slate-100 text-slate-600";
                         return (
-                          <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700 whitespace-nowrap">
-                            {st}
+                          <span className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${color}`}>
+                            {label}
                           </span>
                         );
                       })()}
