@@ -814,9 +814,7 @@ export default function ShippingTypePage() {
     const candidates = orders
       .filter((o) => {
         const st = String(o.status ?? o.orderStatus ?? o.statusCd ?? o.statusCode ?? "");
-        // Include Out-Bound Request (AA) and Packing Request (CA) orders
-        // AA = newly received, need batch allocation; CA = already individually allocated
-        return !st || st === "AA" || st === "Out-Bound Request" || st === "CA" || st === "Packing Request";
+        return st === "AA" || st === "Out-Bound Request";
       })
       .map((o) => ({
         orderCode: String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? ""),
@@ -931,6 +929,29 @@ export default function ShippingTypePage() {
       const json = await res.json();
       if (json?.id) {
         setCreatedBatchIds((prev) => ({ ...prev, [candidate.fingerprint]: json.id }));
+
+        // Change all orders in batch to CA (Packing Request)
+        const grouped = new Map<string, string[]>();
+        for (const order of candidate.orders) {
+          if (!grouped.has(order.customerCode)) grouped.set(order.customerCode, []);
+          grouped.get(order.customerCode)!.push(order.orderCode);
+        }
+        await Promise.all(
+          Array.from(grouped.entries()).map(([customerCode, orderCodes]) =>
+            fetch("/api/wms/shipping/status-change", {
+              method: "POST",
+              headers,
+              body: JSON.stringify({ warehouseCode, customerCode, orderCodes, newStatus: "CA", completeDate: "", cancelComment: "" }),
+            }).catch(() => {})
+          )
+        );
+
+        // Reflect new status in the local orders list
+        const allCodes = new Set(candidate.orders.map((o) => o.orderCode));
+        setOrders((prev) => prev.map((o) => {
+          const code = String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? "");
+          return allCodes.has(code) ? { ...o, status: "CA", orderStatus: "CA" } : o;
+        }));
       }
     } catch { /* ignore */ }
     setCreatingBatch(null);
