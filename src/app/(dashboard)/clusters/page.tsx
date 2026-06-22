@@ -132,6 +132,7 @@ export default function ClustersPage() {
   const [checkResults, setCheckResults] = useState<Record<string, "checking" | "yes" | "no">>({});
   const [checkRunning, setCheckRunning] = useState(false);
   const [checkProgress, setCheckProgress] = useState({ done: 0, total: 0 });
+  const [checkedAt, setCheckedAt] = useState<string | null>(null);
   const checkAbortRef = useRef(false);
   const stockCacheRef = useRef<Map<string, Record<string, unknown>[]>>(new Map());
   const [replenSkus, setReplenSkus] = useState<Array<{
@@ -211,8 +212,28 @@ export default function ClustersPage() {
 
   useEffect(() => { loadOrders(); }, [loadOrders]);
 
-  // Auto-run eligibility check once both orders AND occupancyMap are ready
+  // Load cached check results from Redis on warehouseCode / customer change
   const checkTriggeredRef = useRef(false);
+  useEffect(() => {
+    if (!warehouseCode) return;
+    checkTriggeredRef.current = false;
+    setCheckedAt(null);
+    setCheckResults({});
+    setReplenSkus([]);
+    fetch(`/api/cluster-check?warehouseCode=${encodeURIComponent(warehouseCode)}&customerCode=${encodeURIComponent(selectedCustomer)}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.checkResults) {
+          setCheckResults(data.checkResults);
+          setReplenSkus(data.replenSkus ?? []);
+          setCheckedAt(data.checkedAt);
+          checkTriggeredRef.current = true; // skip auto-run
+        }
+      })
+      .catch(() => {});
+  }, [warehouseCode, selectedCustomer]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-run eligibility check once both orders AND occupancyMap are ready (only if no cache)
   useEffect(() => {
     if (!loadingOrders && filteredOrders.length > 0 && occupancyMap.size > 0 && !checkTriggeredRef.current) {
       checkTriggeredRef.current = true;
@@ -307,13 +328,18 @@ export default function ClustersPage() {
   }
 
   // ── Cluster eligibility check ─────────────────────────────────────────────
-  async function runClusterCheck() {
+  async function runClusterCheck(forceRefresh = false) {
     if (checkRunning) { checkAbortRef.current = true; setCheckRunning(false); return; }
+    if (forceRefresh) {
+      fetch(`/api/cluster-check?warehouseCode=${encodeURIComponent(warehouseCode)}&customerCode=${encodeURIComponent(selectedCustomer)}`, { method: "DELETE" }).catch(() => {});
+      setCheckedAt(null);
+    }
     checkAbortRef.current = false;
     stockCacheRef.current.clear();
     setCheckRunning(true);
     setCheckResults({});
     setReplenSkus([]);
+    const localResults: Record<string, "yes" | "no"> = {};
 
     const ordersToCheck = filteredOrders;
     setCheckProgress({ done: 0, total: ordersToCheck.length });
@@ -424,16 +450,25 @@ export default function ClustersPage() {
         }
       }
 
-      setCheckResults((p) => ({ ...p, [code]: canCluster ? "yes" : "no" }));
+      const result = canCluster ? "yes" : "no";
+      localResults[code] = result;
+      setCheckResults((p) => ({ ...p, [code]: result }));
       setCheckProgress((p) => ({ ...p, done: i + 1 }));
     }
 
-    setReplenSkus(
-      Object.entries(replenMap)
-        .map(([sku, v]) => ({ sku, name: v.name, orderCount: v.orderCodes.size, location: v.location, custCode: v.custCode }))
-        .sort((a, b) => b.orderCount - a.orderCount)
-    );
+    const finalReplenSkus = Object.entries(replenMap)
+      .map(([sku, v]) => ({ sku, name: v.name, orderCount: v.orderCodes.size, location: v.location, custCode: v.custCode }))
+      .sort((a, b) => b.orderCount - a.orderCount);
+    setReplenSkus(finalReplenSkus);
+    const now = new Date().toISOString();
+    setCheckedAt(now);
     setCheckRunning(false);
+
+    fetch("/api/cluster-check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ checkResults: localResults, replenSkus: finalReplenSkus, checkedAt: now, warehouseCode, customerCode: selectedCustomer }),
+    }).catch(() => {});
   }
 
   // ── Pre-cluster replen plan picker ────────────────────────────────────────
@@ -1674,14 +1709,21 @@ export default function ClustersPage() {
                 {checkProgress.done} / {checkProgress.total}
               </span>
             )}
+            {checkedAt && !checkRunning && (
+              <span className="text-xs text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded-md whitespace-nowrap">
+                Checked {new Date(checkedAt).toLocaleString()}
+              </span>
+            )}
             <button
-              onClick={runClusterCheck}
+              onClick={() => runClusterCheck(!!checkedAt)}
               disabled={loadingOrders || filteredOrders.length === 0}
               className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold border transition-colors disabled:opacity-40 ${checkRunning ? "bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"}`}
             >
               {checkRunning
                 ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Stop</>
-                : <><Search className="w-3.5 h-3.5" /> Check</>}
+                : checkedAt
+                  ? <><RefreshCw className="w-3.5 h-3.5" /> Refresh</>
+                  : <><Search className="w-3.5 h-3.5" /> Check</>}
             </button>
             {selectedList.length > 0 && (
               <span className="text-xs text-slate-500">{selectedList.length} / {MAX_BINS} selected</span>
