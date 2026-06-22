@@ -147,7 +147,7 @@ export default function ReplenishmentPage() {
 
       // ── 3. Required for today's orders: from cluster-check cache ─────
       const cacheRes = await fetch(
-        `/api/cluster-check?warehouseCode=${encodeURIComponent(warehouseCode)}&customerCode=`
+        `/api/cluster-check?warehouseCode=${encodeURIComponent(warehouseCode)}&all=1`
       );
       const cacheJson = await cacheRes.json().catch(() => null);
       if (cacheJson?.replenSkus) {

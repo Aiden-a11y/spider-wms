@@ -18,8 +18,29 @@ function cacheKey(warehouseCode: string, customerCode: string) {
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const warehouseCode = searchParams.get("warehouseCode") ?? "STOO1";
-  const customerCode = searchParams.get("customerCode") ?? "";
-  const raw = await redis.get(cacheKey(warehouseCode, customerCode));
+  const customerCode = searchParams.get("customerCode");
+  const all = searchParams.get("all") === "1";
+
+  // ?all=1 → merge replenSkus from all customer caches for this warehouse
+  if (all) {
+    const keys = await redis.keys(`wms:cluster-check:${warehouseCode}:*`);
+    if (keys.length === 0) return NextResponse.json(null);
+    const values = await Promise.all(keys.map((k) => redis.get(k)));
+    const merged: CheckCache["replenSkus"] = [];
+    const seenSku = new Set<string>();
+    let latestCheckedAt = "";
+    for (const v of values) {
+      if (!v) continue;
+      const data: CheckCache = typeof v === "string" ? JSON.parse(v) : v;
+      if (data.checkedAt > latestCheckedAt) latestCheckedAt = data.checkedAt;
+      for (const r of data.replenSkus ?? []) {
+        if (!seenSku.has(r.sku)) { seenSku.add(r.sku); merged.push(r); }
+      }
+    }
+    return NextResponse.json({ replenSkus: merged, checkedAt: latestCheckedAt });
+  }
+
+  const raw = await redis.get(cacheKey(warehouseCode, customerCode ?? ""));
   if (!raw) return NextResponse.json(null);
   return NextResponse.json(typeof raw === "string" ? JSON.parse(raw) : raw);
 }
