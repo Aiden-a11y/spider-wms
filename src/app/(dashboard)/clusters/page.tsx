@@ -5,7 +5,7 @@ import { useAuth } from "@/contexts/auth-context";
 import { useRouter } from "next/navigation";
 import {
   Layers, RefreshCw, Trash2, Loader2, CheckCircle2, AlertCircle,
-  Printer, Plus, Search, ChevronDown, ChevronUp, X, Download, PackageCheck, Tag,
+  Printer, Plus, Search, ChevronDown, ChevronUp, X, Download, PackageCheck, Tag, MapPin,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import type {
@@ -135,8 +135,19 @@ export default function ClustersPage() {
   const checkAbortRef = useRef(false);
   const stockCacheRef = useRef<Map<string, Record<string, unknown>[]>>(new Map());
   const [replenSkus, setReplenSkus] = useState<Array<{
-    sku: string; name: string; orderCount: number; location: string;
+    sku: string; name: string; orderCount: number; location: string; custCode: string;
   }>>([]);
+
+  // ── Pre-cluster replen plan picker ────────────────────────────────────────
+  const [replenPickerOpen, setReplenPickerOpen] = useState(false);
+  const [replenPickerSku, setReplenPickerSku] = useState("");
+  const [replenPickerName, setReplenPickerName] = useState("");
+  const [replenPickerCustCode, setReplenPickerCustCode] = useState("");
+  const [replenPickerOrderCount, setReplenPickerOrderCount] = useState(0);
+  const [replenPickerStock, setReplenPickerStock] = useState<Record<string, unknown>[]>([]);
+  const [replenPickerLoading, setReplenPickerLoading] = useState(false);
+  const [replenPickerSelectedIdx, setReplenPickerSelectedIdx] = useState(0);
+  const [replenSelectedLocs, setReplenSelectedLocs] = useState<Record<string, { stock: Record<string, unknown>; orderCount: number; name: string }>>({});
 
   // ── Creating ──────────────────────────────────────────────────────────────
   const [creating, setCreating] = useState(false);
@@ -305,7 +316,7 @@ export default function ClustersPage() {
     const ordersToCheck = filteredOrders;
     setCheckProgress({ done: 0, total: ordersToCheck.length });
 
-    const replenMap: Record<string, { name: string; orderCodes: Set<string>; location: string }> = {};
+    const replenMap: Record<string, { name: string; orderCodes: Set<string>; location: string; custCode: string }> = {};
 
     const getItemAssignments = (j: Record<string, unknown>): Record<string, unknown>[] => {
       const d = (j?.data ?? {}) as Record<string, unknown>;
@@ -354,12 +365,13 @@ export default function ClustersPage() {
       const shelfAssignments = rawAssignments.filter((a) => isShelfLoc(a));
       const assignedSkus = new Set(shelfAssignments.map((a) => String(a.productSku ?? a.sku ?? "")));
 
-      const unassigned: Array<{ sku: string; name: string }> = [];
+      const unassigned: Array<{ sku: string; name: string; qty: number }> = [];
       if (rawAssignments.length === 0) {
         for (const item of rawItems) {
           const sku = String(item.productSku ?? item.sku ?? "");
-          if (!sku || Number(item.qty ?? 0) <= 0) continue;
-          unassigned.push({ sku, name: String(item.productName ?? item.skuName ?? item.itemName ?? "") });
+          const qty = Number(item.qty ?? 0);
+          if (!sku || qty <= 0) continue;
+          unassigned.push({ sku, name: String(item.productName ?? item.skuName ?? item.itemName ?? ""), qty });
         }
       } else {
         for (const item of rawItems) {
@@ -367,7 +379,7 @@ export default function ClustersPage() {
           if (!sku || assignedSkus.has(sku)) continue;
           const remain = Number(item.remainQty ?? item.unassignedQty ?? item.remainingQty ?? 0);
           if (remain <= 0) continue;
-          unassigned.push({ sku, name: String(item.productName ?? item.skuName ?? item.itemName ?? "") });
+          unassigned.push({ sku, name: String(item.productName ?? item.skuName ?? item.itemName ?? ""), qty: remain });
         }
       }
 
@@ -380,7 +392,7 @@ export default function ClustersPage() {
 
       // Check shelf stock for each unassigned SKU (cached — same SKU across orders fetched once)
       let canCluster = true;
-      for (const { sku, name } of unassigned) {
+      for (const { sku, name, qty: requiredQty } of unassigned) {
         if (checkAbortRef.current) break;
         const cacheKey = `${sku}:${custCode}`;
         let allStock: Record<string, unknown>[];
@@ -396,12 +408,15 @@ export default function ClustersPage() {
           stockCacheRef.current.set(cacheKey, allStock);
           await sleep(100);
         }
-        const hasShelf = allStock.some((s) => isShelfLoc(s) && Number(s.availQty ?? 0) > 0);
+        const totalShelfQty = allStock
+          .filter((s) => isShelfLoc(s))
+          .reduce((sum, s) => sum + Number(s.availQty ?? 0), 0);
+        const hasShelf = totalShelfQty >= requiredQty;
         if (!hasShelf) {
           canCluster = false;
           if (!replenMap[sku]) {
             const anyStock = allStock.find((s) => Number(s.availQty ?? 0) > 0);
-            replenMap[sku] = { name, orderCodes: new Set(), location: anyStock ? readableLocation(anyStock) : "—" };
+            replenMap[sku] = { name, orderCodes: new Set(), location: anyStock ? readableLocation(anyStock) : "—", custCode };
           }
           replenMap[sku].orderCodes.add(code);
         }
@@ -413,10 +428,61 @@ export default function ClustersPage() {
 
     setReplenSkus(
       Object.entries(replenMap)
-        .map(([sku, v]) => ({ sku, name: v.name, orderCount: v.orderCodes.size, location: v.location }))
+        .map(([sku, v]) => ({ sku, name: v.name, orderCount: v.orderCodes.size, location: v.location, custCode: v.custCode }))
         .sort((a, b) => b.orderCount - a.orderCount)
     );
     setCheckRunning(false);
+  }
+
+  // ── Pre-cluster replen plan picker ────────────────────────────────────────
+  async function openReplenPicker(sku: string, name: string, custCode: string, orderCount: number) {
+    setReplenPickerSku(sku);
+    setReplenPickerName(name);
+    setReplenPickerCustCode(custCode);
+    setReplenPickerOrderCount(orderCount);
+    setReplenPickerStock([]);
+    setReplenPickerSelectedIdx(0);
+    setReplenPickerLoading(true);
+    setReplenPickerOpen(true);
+    try {
+      const res = await fetch(
+        `/api/wms/shipping/available-stock/${encodeURIComponent(warehouseCode)}/${encodeURIComponent(custCode)}?productSku=${encodeURIComponent(sku)}`,
+        { headers }
+      );
+      const j = await res.json().catch(() => ({})) as Record<string, unknown>;
+      const all = (Array.isArray(j?.data) ? j.data : []) as Record<string, unknown>[];
+      const available = all
+        .filter((s) => Number(s.availQty ?? 0) > 0)
+        .sort((a, b) => (String(a.expireDate ?? "") || "9").localeCompare(String(b.expireDate ?? "") || "9"));
+      setReplenPickerStock(available);
+    } finally {
+      setReplenPickerLoading(false);
+    }
+  }
+
+  function confirmReplenPicker() {
+    const stock = replenPickerStock[replenPickerSelectedIdx];
+    if (!stock) return;
+    setReplenSelectedLocs((p) => ({
+      ...p,
+      [replenPickerSku]: { stock, orderCount: replenPickerOrderCount, name: replenPickerName },
+    }));
+    setReplenPickerOpen(false);
+  }
+
+  function printReplenPlan() {
+    const entries = Object.entries(replenSelectedLocs).map(([sku, v]) => ({
+      sku,
+      name: v.name,
+      locationCode: readableLocation(v.stock),
+      lotNo: String(v.stock.lotNo ?? ""),
+      expireDate: String(v.stock.expireDate ?? ""),
+      availQty: Number(v.stock.availQty ?? 0),
+      orderCount: v.orderCount,
+    }));
+    if (entries.length === 0) return;
+    localStorage.setItem("replen_plan_print", JSON.stringify({ entries, warehouseCode, createdAt: new Date().toISOString() }));
+    window.open("/replen-plan-print", "_blank");
   }
 
   // ── Cluster creation ──────────────────────────────────────────────────────
@@ -1477,6 +1543,85 @@ export default function ClustersPage() {
         </div>
       )}
 
+      {/* ── Pre-cluster replen plan picker modal ── */}
+      {replenPickerOpen && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col max-h-[80vh]">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
+              <div>
+                <p className="text-sm font-bold text-slate-900">Select Source Location</p>
+                <p className="text-xs text-slate-500 mt-0.5 font-mono">{replenPickerSku}{replenPickerName ? ` · ${replenPickerName}` : ""}</p>
+                <p className="text-xs text-slate-400 mt-0.5">{replenPickerOrderCount} order{replenPickerOrderCount !== 1 ? "s" : ""} need replenishment</p>
+              </div>
+              <button onClick={() => setReplenPickerOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-1.5">
+              {replenPickerLoading ? (
+                <div className="flex items-center justify-center py-12 gap-2 text-slate-400">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span className="text-sm">Loading available stock…</span>
+                </div>
+              ) : replenPickerStock.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 gap-2 text-slate-400">
+                  <AlertCircle className="w-5 h-5 text-amber-400" />
+                  <p className="text-sm font-medium text-slate-600">No available stock found</p>
+                </div>
+              ) : (
+                replenPickerStock.map((s, idx) => {
+                  const loc = readableLocation(s);
+                  const isSelected = replenPickerSelectedIdx === idx;
+                  const occupancy = getLocationOccupancyInfo(occupancyMap, s);
+                  const zone = classifyOccupancy(occupancy ?? "");
+                  return (
+                    <button key={idx} onClick={() => setReplenPickerSelectedIdx(idx)}
+                      className={`w-full text-left px-4 py-3 rounded-xl border transition-all ${isSelected ? "border-blue-400 bg-blue-50" : "border-slate-200 bg-white hover:bg-slate-50"}`}>
+                      <div className="flex items-center gap-3">
+                        <div className={`w-4 h-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${isSelected ? "border-blue-500" : "border-slate-300"}`}>
+                          {isSelected && <div className="w-2 h-2 rounded-full bg-blue-500" />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono text-sm font-bold text-slate-900">{loc}</span>
+                            {zone === "shelf" && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Shelf</span>
+                            )}
+                            {zone === "storage" && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">Storage</span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-3 mt-0.5 text-xs text-slate-500">
+                            {s.lotNo ? <span>Lot: <span className="font-mono">{String(s.lotNo)}</span></span> : null}
+                            {s.expireDate ? <span>Exp: {String(s.expireDate)}</span> : null}
+                            <span className="font-semibold text-slate-700">Avail: {String(s.availQty ?? 0)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-end gap-3 flex-shrink-0">
+              <button onClick={() => setReplenPickerOpen(false)}
+                className="px-4 py-2 rounded-lg text-sm font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors">
+                Cancel
+              </button>
+              <button
+                onClick={confirmReplenPicker}
+                disabled={replenPickerLoading || replenPickerStock.length === 0}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 transition-colors"
+              >
+                <MapPin className="w-4 h-4" /> Select This Location
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Creating progress overlay ── */}
       {creating && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
@@ -1691,11 +1836,21 @@ export default function ClustersPage() {
         {/* Replenishment SKU summary */}
         {replenSkus.length > 0 && (
           <div className="mt-4 bg-white border border-red-200 rounded-2xl shadow-sm overflow-hidden">
-            <div className="px-5 py-3 bg-red-50 border-b border-red-100 flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
-              <span className="text-xs font-bold text-red-700 uppercase tracking-wide">
-                Replenishment Required — {replenSkus.length} SKU{replenSkus.length !== 1 ? "s" : ""} blocking cluster eligibility
-              </span>
+            <div className="px-5 py-3 bg-red-50 border-b border-red-100 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+                <span className="text-xs font-bold text-red-700 uppercase tracking-wide">
+                  Replenishment Required — {replenSkus.length} SKU{replenSkus.length !== 1 ? "s" : ""} blocking cluster eligibility
+                </span>
+              </div>
+              {Object.keys(replenSelectedLocs).length > 0 && (
+                <button
+                  onClick={printReplenPlan}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors flex-shrink-0"
+                >
+                  <Tag className="w-3.5 h-3.5" /> Print Plan ({Object.keys(replenSelectedLocs).length})
+                </button>
+              )}
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-xs border-collapse">
@@ -1704,20 +1859,46 @@ export default function ClustersPage() {
                     <th className="px-4 py-2 text-left font-semibold text-red-700">SKU</th>
                     <th className="px-4 py-2 text-left font-semibold text-red-700">Product</th>
                     <th className="px-4 py-2 text-center font-semibold text-red-700 w-24">Orders blocked</th>
-                    <th className="px-4 py-2 text-left font-semibold text-red-700">Current Location (for replen)</th>
+                    <th className="px-4 py-2 text-left font-semibold text-red-700">Storage Location</th>
+                    <th className="px-4 py-2 text-left font-semibold text-red-700">Replen Plan</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {replenSkus.map((r, i) => (
-                    <tr key={r.sku} className={`border-b border-red-50 last:border-0 ${i % 2 === 0 ? "bg-white" : "bg-red-50/20"}`}>
-                      <td className="px-4 py-2 font-mono font-bold text-slate-800">{r.sku}</td>
-                      <td className="px-4 py-2 text-slate-600 max-w-[200px]"><span className="truncate block">{r.name || "—"}</span></td>
-                      <td className="px-4 py-2 text-center">
-                        <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-bold bg-red-100 text-red-600">{r.orderCount}</span>
-                      </td>
-                      <td className="px-4 py-2 font-mono text-blue-700 font-semibold">{r.location}</td>
-                    </tr>
-                  ))}
+                  {replenSkus.map((r, i) => {
+                    const selected = replenSelectedLocs[r.sku];
+                    return (
+                      <tr key={r.sku} className={`border-b border-red-50 last:border-0 ${i % 2 === 0 ? "bg-white" : "bg-red-50/20"}`}>
+                        <td className="px-4 py-2 font-mono font-bold text-slate-800">{r.sku}</td>
+                        <td className="px-4 py-2 text-slate-600 max-w-[200px]"><span className="truncate block">{r.name || "—"}</span></td>
+                        <td className="px-4 py-2 text-center">
+                          <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-bold bg-red-100 text-red-600">{r.orderCount}</span>
+                        </td>
+                        <td className="px-4 py-2 font-mono text-blue-700 font-semibold">{r.location}</td>
+                        <td className="px-4 py-2">
+                          {selected ? (
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-xs font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                                {readableLocation(selected.stock)}
+                              </span>
+                              <button
+                                onClick={() => openReplenPicker(r.sku, r.name, r.custCode, r.orderCount)}
+                                className="text-xs text-slate-400 hover:text-slate-600 underline"
+                              >
+                                Change
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => openReplenPicker(r.sku, r.name, r.custCode, r.orderCount)}
+                              className="flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition-colors"
+                            >
+                              <MapPin className="w-3 h-3" /> Select Location
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

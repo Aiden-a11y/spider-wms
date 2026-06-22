@@ -55,7 +55,7 @@ const CSS = `
   * { box-sizing: border-box; }
   body { margin: 0; font-family: Arial, Helvetica, sans-serif; background: #e2e8f0; }
   .ticket {
-    width: 3.76in; min-height: 5.76in; background: #fff;
+    width: 3.76in; height: 5.76in; overflow: hidden; background: #fff;
     padding: 0.13in 0.15in; margin: 0.1in auto;
     border: 1px solid #ccc; display: flex; flex-direction: column; gap: 0;
     box-shadow: 0 2px 8px rgba(0,0,0,0.12);
@@ -75,38 +75,39 @@ const CSS = `
     font-size: 9pt; font-weight: 800; color: #111;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  .order-code-small { font-size: 6pt; color: #888; margin-top: 1px; word-break: break-all; }
-  .cluster-small { font-size: 5.5pt; color: #aaa; margin-top: 1px; }
+  .order-code-small { font-size: 7pt; color: #888; margin-top: 1px; word-break: break-all; }
+  .cluster-small { font-size: 6.5pt; color: #aaa; margin-top: 1px; }
   .qr-box { width: 0.75in; height: 0.75in; flex-shrink: 0; }
   .qr-box img { width: 100%; height: 100%; display: block; }
   .qr-placeholder { width: 100%; height: 100%; background: #f5f5f5; border: 1px solid #ddd; border-radius: 4px; }
   .divider { border: none; border-top: 1px solid #e5e7eb; margin: 0.06in 0; }
   .section-label {
-    font-size: 5.5pt; font-weight: 700; color: #6b7280;
+    font-size: 7pt; font-weight: 700; color: #6b7280;
     text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 0.04in;
   }
   .ship-name { font-size: 8.5pt; font-weight: 700; color: #111; margin-bottom: 2px; }
   .ship-addr { font-size: 7.5pt; color: #374151; line-height: 1.5; }
   .ship-tel { font-size: 7pt; color: #6b7280; margin-top: 2px; }
-  .items-table { width: 100%; border-collapse: collapse; font-size: 6.5pt; margin-top: 0.04in; }
+  .items-wrapper { flex: 1; min-height: 0; overflow: hidden; }
+  .items-table { width: 100%; border-collapse: collapse; font-size: 8pt; margin-top: 0.04in; }
   .items-table th {
     background: #f3f4f6; font-weight: 700; text-align: left;
     padding: 3px 4px; border: 1px solid #d1d5db; color: #374151;
   }
-  .items-table td { padding: 2px 4px; border: 1px solid #e5e7eb; vertical-align: top; }
-  .items-table .col-qty { text-align: right; font-weight: 700; font-size: 8pt; }
-  .items-table .col-loc { font-family: 'Courier New', monospace; font-weight: 700; font-size: 6pt; }
-  .items-table .col-sku { font-family: 'Courier New', monospace; font-size: 6pt; }
+  .items-table td { padding: 3px 4px; border: 1px solid #e5e7eb; vertical-align: top; }
+  .items-table .col-qty { text-align: right; font-weight: 700; font-size: 9pt; }
+  .items-table .col-loc { font-family: 'Courier New', monospace; font-weight: 700; font-size: 7.5pt; }
+  .items-table .col-sku { font-family: 'Courier New', monospace; font-size: 7.5pt; }
   .replen-badge {
     display: inline-block; background: #fef3c7; color: #92400e;
-    font-size: 5pt; font-weight: 700; padding: 1px 4px; border-radius: 3px;
+    font-size: 6pt; font-weight: 700; padding: 1px 4px; border-radius: 3px;
     border: 1px solid #fcd34d; margin-left: 3px; vertical-align: middle;
   }
-  .no-items { text-align: center; color: #9ca3af; padding: 8px; font-size: 7pt; }
+  .no-items { text-align: center; color: #9ca3af; padding: 8px; font-size: 7.5pt; }
   .checklist {
     margin-top: auto; padding-top: 0.07in;
     border-top: 1px dashed #d1d5db;
-    display: flex; gap: 0.14in; font-size: 6.5pt; color: #6b7280;
+    display: flex; gap: 0.14in; font-size: 7pt; color: #6b7280;
     flex-shrink: 0;
   }
   .checklist span { display: flex; align-items: center; gap: 3px; }
@@ -160,34 +161,36 @@ function BinTicket({ bin, cluster }: { bin: B2CClusterBin; cluster: B2CCluster }
 
       {/* Items */}
       <div className="section-label">Items</div>
-      <table className="items-table">
-        <thead>
-          <tr>
-            <th className="col-loc">Location</th>
-            <th className="col-sku">SKU</th>
-            <th>Product</th>
-            <th className="col-qty">Qty</th>
-          </tr>
-        </thead>
-        <tbody>
-          {hasItems
-            ? bin.items.map((item, i) => (
-                <tr key={i} style={{ background: i % 2 === 0 ? "#fff" : "#f9fafb" }}>
-                  <td className="col-loc">{item.locationCode || "—"}</td>
-                  <td className="col-sku">{item.sku}</td>
-                  <td style={{ fontSize: "6pt" }}>{item.name || "—"}</td>
-                  <td className="col-qty">{item.qty}</td>
-                </tr>
-              ))
-            : (
-                <tr>
-                  <td colSpan={4} className="no-items">
-                    {bin.needsReplenishment ? "Awaiting replenishment" : "No items assigned"}
-                  </td>
-                </tr>
-              )}
-        </tbody>
-      </table>
+      <div className="items-wrapper">
+        <table className="items-table">
+          <thead>
+            <tr>
+              <th className="col-loc">Location</th>
+              <th className="col-sku">SKU</th>
+              <th>Product</th>
+              <th className="col-qty">Qty</th>
+            </tr>
+          </thead>
+          <tbody>
+            {hasItems
+              ? bin.items.map((item, i) => (
+                  <tr key={i} style={{ background: i % 2 === 0 ? "#fff" : "#f9fafb" }}>
+                    <td className="col-loc">{item.locationCode || "—"}</td>
+                    <td className="col-sku">{item.sku}</td>
+                    <td style={{ fontSize: "7pt" }}>{item.name || "—"}</td>
+                    <td className="col-qty">{item.qty}</td>
+                  </tr>
+                ))
+              : (
+                  <tr>
+                    <td colSpan={4} className="no-items">
+                      {bin.needsReplenishment ? "Awaiting replenishment" : "No items assigned"}
+                    </td>
+                  </tr>
+                )}
+          </tbody>
+        </table>
+      </div>
 
       {/* Checklist */}
       <div className="checklist">
