@@ -1924,7 +1924,6 @@ export default function ClustersPage() {
                     <th className="px-4 py-2 text-left font-semibold text-red-700">SKU</th>
                     <th className="px-4 py-2 text-left font-semibold text-red-700">Product</th>
                     <th className="px-4 py-2 text-center font-semibold text-red-700 w-24">Orders blocked</th>
-                    <th className="px-4 py-2 text-left font-semibold text-red-700">Storage Location</th>
                     <th className="px-4 py-2 text-left font-semibold text-red-700">Replen Plan</th>
                   </tr>
                 </thead>
@@ -1938,7 +1937,6 @@ export default function ClustersPage() {
                         <td className="px-4 py-2 text-center">
                           <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-bold bg-red-100 text-red-600">{r.orderCount}</span>
                         </td>
-                        <td className="px-4 py-2 font-mono text-blue-700 font-semibold">{r.location}</td>
                         <td className="px-4 py-2">
                           {selected ? (
                             <div className="flex items-center gap-2">

@@ -32,6 +32,7 @@ import {
   SlidersHorizontal,
   BookOpen,
   ShoppingCart,
+  ArrowDownToLine,
 } from "lucide-react";
 
 type NavChild = { href: string; label: string; icon: React.ElementType };
@@ -51,6 +52,7 @@ const nav: NavItem[] = [
     icon: Boxes,
     children: [
       { href: "/inventory", label: "Inventory Inquiry", icon: Search },
+      { href: "/inventory/replenishment", label: "Replenishment", icon: ArrowDownToLine },
       { href: "/history", label: "History", icon: History },
       { href: "/inventory/conflicts", label: "Location Conflicts", icon: AlertTriangle },
     ],
