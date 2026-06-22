@@ -297,7 +297,9 @@ export default function ClustersPage() {
     setSelectedCodes((p) => ({ ...p, [code]: !p[code] }));
   }
   function toggleAll() {
-    const visible = filteredOrders.slice(0, MAX_BINS).map((o) => orderCodeOf(o));
+    const eligible = filteredOrders.filter((o) => checkResults[orderCodeOf(o)] === "yes");
+    const pool = (eligible.length > 0 ? eligible : filteredOrders).slice(0, MAX_BINS);
+    const visible = pool.map((o) => orderCodeOf(o));
     const allSelected = visible.every((c) => selectedCodes[c]);
     const next: Record<string, boolean> = {};
     if (!allSelected) visible.forEach((c) => { next[c] = true; });
