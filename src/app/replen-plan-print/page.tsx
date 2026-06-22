@@ -120,24 +120,28 @@ function ReplenTicket({ entry, warehouseCode, createdAt }: {
       </div>
 
       {/* Lot / Expiry / Qty */}
-      <div className="meta-grid">
-        {entry.lotNo && (
-          <div className="meta-cell">
-            <div className="meta-key">Lot No</div>
-            <div className="meta-val">{entry.lotNo}</div>
-          </div>
-        )}
-        {entry.expireDate && (
-          <div className="meta-cell">
-            <div className="meta-key">Expire</div>
-            <div className="meta-val">{entry.expireDate}</div>
-          </div>
-        )}
-        <div className="meta-cell">
-          <div className="meta-key">Avail Qty</div>
-          <div className="meta-val">{entry.availQty}</div>
+      {(entry.lotNo || entry.expireDate || entry.availQty > 0) && (
+        <div className="meta-grid">
+          {entry.lotNo && (
+            <div className="meta-cell">
+              <div className="meta-key">Lot No</div>
+              <div className="meta-val">{entry.lotNo}</div>
+            </div>
+          )}
+          {entry.expireDate && (
+            <div className="meta-cell">
+              <div className="meta-key">Expire</div>
+              <div className="meta-val">{entry.expireDate}</div>
+            </div>
+          )}
+          {entry.availQty > 0 && (
+            <div className="meta-cell">
+              <div className="meta-key">Avail Qty</div>
+              <div className="meta-val">{entry.availQty}</div>
+            </div>
+          )}
         </div>
-      </div>
+      )}
 
       {/* Orders needing this */}
       <div className="orders-badge">

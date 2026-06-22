@@ -473,16 +473,19 @@ export default function ClustersPage() {
   }
 
   function printReplenPlan() {
-    const entries = Object.entries(replenSelectedLocs).map(([sku, v]) => ({
-      sku,
-      name: v.name,
-      locationCode: readableLocation(v.stock),
-      lotNo: String(v.stock.lotNo ?? ""),
-      expireDate: String(v.stock.expireDate ?? ""),
-      availQty: Number(v.stock.availQty ?? 0),
-      orderCount: v.orderCount,
-    }));
-    if (entries.length === 0) return;
+    if (replenSkus.length === 0) return;
+    const entries = replenSkus.map((r) => {
+      const sel = replenSelectedLocs[r.sku];
+      return {
+        sku: r.sku,
+        name: r.name,
+        locationCode: sel ? readableLocation(sel.stock) : r.location,
+        lotNo: sel ? String(sel.stock.lotNo ?? "") : "",
+        expireDate: sel ? String(sel.stock.expireDate ?? "") : "",
+        availQty: sel ? Number(sel.stock.availQty ?? 0) : 0,
+        orderCount: r.orderCount,
+      };
+    });
     localStorage.setItem("replen_plan_print", JSON.stringify({ entries, warehouseCode, createdAt: new Date().toISOString() }));
     window.open("/replen-plan-print", "_blank");
   }
@@ -1865,14 +1868,12 @@ export default function ClustersPage() {
                   Replenishment Required — {replenSkus.length} SKU{replenSkus.length !== 1 ? "s" : ""} blocking cluster eligibility
                 </span>
               </div>
-              {Object.keys(replenSelectedLocs).length > 0 && (
-                <button
-                  onClick={printReplenPlan}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors flex-shrink-0"
-                >
-                  <Tag className="w-3.5 h-3.5" /> Print Plan ({Object.keys(replenSelectedLocs).length})
-                </button>
-              )}
+              <button
+                onClick={printReplenPlan}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors flex-shrink-0"
+              >
+                <Tag className="w-3.5 h-3.5" /> Print Tickets ({replenSkus.length})
+              </button>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-xs border-collapse">
