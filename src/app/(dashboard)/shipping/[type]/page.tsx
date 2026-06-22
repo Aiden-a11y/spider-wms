@@ -941,7 +941,7 @@ export default function ShippingTypePage() {
             fetch("/api/wms/shipping/status-change", {
               method: "POST",
               headers,
-              body: JSON.stringify({ warehouseCode, customerCode, orderCodes, newStatus: "CA", completeDate: "", cancelComment: "" }),
+              body: JSON.stringify({ warehouseCode, customerCode, orderCodes, newStatus: "AR", completeDate: "", cancelComment: "" }),
             }).catch(() => {})
           )
         );
@@ -950,7 +950,7 @@ export default function ShippingTypePage() {
         const allCodes = new Set(candidate.orders.map((o) => o.orderCode));
         setOrders((prev) => prev.map((o) => {
           const code = String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? "");
-          return allCodes.has(code) ? { ...o, status: "CA", orderStatus: "CA" } : o;
+          return allCodes.has(code) ? { ...o, status: "AR", orderStatus: "AR" } : o;
         }));
       }
     } catch { /* ignore */ }
