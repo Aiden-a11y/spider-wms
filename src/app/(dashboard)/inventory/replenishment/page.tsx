@@ -72,23 +72,34 @@ export default function ReplenishmentPage() {
     const result: ReplenItem[] = [];
 
     try {
-      // ── 1. Occupancy map ──────────────────────────────────────────────
-      const locRes = await fetch("/api/wms/warehouse/location/list", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ page: 1, pageSize: 2000, warehouseCode }),
-      });
-      const locJson = await locRes.json().catch(() => ({}));
-      const locList: Record<string, unknown>[] =
-        Array.isArray(locJson?.data?.list) ? locJson.data.list :
-        Array.isArray(locJson?.data) ? locJson.data : [];
-      const occupancyMap = buildLocationOccupancyLookup(locList);
+      // ── 1. Occupancy map (paginated) ─────────────────────────────────
+      const allLocList: Record<string, unknown>[] = [];
+      for (let p = 1; ; p++) {
+        const locRes = await fetch("/api/wms/warehouse/location/list", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ page: p, pageSize: 500, warehouseCode }),
+        });
+        const locJson = await locRes.json().catch(() => ({}));
+        const chunk: Record<string, unknown>[] =
+          Array.isArray(locJson?.data?.list) ? locJson.data.list :
+          Array.isArray(locJson?.data) ? locJson.data : [];
+        allLocList.push(...chunk);
+        const total = Number(locJson?.data?.total ?? locJson?.total ?? 0);
+        if (chunk.length < 500 || (total > 0 && allLocList.length >= total)) break;
+      }
+      const occupancyMap = buildLocationOccupancyLookup(allLocList);
 
       const isShelf = (row: Record<string, unknown>) => {
-        const occ = getLocationOccupancyInfo(occupancyMap, row);
-        if (occ) return classifyOccupancy(occ) === "shelf";
-        if (occupancyMap.size > 0) return false;
-        return String(row.zoneName ?? row.zoneNm ?? row.zone ?? "").toLowerCase().includes("shelf");
+        // 1) occupancyInfo directly on the inventory row
+        const direct = String(row.occupancyInfo ?? row.locationType ?? row.locationTypeCode ?? "").trim();
+        if (direct) return classifyOccupancy(direct) === "shelf";
+        // 2) occupancyMap lookup
+        const mapped = getLocationOccupancyInfo(occupancyMap, row);
+        if (mapped) return classifyOccupancy(mapped) === "shelf";
+        // 3) zone name fallback (any case, any "shelf" substring)
+        const zone = String(row.zoneName ?? row.zoneNm ?? row.zone ?? row.zoneCode ?? "").toLowerCase();
+        return zone.includes("shelf");
       };
 
       // ── 2. Below min stock: scan all inventory ───────────────────────
