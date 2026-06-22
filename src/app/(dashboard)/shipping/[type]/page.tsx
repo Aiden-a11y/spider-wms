@@ -813,8 +813,10 @@ export default function ShippingTypePage() {
 
     const candidates = orders
       .filter((o) => {
-        const st = String(o.status ?? o.orderStatus ?? "");
-        return st === "CA" || st === "Packing Request";
+        const st = String(o.status ?? o.orderStatus ?? o.statusCd ?? o.statusCode ?? "");
+        // Include Out-Bound Request (AA) and Packing Request (CA) orders
+        // AA = newly received, need batch allocation; CA = already individually allocated
+        return !st || st === "AA" || st === "Out-Bound Request" || st === "CA" || st === "Packing Request";
       })
       .map((o) => ({
         orderCode: String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? ""),
