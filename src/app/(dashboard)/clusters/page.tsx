@@ -134,7 +134,8 @@ export default function ClustersPage() {
   const [checkProgress, setCheckProgress] = useState({ done: 0, total: 0 });
   const [checkedAt, setCheckedAt] = useState<string | null>(null);
   const checkAbortRef = useRef(false);
-  const stockCacheRef = useRef<Map<string, Record<string, unknown>[]>>(new Map());
+  const stockCacheRef     = useRef<Map<string, Record<string, unknown>[]>>(new Map());
+  const stockRemainingRef = useRef<Map<string, number>>(new Map());
   const [replenSkus, setReplenSkus] = useState<Array<{
     sku: string; name: string; orderCount: number; location: string; custCode: string;
   }>>([]);
@@ -349,6 +350,7 @@ export default function ClustersPage() {
     }
     checkAbortRef.current = false;
     stockCacheRef.current.clear();
+    stockRemainingRef.current.clear();
     setCheckRunning(true);
     setCheckResults({});
     setReplenSkus([]);
@@ -449,11 +451,19 @@ export default function ClustersPage() {
           stockCacheRef.current.set(cacheKey, allStock);
           await sleep(100);
         }
-        const totalShelfQty = allStock
-          .filter((s) => isShelfLoc(s))
-          .reduce((sum, s) => sum + Number(s.availQty ?? 0), 0);
-        const hasShelf = totalShelfQty >= requiredQty;
-        if (!hasShelf) {
+        // Initialize remaining stock on first encounter for this SKU
+        if (!stockRemainingRef.current.has(cacheKey)) {
+          const totalShelfQty = allStock
+            .filter((s) => isShelfLoc(s))
+            .reduce((sum, s) => sum + Number(s.availQty ?? 0), 0);
+          stockRemainingRef.current.set(cacheKey, totalShelfQty);
+        }
+        const remaining = stockRemainingRef.current.get(cacheKey)!;
+        const hasShelf = remaining >= requiredQty;
+        if (hasShelf) {
+          // Deduct this order's consumption from the running total
+          stockRemainingRef.current.set(cacheKey, remaining - requiredQty);
+        } else {
           canCluster = false;
           if (!replenMap[sku]) {
             const anyStock = allStock.find((s) => Number(s.availQty ?? 0) > 0);
