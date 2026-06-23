@@ -327,7 +327,7 @@ export default function ShippingTypePage() {
     const baseBody: Record<string, unknown> = { limit: PAGE_SIZE, pageSize: PAGE_SIZE, orderType: meta.orderType, warehouseCode: whCode };
     if (custCode && custCode !== "ALL") baseBody.customerCode = custCode;
 
-    const extractList = (json: Record<string, unknown>): unknown[] => {
+    const extractList = (json: Record<string, unknown>): Order[] => {
       const d = json?.data as Record<string, unknown> | undefined;
       const list = d?.list ?? d?.items ?? (Array.isArray(d) ? d : null) ?? json?.list ?? json?.items ?? (Array.isArray(json) ? json : []);
       return Array.isArray(list) ? list : [];
