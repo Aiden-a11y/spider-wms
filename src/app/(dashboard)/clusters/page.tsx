@@ -186,20 +186,33 @@ export default function ClustersPage() {
   const loadOrders = useCallback(async () => {
     setLoadingOrders(true);
     setOrders([]);
-    const body = {
-      page: 1, limit: 500, pageSize: 500,
+    const PAGE_SIZE = 500;
+    const baseBody = {
+      limit: PAGE_SIZE, pageSize: PAGE_SIZE,
       orderType: "B2C",
       warehouseCode,
       ...(selectedCustomer ? { customerCode: selectedCustomer } : {}),
     };
+    const extractList = (j: Record<string, unknown>): Record<string, unknown>[] => {
+      const list = (j?.data as Record<string, unknown>)?.list ?? (j?.data as Record<string, unknown>)?.items ?? j?.data ?? j?.list ?? (Array.isArray(j) ? j : []);
+      return Array.isArray(list) ? list : [];
+    };
     for (const ep of ["/api/wms/shipping/b2c/list", "/api/wms/shipping/list"]) {
       try {
-        const res = await fetch(ep, { method: "POST", headers, body: JSON.stringify(body) });
-        const j = await res.json().catch(() => null);
-        const list = j?.data?.list ?? j?.data?.items ?? j?.data ?? j?.list ?? (Array.isArray(j) ? j : []);
-        if (res.ok && Array.isArray(list)) {
+        const all: Record<string, unknown>[] = [];
+        let page = 1;
+        while (true) {
+          const res = await fetch(ep, { method: "POST", headers, body: JSON.stringify({ ...baseBody, page }) });
+          if (!res.ok) break;
+          const j = await res.json().catch(() => null);
+          const rows = extractList(j);
+          all.push(...rows);
+          if (rows.length < PAGE_SIZE) break;
+          page++;
+        }
+        if (all.length > 0) {
           // Only show Out-Bound Request orders (AA)
-          setOrders(list.filter((o: Record<string, unknown>) =>
+          setOrders(all.filter((o) =>
             ["AA", "Out-Bound Request"].includes(String(o.status ?? o.orderStatus ?? "AA"))
           ));
           setLoadingOrders(false);
