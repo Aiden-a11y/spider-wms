@@ -332,38 +332,22 @@ export default function ShippingTypePage() {
       const list = d?.list ?? d?.items ?? (Array.isArray(d) ? d : null) ?? json?.list ?? json?.items ?? (Array.isArray(json) ? json : []);
       return Array.isArray(list) ? list : [];
     };
-    const extractTotal = (json: Record<string, unknown>): number => {
-      const d = json?.data as Record<string, unknown> | undefined;
-      return Number(d?.totalCount ?? d?.total ?? d?.count ?? json?.totalCount ?? json?.total ?? json?.count ?? 0);
-    };
 
     for (const ep of [`/api/wms/shipping/${type}/list`, `/api/wms/shipping/list`, `/api/wms/outbound/${type}/list`, `/api/wms/outbound/list`]) {
       try {
-        const res1  = await fetch(ep, { method: "POST", headers, body: JSON.stringify({ ...baseBody, page: 1 }) });
-        if (!res1.ok) continue;
-        const json1 = await res1.json();
-        setDebugInfo({ endpoint: ep, raw: json1 });
-        const firstPage = extractList(json1);
-        const total     = extractTotal(json1);
-        const totalPages = total > 0 ? Math.ceil(total / PAGE_SIZE) : 1;
-
-        if (totalPages <= 1 || firstPage.length < PAGE_SIZE) {
-          setOrders(firstPage); setLoading(false); return;
+        const all: Order[] = [];
+        let page = 1;
+        while (true) {
+          const res  = await fetch(ep, { method: "POST", headers, body: JSON.stringify({ ...baseBody, page }) });
+          if (!res.ok) { if (page === 1) break; else { setOrders(all); setLoading(false); return; } }
+          const json = await res.json();
+          if (page === 1) setDebugInfo({ endpoint: ep, raw: json });
+          const rows = extractList(json);
+          all.push(...rows);
+          if (rows.length < PAGE_SIZE) break;
+          page++;
         }
-
-        // Fetch remaining pages sequentially
-        const all = [...firstPage];
-        for (let page = 2; page <= totalPages; page++) {
-          try {
-            const res = await fetch(ep, { method: "POST", headers, body: JSON.stringify({ ...baseBody, page }) });
-            if (!res.ok) break;
-            const json = await res.json();
-            const rows = extractList(json);
-            all.push(...rows);
-            if (rows.length < PAGE_SIZE) break;
-          } catch { break; }
-        }
-        setOrders(all); setLoading(false); return;
+        if (all.length > 0) { setOrders(all); setLoading(false); return; }
       } catch { /* try next */ }
     }
     setError("Could not load orders."); setLoading(false);
