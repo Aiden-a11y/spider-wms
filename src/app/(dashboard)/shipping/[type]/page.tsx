@@ -323,15 +323,47 @@ export default function ShippingTypePage() {
   async function loadOrders(whCode = warehouseCode, custCode = customerCode) {
     if (!whCode) return;
     setLoading(true); setError(""); setOrders([]); setColFilters({}); setSelectedCodes({});
-    const body: Record<string, unknown> = { page: 1, limit: 500, pageSize: 500, orderType: meta.orderType, warehouseCode: whCode };
-    if (custCode && custCode !== "ALL") body.customerCode = custCode;
+    const PAGE_SIZE = 500;
+    const baseBody: Record<string, unknown> = { limit: PAGE_SIZE, pageSize: PAGE_SIZE, orderType: meta.orderType, warehouseCode: whCode };
+    if (custCode && custCode !== "ALL") baseBody.customerCode = custCode;
+
+    const extractList = (json: Record<string, unknown>): unknown[] => {
+      const d = json?.data as Record<string, unknown> | undefined;
+      const list = d?.list ?? d?.items ?? (Array.isArray(d) ? d : null) ?? json?.list ?? json?.items ?? (Array.isArray(json) ? json : []);
+      return Array.isArray(list) ? list : [];
+    };
+    const extractTotal = (json: Record<string, unknown>): number => {
+      const d = json?.data as Record<string, unknown> | undefined;
+      return Number(d?.totalCount ?? d?.total ?? d?.count ?? json?.totalCount ?? json?.total ?? json?.count ?? 0);
+    };
+
     for (const ep of [`/api/wms/shipping/${type}/list`, `/api/wms/shipping/list`, `/api/wms/outbound/${type}/list`, `/api/wms/outbound/list`]) {
       try {
-        const res  = await fetch(ep, { method: "POST", headers, body: JSON.stringify(body) });
-        const json = await res.json();
-        setDebugInfo({ endpoint: ep, raw: json });
-        const list = json?.data?.list ?? json?.data?.items ?? json?.data ?? json?.list ?? json?.items ?? (Array.isArray(json) ? json : []);
-        if (res.ok) { setOrders(Array.isArray(list) ? list : []); setLoading(false); return; }
+        const res1  = await fetch(ep, { method: "POST", headers, body: JSON.stringify({ ...baseBody, page: 1 }) });
+        if (!res1.ok) continue;
+        const json1 = await res1.json();
+        setDebugInfo({ endpoint: ep, raw: json1 });
+        const firstPage = extractList(json1);
+        const total     = extractTotal(json1);
+        const totalPages = total > 0 ? Math.ceil(total / PAGE_SIZE) : 1;
+
+        if (totalPages <= 1 || firstPage.length < PAGE_SIZE) {
+          setOrders(firstPage); setLoading(false); return;
+        }
+
+        // Fetch remaining pages sequentially
+        const all = [...firstPage];
+        for (let page = 2; page <= totalPages; page++) {
+          try {
+            const res = await fetch(ep, { method: "POST", headers, body: JSON.stringify({ ...baseBody, page }) });
+            if (!res.ok) break;
+            const json = await res.json();
+            const rows = extractList(json);
+            all.push(...rows);
+            if (rows.length < PAGE_SIZE) break;
+          } catch { break; }
+        }
+        setOrders(all); setLoading(false); return;
       } catch { /* try next */ }
     }
     setError("Could not load orders."); setLoading(false);
