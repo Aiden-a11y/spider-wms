@@ -33,6 +33,7 @@ import {
   BookOpen,
   ShoppingCart,
   ArrowDownToLine,
+  ClipboardCheck,
 } from "lucide-react";
 
 type NavChild = { href: string; label: string; icon: React.ElementType };
@@ -208,8 +209,15 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* Manual link */}
-      <div className="px-3 pb-2">
+      {/* SOP + Manual links */}
+      <div className="px-3 pb-2 space-y-0.5">
+        <Link
+          href="/sop"
+          className="flex items-center gap-3 px-3 py-2 w-full text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg text-sm transition-colors"
+        >
+          <ClipboardCheck className="w-4 h-4 flex-shrink-0" />
+          SOP
+        </Link>
         <a
           href="/manual.html"
           target="_blank"
