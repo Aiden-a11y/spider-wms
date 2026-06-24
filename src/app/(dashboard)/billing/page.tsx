@@ -3431,10 +3431,11 @@ export default function BillingPage() {
     } catch {}
 
     try {
-      // Paginate until we get fewer rows than pageSize (handles 600+ orders)
+      // Paginate using API total count — no arbitrary cap
       const PAGE_SIZE = 500;
       const rawB2C: Record<string, unknown>[] = [];
-      for (let page = 1; page <= 20; page++) {
+      let totalPages = 1;
+      for (let page = 1; page <= totalPages; page++) {
         const baseBody = {
           page, pageSize: PAGE_SIZE, limit: PAGE_SIZE,
           orderType: "B2C", customerCode: customer,
@@ -3444,14 +3445,23 @@ export default function BillingPage() {
           startOrderDate: startCompact, endOrderDate: endCompact,
         };
         let pageRows: Record<string, unknown>[] = [];
+        let totalCount = 0;
         for (const ep of ["/api/wms/shipping/b2c/list", "/api/wms/shipping/list"]) {
           const j = await fetch(ep, { method: "POST", headers, body: JSON.stringify(baseBody) }).then((r) => r.json()).catch(() => null);
           if (!j) continue;
           const rows: Record<string, unknown>[] = j?.data?.list ?? j?.data?.items ?? j?.data ?? j?.list ?? [];
-          if (Array.isArray(rows) && rows.length > 0) { pageRows = rows; break; }
+          if (Array.isArray(rows) && rows.length > 0) {
+            pageRows = rows;
+            totalCount = Number(j?.data?.total ?? j?.total ?? j?.data?.count ?? rows.length);
+            break;
+          }
         }
         rawB2C.push(...pageRows);
-        if (pageRows.length < PAGE_SIZE) break; // last page
+        // Set total pages from first response
+        if (page === 1 && totalCount > PAGE_SIZE) {
+          totalPages = Math.ceil(totalCount / PAGE_SIZE);
+        }
+        if (pageRows.length < PAGE_SIZE) break; // no more data
       }
       const listB2C = Array.isArray(rawB2C) ? rawB2C.filter(isShippingComplete) : [];
       if (listB2C.length > 0) {
