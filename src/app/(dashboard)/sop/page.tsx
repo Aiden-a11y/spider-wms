@@ -64,7 +64,16 @@ function Step({ n, title, children, notice, warn, important }: {
   );
 }
 
-function ScreenshotBox({ label }: { label: string }) {
+function ScreenshotBox({ label, src }: { label: string; src?: string }) {
+  if (src) {
+    return (
+      <div className="w-full rounded-xl overflow-hidden border border-slate-200 shadow-sm">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={src} alt={label} className="w-full object-cover" />
+        <div className="px-3 py-1.5 bg-slate-50 border-t border-slate-200 text-xs text-slate-400 font-medium">{label}</div>
+      </div>
+    );
+  }
   return (
     <div className="w-full rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 flex flex-col items-center justify-center py-8 gap-2 text-slate-400 text-xs font-medium select-none">
       <FileText className="w-6 h-6 opacity-40" />
@@ -163,7 +172,7 @@ export default function SopPage() {
               ))}
             </div>
           </Card>
-          <ScreenshotBox label="Dashboard home — B2C / B2B / Inbound order counts" />
+          <ScreenshotBox label="Dashboard home — B2C / B2B / Inbound order counts" src="/sop/sop_dashboard.png" />
         </Section>
 
         {/* ── 02 Priority ── */}
@@ -201,7 +210,7 @@ export default function SopPage() {
                 <p>Navigate to <strong>Shipping → B2C Shipping</strong>, then click <strong>"Batch Pick"</strong> in the top-right area.</p>
                 <p>The system automatically groups orders that share identical SKU configurations.</p>
               </Step>
-              <ScreenshotBox label="B2C Shipping page — Batch Pick button location" />
+              <ScreenshotBox label="B2C Shipping page — Batch Pick button location" src="/sop/sop_b2c_shipping.png" />
 
               <Step n={2} title="Verify Batch Quantities Against WMS Total Picking"
                 notice="Confirm that the total SKU quantities shown in each detected batch match the Total Picking quantities in the original WMS. Report any discrepancy to your manager before creating the batch.">
@@ -230,7 +239,7 @@ export default function SopPage() {
                 <p>Click <strong>"Assign to All Orders"</strong> to apply the location to every order in the batch at once.</p>
                 <p>Watch the progress counter — wait for it to reach 100% before moving to the next batch.</p>
               </Step>
-              <ScreenshotBox label="Batch Pick page — Location Assign panel with progress" />
+              <ScreenshotBox label="Batch Pick page — Location Assign panel with progress" src="/sop/sop_batch_pick.png" />
 
               <Step n={7} title="Start Mobile Picking"
                 notice="Once all batches are assigned, they will appear in the mobile app and are ready to pick.">
@@ -270,7 +279,7 @@ export default function SopPage() {
                 <p>Go to <strong>Cluster Pick</strong> in the left sidebar, then click <strong>"Start Cluster Pick"</strong>.</p>
                 <p>The system will scan current B2C orders and group them by proximity of picking locations.</p>
               </Step>
-              <ScreenshotBox label="Cluster Pick page — Start button and progress indicator" />
+              <ScreenshotBox label="Cluster Pick page — Start button and progress indicator" src="/sop/sop_cluster_pick.png" />
 
               <Step n={2} title="Review Items Marked 'N' (Out of Stock at Pick Location)" important>
                 <p>Any SKU flagged with <strong className="text-red-600">"N"</strong> does not have sufficient inventory at the designated picking location.</p>
@@ -284,7 +293,7 @@ export default function SopPage() {
                   </li>
                 </ul>
               </Step>
-              <ScreenshotBox label="'N' items — Cluster Pick page footer / Replenishment page" />
+              <ScreenshotBox label="'N' items — Replenishment page" src="/sop/sop_replenishment.png" />
 
               <Step n={3} title="Print Replenishment Ticket → Replenish Stock" important
                 warn="Do NOT start cluster picking until all 'N' items have been replenished and confirmed at their pick locations. Starting picks with missing stock will cause mid-pick interruptions and order holds.">
