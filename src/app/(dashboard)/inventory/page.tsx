@@ -483,8 +483,6 @@ export default function InventoryPage() {
         : Array.isArray(json?.data?.list) ? json.data.list
         : Array.isArray(json?.list) ? json.list
         : Array.isArray(json) ? json : [];
-      // debug: log first item so we can see real field names
-      if (arr.length > 0) console.log("[loc-search] sample row:", arr[0]);
       setLocResults(arr.slice(0, 50));
       setLocDropOpen(arr.length > 0);
     } catch { setLocResults([]); setLocDropOpen(false); }
@@ -523,7 +521,6 @@ export default function InventoryPage() {
     const bn = String(loc.bayName      ?? loc.bay      ?? loc.bayNo      ?? "");
     const ln = String(loc.levelName    ?? loc.level    ?? loc.levelNo    ?? "");
     const pn = String(loc.positionName ?? loc.position ?? loc.positionNo ?? "");
-    console.log("[selectLocation] parts:", { zn, an, bn, ln, pn, code, raw: loc });
     setLocSearch(code);
     setAdjustForm((f) => ({
       ...f,
@@ -625,7 +622,6 @@ export default function InventoryPage() {
         if (arr.length > 0 && arr[0].warehouseCd) {
           warehouseCdFromLoc = String(arr[0].warehouseCd);
         }
-        console.log("[pre-adjust] location-search done, warehouseCd:", warehouseCdFromLoc, "results:", arr.length);
       }
     } catch (e) {
       console.warn("[pre-adjust] location-search failed (non-fatal):", e);
@@ -650,7 +646,6 @@ export default function InventoryPage() {
     // strip undefined (but keep empty strings — API expects them)
     Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
     try {
-      console.log("[inventory/adjust] payload:", payload);
       const res = await fetch("/api/wms/inventory/adjust", {
         method: "POST",
         headers,
@@ -658,7 +653,6 @@ export default function InventoryPage() {
       });
       const text = await res.text();
       const json = text ? JSON.parse(text) : {};
-      console.log("[inventory/adjust] status:", res.status, "body:", json);
       if (!res.ok) {
         const msg = json?.message ?? json?.error ?? json?.msg ?? JSON.stringify(json) ?? `HTTP ${res.status}`;
         return { ok: false, msg: `HTTP ${res.status}: ${msg}` };

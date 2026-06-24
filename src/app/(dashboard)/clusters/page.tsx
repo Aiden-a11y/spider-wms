@@ -134,6 +134,7 @@ export default function ClustersPage() {
   const [checkProgress, setCheckProgress] = useState({ done: 0, total: 0 });
   const [checkedAt, setCheckedAt] = useState<string | null>(null);
   const checkAbortRef = useRef(false);
+  const checkAbortCtrlRef = useRef<AbortController | null>(null);
   const stockCacheRef     = useRef<Map<string, Record<string, unknown>[]>>(new Map());
   const stockRemainingRef = useRef<Map<string, number>>(new Map());
   const [replenSkus, setReplenSkus] = useState<Array<{
@@ -343,12 +344,18 @@ export default function ClustersPage() {
 
   // ── Cluster eligibility check ─────────────────────────────────────────────
   async function runClusterCheck(forceRefresh = false) {
-    if (checkRunning) { checkAbortRef.current = true; setCheckRunning(false); return; }
+    if (checkRunning) {
+      checkAbortRef.current = true;
+      checkAbortCtrlRef.current?.abort();
+      setCheckRunning(false);
+      return;
+    }
     if (forceRefresh) {
       fetch(`/api/cluster-check?warehouseCode=${encodeURIComponent(warehouseCode)}&customerCode=${encodeURIComponent(selectedCustomer)}`, { method: "DELETE" }).catch(() => {});
       setCheckedAt(null);
     }
     checkAbortRef.current = false;
+    checkAbortCtrlRef.current = new AbortController();
     stockCacheRef.current.clear();
     stockRemainingRef.current.clear();
     setCheckRunning(true);
@@ -391,7 +398,7 @@ export default function ClustersPage() {
         `/api/wms/shipping/items/${encodeURIComponent(code)}`,
       ]) {
         try {
-          const res = await fetch(ep, { headers });
+          const res = await fetch(ep, { headers, signal: checkAbortCtrlRef.current?.signal });
           const j = await res.json().catch(() => ({})) as Record<string, unknown>;
           const asgn = getItemAssignments(j);
           const itms = getLineItems(j);
@@ -444,7 +451,7 @@ export default function ClustersPage() {
         } else {
           const res = await fetch(
             `/api/wms/shipping/available-stock/${encodeURIComponent(warehouseCode)}/${encodeURIComponent(custCode)}?productSku=${encodeURIComponent(sku)}`,
-            { headers }
+            { headers, signal: checkAbortCtrlRef.current?.signal }
           );
           const j = await res.json().catch(() => ({})) as Record<string, unknown>;
           allStock = (Array.isArray(j?.data) ? j.data : []) as Record<string, unknown>[];

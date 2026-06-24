@@ -271,10 +271,10 @@ export default function ReceivingPage() {
       setRecvInfo(saved);
 
       // 2) WMS comment sync — only for non-Complete orders
-      const orderStatus = String(d.status ?? "");
+      const orderStatus = String(detail?.status ?? "");
       if (orderStatus !== "DA") {
         const MARKER = "--- RECEIVING INFO ---";
-        const existingComment = String(d.comment ?? "").trim();
+        const existingComment = String(detail?.comment ?? "").trim();
         const markerIdx = existingComment.indexOf(MARKER);
         const cleanComment = markerIdx >= 0
           ? existingComment.slice(0, markerIdx).trim()
@@ -323,11 +323,9 @@ export default function ReceivingPage() {
         let synced = false;
         const { method, url } = candidates[0];
         const r = await fetch(url, { method, headers, body: JSON.stringify(wmsBody) });
-        const txt = await r.text();
-        console.log(`[WMS ${method} ${url}] → ${r.status}`, txt.slice(0, 400));
         synced = r.ok;
 
-        setRecvInfoMsg(synced ? "Saved & synced to WMS" : "Saved (WMS sync failed — check console)");
+        setRecvInfoMsg(synced ? "Saved & synced to WMS" : "Saved locally (WMS sync failed — please retry)");
       } else {
         setRecvInfoMsg("Saved (WMS sync skipped — order is Complete)");
       }
