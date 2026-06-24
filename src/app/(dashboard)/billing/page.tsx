@@ -3439,6 +3439,11 @@ export default function BillingPage() {
         const baseBody = {
           page, pageSize: PAGE_SIZE, limit: PAGE_SIZE,
           orderType: "B2C", customerCode: customer,
+          // outDate-based filters (billing is by ship date)
+          outDateFrom: startDash, outDateTo: endDash,
+          outDate: startDash, outDateEnd: endDash,
+          shippingDateFrom: startDash, shippingDateTo: endDash,
+          // orderDate as fallback (WMS may not support outDate filter)
           startDate: startDash, endDate: endDash,
           fromDate: startDash,  toDate: endDash,
           orderDateFrom: startDash, orderDateTo: endDash,
