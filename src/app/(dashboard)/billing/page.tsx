@@ -1025,7 +1025,7 @@ function addCombinedInboundSheet(
 /** Add a combined B2C sheet (all customers). Customer in col A, data shifted right by 1. */
 function addCombinedB2CSheet(
   wb: ExcelJS.Workbook,
-  allData: { custCode: string; orders: Record<string, unknown>[] }[]
+  allData: { custCode: string; orders: Record<string, unknown>[]; orderEdits: Record<string, Record<string, number>> }[]
 ): { sheetName: string } {
   const sheetName = "B2C";
   const ws = wb.addWorksheet(sheetName);
@@ -1037,8 +1037,11 @@ function addCombinedB2CSheet(
     { width: 12 }, // E: Total Qty
     { width: 12 }, // F: +1 Order
     { width: 12 }, // G: Extra Picks
+    { width: 10 }, // H: Label
+    { width: 10 }, // I: Fragile
+    { width: 10 }, // J: Inserts
   ];
-  const hdrRow = ws.addRow(["Customer", "Order Code", "Shipping Order No", "Date", "Total Qty", "+1 Order", "Extra Picks"]);
+  const hdrRow = ws.addRow(["Customer", "Order Code", "Shipping Order No", "Date", "Total Qty", "+1 Order", "Extra Picks", "Label", "Fragile", "Inserts"]);
   hdrRow.height = 16;
   hdrRow.eachCell((cell) => {
     cell.font = { bold: true, color: { argb: C.white }, size: 10 };
@@ -1048,14 +1051,19 @@ function addCombinedB2CSheet(
   });
 
   let globalRowIdx = 0;
-  for (const { custCode, orders } of allData) {
+  for (const { custCode, orders, orderEdits } of allData) {
     for (const order of orders) {
       const code    = String(order.shippingOrderCode ?? order.orderCode ?? "");
       const shipNo  = String(order.shippingOrderNo ?? "");
       const date    = String(order.outDate ?? order.deliveryDate ?? order.shippingDate ?? "");
       const qty     = Number(order.totalQty ?? order.orderQty ?? 0);
-      const extra   = Math.max(0, qty - 5);
-      const r = ws.addRow([custCode, code, shipNo, date, qty, 1, extra]);
+      const tasks   = parseTaskComment(String(order.comment ?? ""));
+      const ov      = orderEdits[code] ?? {};
+      const extra   = ov["b2c_extra_pick"] ?? Math.max(0, qty - 5);
+      const label   = ov["b2c_label"]      ?? Math.max(1, (tasks["Labels"] ?? 0) + (tasks["Amazon Labels"] ?? 0) + (tasks["FBA Labeling"] ?? 0));
+      const fragile = ov["b2c_fragile"]    ?? ((tasks["Fragile Pack"] ?? 0) + (tasks["Fragile"] ?? 0));
+      const insert  = ov["b2c_insert"]     ?? (tasks["Inserts"] ?? 0);
+      const r = ws.addRow([custCode, code, shipNo, date, qty, 1, extra, label, fragile, insert]);
       r.height = 15;
       r.eachCell((cell, col) => {
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: globalRowIdx % 2 === 0 ? C.white : C.rowAlt } };
@@ -1075,6 +1083,9 @@ function addCombinedB2CSheet(
       { formula: `=SUM(E2:E${lastDataRow})`, result: 0 },
       { formula: `=SUM(F2:F${lastDataRow})`, result: 0 },
       { formula: `=SUM(G2:G${lastDataRow})`, result: 0 },
+      { formula: `=SUM(H2:H${lastDataRow})`, result: 0 },
+      { formula: `=SUM(I2:I${lastDataRow})`, result: 0 },
+      { formula: `=SUM(J2:J${lastDataRow})`, result: 0 },
     ]);
     totRow.height = 16;
     ws.mergeCells(totRow.number, 1, totRow.number, 4);
@@ -1316,7 +1327,8 @@ function addB2CDetailSheet(
   wb: ExcelJS.Workbook,
   custCode: string,
   orders: Record<string, unknown>[],
-  sheetNameOverride?: string
+  sheetNameOverride?: string,
+  orderEdits: Record<string, Record<string, number>> = {}
 ): { sheetName: string; rowCount: number } {
   const sheetName = (sheetNameOverride ?? `${custCode}_B2C`).slice(0, 31);
   const ws = wb.addWorksheet(sheetName);
@@ -1326,8 +1338,11 @@ function addB2CDetailSheet(
     { width: 12 }, // C: Total Qty
     { width: 12 }, // D: +1 Order
     { width: 12 }, // E: Extra Picks
+    { width: 10 }, // F: Label
+    { width: 10 }, // G: Fragile
+    { width: 10 }, // H: Inserts
   ];
-  const hdrRow = ws.addRow(["Order Code", "Date", "Total Qty", "+1 Order", "Extra Picks"]);
+  const hdrRow = ws.addRow(["Order Code", "Date", "Total Qty", "+1 Order", "Extra Picks", "Label", "Fragile", "Inserts"]);
   hdrRow.height = 16;
   hdrRow.eachCell((cell) => {
     cell.font = { bold: true, color: { argb: C.white }, size: 10 };
@@ -1338,11 +1353,16 @@ function addB2CDetailSheet(
 
   let rowIdx = 0;
   for (const order of orders) {
-    const code  = String(order.shippingOrderCode ?? order.orderCode ?? "");
-    const date  = String(order.outDate ?? order.deliveryDate ?? order.shippingDate ?? "");
-    const qty   = Number(order.totalQty ?? order.orderQty ?? 0);
-    const extra = Math.max(0, qty - 5);
-    const r = ws.addRow([code, date, qty, 1, extra]);
+    const code   = String(order.shippingOrderCode ?? order.orderCode ?? "");
+    const date   = String(order.outDate ?? order.deliveryDate ?? order.shippingDate ?? "");
+    const qty    = Number(order.totalQty ?? order.orderQty ?? 0);
+    const tasks  = parseTaskComment(String(order.comment ?? ""));
+    const ov     = orderEdits[code] ?? {};
+    const extra  = ov["b2c_extra_pick"] ?? Math.max(0, qty - 5);
+    const label  = ov["b2c_label"]      ?? Math.max(1, (tasks["Labels"] ?? 0) + (tasks["Amazon Labels"] ?? 0) + (tasks["FBA Labeling"] ?? 0));
+    const fragile = ov["b2c_fragile"]   ?? ((tasks["Fragile Pack"] ?? 0) + (tasks["Fragile"] ?? 0));
+    const insert  = ov["b2c_insert"]    ?? (tasks["Inserts"] ?? 0);
+    const r = ws.addRow([code, date, qty, 1, extra, label, fragile, insert]);
     r.height = 15;
     r.eachCell((cell, col) => {
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowIdx % 2 === 0 ? C.white : C.rowAlt } };
@@ -1705,13 +1725,14 @@ function getQtyFormula(
       return { formula: `=COUNTIF('${ib}'!A:A,"${cust}")`, result: fallbackQty };
     }
 
-    // B2C combined: A=Customer B=OrderCode C=ShippingOrderNo D=Date E=TotalQty F=+1 Order G=Extra Picks
+    // B2C combined: A=Customer B=OrderCode C=ShippingOrderNo D=Date E=TotalQty F=+1 Order G=Extra Picks H=Label I=Fragile J=Inserts
     if (itemId === "b2c_order" && c) {
       return { formula: `=COUNTIF('${c}'!A:A,"${cust}")`, result: fallbackQty };
     }
-    if (itemId === "b2c_pick_piece" && c) {
-      return { formula: `=SUMIF('${c}'!A:A,"${cust}",'${c}'!G:G)`, result: fallbackQty };
-    }
+    if (itemId === "b2c_pick_piece"    && c) return { formula: `=SUMIF('${c}'!A:A,"${cust}",'${c}'!G:G)`, result: fallbackQty };
+    if (itemId === "fulfillment_label"  && c) return { formula: `=SUMIF('${c}'!A:A,"${cust}",'${c}'!H:H)`, result: fallbackQty };
+    if (itemId === "b2c_fragile"        && c) return { formula: `=SUMIF('${c}'!A:A,"${cust}",'${c}'!I:I)`, result: fallbackQty };
+    if (itemId === "fulfillment_insert" && c) return { formula: `=SUMIF('${c}'!A:A,"${cust}",'${c}'!J:J)`, result: fallbackQty };
   } else if (refs.allCustomers) {
     // ── Combined sheets: SUM entire column across ALL customers (no filter) ──
     // B2B combined layout: A=Customer B=OrderCode C=ShippingOrderNo D=Date E=Pick/Piece F=Pick/Carton G=Pick/Pallet
@@ -1757,13 +1778,14 @@ function getQtyFormula(
       return { formula: `=COUNTA('${ib}'!B2:B9999)`, result: fallbackQty };
     }
 
-    // B2C combined layout: A=Customer B=OrderCode C=ShippingOrderNo D=Date E=TotalQty F=+1 Order G=Extra Picks
+    // B2C combined layout: A=Customer B=OrderCode C=ShippingOrderNo D=Date E=TotalQty F=+1 Order G=Extra Picks H=Label I=Fragile J=Inserts
     if (itemId === "b2c_order" && c) {
       return { formula: `=COUNTA('${c}'!B2:B9999)`, result: fallbackQty };
     }
-    if (itemId === "b2c_pick_piece" && c) {
-      return { formula: `=SUM('${c}'!G2:G9999)`, result: fallbackQty };
-    }
+    if (itemId === "b2c_pick_piece"    && c) return { formula: `=SUM('${c}'!G2:G9999)`, result: fallbackQty };
+    if (itemId === "fulfillment_label"  && c) return { formula: `=SUM('${c}'!H2:H9999)`, result: fallbackQty };
+    if (itemId === "b2c_fragile"        && c) return { formula: `=SUM('${c}'!I2:I9999)`, result: fallbackQty };
+    if (itemId === "fulfillment_insert" && c) return { formula: `=SUM('${c}'!J2:J9999)`, result: fallbackQty };
   } else {
     // ── Single-customer sheets (no filterCustomer) ──
     // B2B columns (original layout): A=OrderCode B=Date C=Pick/Piece D=Pick/Carton E=Pick/Pallet
@@ -1806,9 +1828,11 @@ function getQtyFormula(
     if (itemId === "b2c_order" && c) {
       return { formula: `=COUNTA('${c}'!A2:A9999)`, result: fallbackQty };
     }
-    if (itemId === "b2c_pick_piece" && c) {
-      return { formula: `=SUM('${c}'!E2:E9999)`, result: fallbackQty };
-    }
+    // Single-customer B2C: A=OrderCode B=Date C=TotalQty D=+1 Order E=Extra Picks F=Label G=Fragile H=Inserts
+    if (itemId === "b2c_pick_piece"    && c) return { formula: `=SUM('${c}'!E2:E9999)`, result: fallbackQty };
+    if (itemId === "fulfillment_label"  && c) return { formula: `=SUM('${c}'!F2:F9999)`, result: fallbackQty };
+    if (itemId === "b2c_fragile"        && c) return { formula: `=SUM('${c}'!G2:G9999)`, result: fallbackQty };
+    if (itemId === "fulfillment_insert" && c) return { formula: `=SUM('${c}'!H2:H9999)`, result: fallbackQty };
   }
 
   // Storage → Storage_Avg!D{row} (rows 3–9: row 1=date label, row 2=col header, rows 3+ = data)
@@ -2023,7 +2047,7 @@ async function exportInvoiceToExcel(
         refs.inboundDataEndRow = dataEndRow;
       }
       if (source.b2c.length > 0) {
-        const { sheetName: b2cSn } = addB2CDetailSheet(wb, custCode, source.b2c, "B2C");
+        const { sheetName: b2cSn } = addB2CDetailSheet(wb, custCode, source.b2c, "B2C", orderEdits ?? {});
         refs.b2cSheet = b2cSn;
       }
     }
@@ -2371,7 +2395,7 @@ async function exportAllToExcel(
   // ── Build combined data arrays (shared by both modes) ──
   const allB2BData:     { custCode: string; orders: Record<string, unknown>[]; orderEdits: Record<string, Record<string, number>> }[] = [];
   const allInboundData: { custCode: string; orders: Record<string, unknown>[]; orderEdits: Record<string, Record<string, number>> }[] = [];
-  const allB2CData:     { custCode: string; orders: Record<string, unknown>[] }[] = [];
+  const allB2CData:     { custCode: string; orders: Record<string, unknown>[]; orderEdits: Record<string, Record<string, number>> }[] = [];
 
   for (const inv of invoices) {
     const code   = inv.customer;
@@ -2380,7 +2404,7 @@ async function exportAllToExcel(
     if (!source) continue;
     if (source.b2b.length > 0)       allB2BData.push({ custCode: code, orders: source.b2b, orderEdits: edits });
     if (source.receiving.length > 0) allInboundData.push({ custCode: code, orders: source.receiving, orderEdits: edits });
-    if (source.b2c.length > 0)       allB2CData.push({ custCode: code, orders: source.b2c });
+    if (source.b2c.length > 0)       allB2CData.push({ custCode: code, orders: source.b2c, orderEdits: edits });
   }
 
   // ── Add combined raw-data sheets ──
@@ -3476,18 +3500,20 @@ export default function BillingPage() {
         if (extraPicks > 0) updates["b2c_pick_piece"] = extraPicks;
 
         // Parse B2C task comments for labels, inserts, fragile, labor
+        // Label: minimum 1 per order (shipping label is always required)
         let b2cLabelQty = 0, b2cInsertQty = 0, b2cFragileQty = 0;
         let b2cLaborRegular = 0, b2cLaborOT = 0, b2cLaborWeekend = 0;
         for (const order of listB2C) {
           const tasks = parseTaskComment(String(order.comment ?? ""));
-          b2cLabelQty   += (tasks["Labels"] ?? 0) + (tasks["Amazon Labels"] ?? 0) + (tasks["FBA Labeling"] ?? 0);
+          const commentLabels = (tasks["Labels"] ?? 0) + (tasks["Amazon Labels"] ?? 0) + (tasks["FBA Labeling"] ?? 0);
+          b2cLabelQty   += Math.max(1, commentLabels); // at least 1 label per order
           b2cInsertQty  += (tasks["Inserts"] ?? 0);
           b2cFragileQty += (tasks["Fragile Pack"] ?? 0) + (tasks["Fragile"] ?? 0);
           b2cLaborRegular += tasks["Labor Hours"]                   ?? 0;
           b2cLaborOT      += tasks["Labor Hours (OT)"]              ?? 0;
           b2cLaborWeekend += tasks["Labor Hours (Weekend/Holiday)"] ?? 0;
         }
-        if (b2cLabelQty    > 0) updates["fulfillment_label"]  = (updates["fulfillment_label"]  as number ?? 0) + b2cLabelQty;
+        updates["fulfillment_label"]  = (updates["fulfillment_label"]  as number ?? 0) + b2cLabelQty;
         if (b2cInsertQty   > 0) updates["fulfillment_insert"] = (updates["fulfillment_insert"] as number ?? 0) + b2cInsertQty;
         if (b2cFragileQty  > 0) updates["b2c_fragile"] = b2cFragileQty;
         if (b2cLaborRegular > 0) updates["labor_regular"]    = (updates["labor_regular"]    as number ?? 0) + b2cLaborRegular;
@@ -5533,45 +5559,131 @@ export default function BillingPage() {
                   {sourceTab === "b2c" && (
                     wmsSource.b2c.length === 0 ? (
                       <p className="text-center text-sm text-slate-400 py-8">No B2C orders this period</p>
-                    ) : (
-                      <table className="w-full text-xs">
-                        <thead className="bg-slate-50 sticky top-0">
-                          <tr>
-                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">Order Code</th>
-                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">Shipping Order No</th>
-                            <th className="px-3 py-2 text-left text-slate-500 font-semibold">Date</th>
-                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">Total Qty</th>
-                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">+1 Order</th>
-                            <th className="px-3 py-2 text-right text-slate-500 font-semibold">+Extra Picks</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {wmsSource.b2c.map((o, i) => {
-                            const qty = Number(o.totalQty ?? o.orderQty ?? 0);
-                            const extra = Math.max(0, qty - 5);
-                            const b2cDateVal = String(o.outDate ?? o.deliveryDate ?? o.shippingDate ?? "");
-                            const b2cMissingDate = !b2cDateVal || b2cDateVal.length < 6;
-                            return (
-                              <tr key={i} className={`border-b border-slate-50 ${b2cMissingDate ? "bg-yellow-50" : "hover:bg-slate-50"}`}>
-                                <td className="px-3 py-1.5 font-mono text-teal-600">{String(o.shipOrderCode ?? o.orderCode ?? "—")}</td>
-                                <td className="px-3 py-1.5 font-mono text-slate-400 text-[10px] whitespace-nowrap">{String(o.shippingOrderNo ?? "—")}</td>
-                                <td className={`px-3 py-1.5 whitespace-nowrap font-semibold ${b2cMissingDate ? "text-yellow-600" : "text-slate-500"}`}>
-                                  {b2cMissingDate ? "⚠ No date" : b2cDateVal}
-                                </td>
-                                <td className="px-3 py-1.5 text-right">{qty}</td>
-                                <td className="px-3 py-1.5 text-right font-semibold text-teal-600">1</td>
-                                <td className="px-3 py-1.5 text-right font-semibold text-teal-600">{extra > 0 ? extra : "—"}</td>
+                    ) : (() => {
+                      const setOvB2C = (orderCode: string, key: string, val: string) => {
+                        const num = val === "" ? undefined : Number(val);
+                        setOrderEdits(prev => {
+                          const next = { ...prev, [orderCode]: { ...(prev[orderCode] ?? {}) } };
+                          if (num === undefined) delete next[orderCode][key];
+                          else next[orderCode][key] = num;
+                          let totExtra = 0, totLabel = 0, totFragile = 0, totInsert = 0;
+                          wmsSource!.b2c.forEach((ord, idx) => {
+                            const c = String(ord.shippingOrderCode ?? ord.orderCode ?? idx);
+                            const ov2 = next[c] ?? {};
+                            const q = Number(ord.totalQty ?? ord.orderQty ?? 0);
+                            const t = parseTaskComment(String(ord.comment ?? ""));
+                            totExtra   += ov2["b2c_extra_pick"] ?? Math.max(0, q - 5);
+                            totLabel   += ov2["b2c_label"]      ?? Math.max(1, (t["Labels"] ?? 0) + (t["Amazon Labels"] ?? 0) + (t["FBA Labeling"] ?? 0));
+                            totFragile += ov2["b2c_fragile"]    ?? ((t["Fragile Pack"] ?? 0) + (t["Fragile"] ?? 0));
+                            totInsert  += ov2["b2c_insert"]     ?? (t["Inserts"] ?? 0);
+                          });
+                          setEditing(ep => {
+                            if (!ep) return ep;
+                            const items = ep.lineItems.map(item => {
+                              if (item.id === "b2c_pick_piece")    return { ...item, qty: totExtra,   autoFetched: false };
+                              if (item.id === "fulfillment_label")  return { ...item, qty: totLabel,   autoFetched: false };
+                              if (item.id === "b2c_fragile")        return { ...item, qty: totFragile, autoFetched: false };
+                              if (item.id === "fulfillment_insert") return { ...item, qty: totInsert,  autoFetched: false };
+                              return item;
+                            });
+                            return { ...ep, lineItems: items, subtotals: calcSubtotals(items), total: calcTotal(items) };
+                          });
+                          return next;
+                        });
+                      };
+
+                      const inpCls = (modified?: boolean) =>
+                        `w-14 text-right text-xs font-semibold rounded px-1 py-0.5 border ${
+                          modified
+                            ? "border-yellow-400 bg-yellow-100 hover:bg-yellow-50 focus:border-yellow-500"
+                            : "border-slate-300 bg-slate-50 hover:bg-white"
+                        } focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200 transition-colors`;
+
+                      let totExtra = 0, totLabel = 0, totFragile = 0, totInsert = 0;
+                      wmsSource.b2c.forEach((o, idx) => {
+                        const c = String(o.shippingOrderCode ?? o.orderCode ?? idx);
+                        const ov2 = orderEdits[c] ?? {};
+                        const q = Number(o.totalQty ?? o.orderQty ?? 0);
+                        const t = parseTaskComment(String(o.comment ?? ""));
+                        totExtra   += ov2["b2c_extra_pick"] ?? Math.max(0, q - 5);
+                        totLabel   += ov2["b2c_label"]      ?? Math.max(1, (t["Labels"] ?? 0) + (t["Amazon Labels"] ?? 0) + (t["FBA Labeling"] ?? 0));
+                        totFragile += ov2["b2c_fragile"]    ?? ((t["Fragile Pack"] ?? 0) + (t["Fragile"] ?? 0));
+                        totInsert  += ov2["b2c_insert"]     ?? (t["Inserts"] ?? 0);
+                      });
+
+                      return (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs min-w-max">
+                            <thead className="bg-slate-50 sticky top-0 z-10">
+                              <tr>
+                                <th className="px-3 py-2 text-left text-slate-500 font-semibold">Order Code</th>
+                                <th className="px-3 py-2 text-left text-slate-500 font-semibold">Shipping Order No</th>
+                                <th className="px-3 py-2 text-left text-slate-500 font-semibold">Date</th>
+                                <th className="px-3 py-2 text-right text-slate-500 font-semibold">Total Qty</th>
+                                <th className="px-3 py-2 text-right text-slate-500 font-semibold">+1 Order</th>
+                                <th className="px-2 py-2 text-right text-teal-600 font-semibold">+Extra Picks</th>
+                                <th className="px-2 py-2 text-right text-teal-600 font-semibold">Label</th>
+                                <th className="px-2 py-2 text-right text-blue-600 font-semibold">Fragile</th>
+                                <th className="px-2 py-2 text-right text-blue-600 font-semibold">Inserts</th>
                               </tr>
-                            );
-                          })}
-                          <tr className="bg-teal-50 border-t border-teal-100 font-semibold text-teal-700">
-                            <td colSpan={4} className="px-3 py-1.5">Total</td>
-                            <td className="px-3 py-1.5 text-right">{wmsSource.b2c.length}</td>
-                            <td className="px-3 py-1.5 text-right">{wmsSource.b2c.reduce((s, o) => s + Math.max(0, Number(o.totalQty ?? o.orderQty ?? 0) - 5), 0)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    )
+                            </thead>
+                            <tbody>
+                              {wmsSource.b2c.map((o, i) => {
+                                const code = String(o.shippingOrderCode ?? o.orderCode ?? i);
+                                const ov2  = orderEdits[code] ?? {};
+                                const qty  = Number(o.totalQty ?? o.orderQty ?? 0);
+                                const tasks = parseTaskComment(String(o.comment ?? ""));
+                                const defExtra   = Math.max(0, qty - 5);
+                                const defLabel   = Math.max(1, (tasks["Labels"] ?? 0) + (tasks["Amazon Labels"] ?? 0) + (tasks["FBA Labeling"] ?? 0));
+                                const defFragile = (tasks["Fragile Pack"] ?? 0) + (tasks["Fragile"] ?? 0);
+                                const defInsert  = tasks["Inserts"] ?? 0;
+                                const extra   = ov2["b2c_extra_pick"] ?? defExtra;
+                                const label   = ov2["b2c_label"]      ?? defLabel;
+                                const fragile = ov2["b2c_fragile"]    ?? defFragile;
+                                const insert  = ov2["b2c_insert"]     ?? defInsert;
+                                const b2cDateVal = String(o.outDate ?? o.deliveryDate ?? o.shippingDate ?? "");
+                                const b2cMissingDate = !b2cDateVal || b2cDateVal.length < 6;
+                                return (
+                                  <tr key={i} className={`border-b border-slate-50 ${b2cMissingDate ? "bg-yellow-50" : "hover:bg-slate-50"}`}>
+                                    <td className="px-3 py-1.5 font-mono text-teal-600">{String(o.shippingOrderCode ?? o.orderCode ?? "—")}</td>
+                                    <td className="px-3 py-1.5 font-mono text-slate-400 text-[10px] whitespace-nowrap">{String(o.shippingOrderNo ?? "—")}</td>
+                                    <td className={`px-3 py-1.5 whitespace-nowrap font-semibold ${b2cMissingDate ? "text-yellow-600" : "text-slate-500"}`}>
+                                      {b2cMissingDate ? "⚠ No date" : b2cDateVal}
+                                    </td>
+                                    <td className="px-3 py-1.5 text-right">{qty}</td>
+                                    <td className="px-3 py-1.5 text-right font-semibold text-teal-600">1</td>
+                                    <td className="px-2 py-1">
+                                      <input type="number" min={0} className={inpCls("b2c_extra_pick" in ov2)}
+                                        value={extra} onChange={e => setOvB2C(code, "b2c_extra_pick", e.target.value)} />
+                                    </td>
+                                    <td className="px-2 py-1">
+                                      <input type="number" min={0} className={inpCls("b2c_label" in ov2)}
+                                        value={label} onChange={e => setOvB2C(code, "b2c_label", e.target.value)} />
+                                    </td>
+                                    <td className="px-2 py-1">
+                                      <input type="number" min={0} className={inpCls("b2c_fragile" in ov2)}
+                                        value={fragile} onChange={e => setOvB2C(code, "b2c_fragile", e.target.value)} />
+                                    </td>
+                                    <td className="px-2 py-1">
+                                      <input type="number" min={0} className={inpCls("b2c_insert" in ov2)}
+                                        value={insert} onChange={e => setOvB2C(code, "b2c_insert", e.target.value)} />
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                              <tr className="bg-teal-50 border-t border-teal-100 font-semibold text-teal-700">
+                                <td colSpan={4} className="px-3 py-1.5">Total</td>
+                                <td className="px-3 py-1.5 text-right">{wmsSource.b2c.length}</td>
+                                <td className="px-2 py-1.5 text-right">{totExtra || "—"}</td>
+                                <td className="px-2 py-1.5 text-right">{totLabel}</td>
+                                <td className="px-2 py-1.5 text-right">{totFragile || "—"}</td>
+                                <td className="px-2 py-1.5 text-right">{totInsert || "—"}</td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                      );
+                    })()
                   )}
 
                   {/* ── Returns ── */}
