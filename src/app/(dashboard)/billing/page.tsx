@@ -3431,18 +3431,28 @@ export default function BillingPage() {
     } catch {}
 
     try {
-      const j = await fetch("/api/wms/shipping/list", {
-        method: "POST", headers,
-        body: JSON.stringify({
-          page: 1, limit: 2000,
+      // Paginate until we get fewer rows than pageSize (handles 600+ orders)
+      const PAGE_SIZE = 500;
+      const rawB2C: Record<string, unknown>[] = [];
+      for (let page = 1; page <= 20; page++) {
+        const baseBody = {
+          page, pageSize: PAGE_SIZE, limit: PAGE_SIZE,
           orderType: "B2C", customerCode: customer,
           startDate: startDash, endDate: endDash,
           fromDate: startDash,  toDate: endDash,
           orderDateFrom: startDash, orderDateTo: endDash,
           startOrderDate: startCompact, endOrderDate: endCompact,
-        }),
-      }).then((r) => r.json());
-      const rawB2C: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
+        };
+        let pageRows: Record<string, unknown>[] = [];
+        for (const ep of ["/api/wms/shipping/b2c/list", "/api/wms/shipping/list"]) {
+          const j = await fetch(ep, { method: "POST", headers, body: JSON.stringify(baseBody) }).then((r) => r.json()).catch(() => null);
+          if (!j) continue;
+          const rows: Record<string, unknown>[] = j?.data?.list ?? j?.data?.items ?? j?.data ?? j?.list ?? [];
+          if (Array.isArray(rows) && rows.length > 0) { pageRows = rows; break; }
+        }
+        rawB2C.push(...pageRows);
+        if (pageRows.length < PAGE_SIZE) break; // last page
+      }
       const listB2C = Array.isArray(rawB2C) ? rawB2C.filter(isShippingComplete) : [];
       if (listB2C.length > 0) {
         source.b2c = listB2C;
