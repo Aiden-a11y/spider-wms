@@ -103,6 +103,10 @@ export default function BatchTestPage() {
   const [warehouseCode, setWarehouseCode] = useState("STOO1");
   const [customerCode, setCustomerCode] = useState("FCOUS");
 
+  // Customer dropdown
+  const [customers, setCustomers] = useState<{ code: string; name: string }[]>([]);
+  const [loadingCustomers, setLoadingCustomers] = useState(false);
+
   // Order table (expand)
   const [expandedCode, setExpandedCode] = useState<string | null>(null);
   const [orders, setOrders] = useState<Record<string, WmsOrder[]>>({});
@@ -118,6 +122,20 @@ export default function BatchTestPage() {
   // Label request
   const [labelRequesting, setLabelRequesting] = useState<Record<string, boolean>>({});
   const [labelResult, setLabelResult] = useState<Record<string, { ok: boolean; msg: string }>>({});
+
+  // ── Load customer list ────────────────────────────────────────────────────
+  const loadCustomers = useCallback(async (whCode: string) => {
+    setLoadingCustomers(true);
+    try {
+      const res = await fetch(`/api/wms/combo/customer-by-warehouse/${encodeURIComponent(whCode)}`, { headers });
+      const json = await res.json();
+      const list: Record<string, unknown>[] = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
+      setCustomers(list.map((c) => ({ code: String(c.code ?? c.id ?? c.customerCode ?? ""), name: String(c.name ?? c.customerName ?? "") })).filter((c) => c.code));
+    } catch { setCustomers([]); }
+    finally { setLoadingCustomers(false); }
+  }, [headers]);
+
+  useEffect(() => { loadCustomers(warehouseCode); }, [warehouseCode, loadCustomers]); // eslint-disable-line
 
   // ── Load batch list ────────────────────────────────────────────────────────
   const loadBatches = useCallback(async () => {
@@ -366,8 +384,14 @@ export default function BatchTestPage() {
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">Customer</label>
-            <input value={customerCode} onChange={(e) => setCustomerCode(e.target.value)} placeholder="(all)"
-              className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm w-28 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <select value={customerCode} onChange={(e) => setCustomerCode(e.target.value)}
+              disabled={loadingCustomers}
+              className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white disabled:opacity-60">
+              <option value="">(All)</option>
+              {customers.map((c) => (
+                <option key={c.code} value={c.code}>{c.name ? `${c.code} – ${c.name}` : c.code}</option>
+              ))}
+            </select>
           </div>
           <button onClick={loadBatches} disabled={loading}
             className="px-4 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors">
