@@ -71,6 +71,7 @@ const nav: NavItem[] = [
       { href: "/packing", label: "Packing", icon: PackageCheck },
       { href: "/clusters", label: "Cluster Pick", icon: ShoppingCart },
       { href: "/clusters/history", label: "Cluster History", icon: History },
+      { href: "/shipping/batch-test", label: "Batch Test", icon: Layers },
     ],
   },
   {
