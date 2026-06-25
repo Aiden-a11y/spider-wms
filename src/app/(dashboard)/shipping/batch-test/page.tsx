@@ -5,24 +5,53 @@ import { useAuth } from "@/contexts/auth-context";
 import { useRouter } from "next/navigation";
 import {
   Layers, RefreshCw, Loader2, ChevronDown, ChevronUp, Search,
-  Package, Calendar, Warehouse, Users, CheckCircle2, Clock, AlertCircle,
+  Package, Calendar, Warehouse, Users, CheckCircle2, Clock, AlertCircle, Truck,
 } from "lucide-react";
 
-type WmsBatch = Record<string, unknown>;
-type WmsOrder = Record<string, unknown>;
+type WmsBatch = {
+  batchCode: string;
+  batchName: string;
+  batchDate: string;
+  warehouseCode: string;
+  customerCode: string;
+  orderCount: number;
+  remark: string;
+  createdBy: string;
+  createdAt: string;
+};
 
-function statusBadge(status: string) {
-  const s = status.toUpperCase();
-  if (s === "AA" || s.includes("REQUEST") || s.includes("OUTBOUND")) {
-    return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200"><Clock className="w-3 h-3" />Out-Bound Request</span>;
+type WmsOrder = {
+  shippingOrderCode: string;
+  shippingOrderNo: string;
+  warehouseCode: string;
+  customerCode: string;
+  customerName: string;
+  status: string;
+  statusName: string;
+  orderDate: string;
+  outDate: string;
+  consigneeName: string;
+  trackingNo: string;
+  carrierName: string;
+  serviceName: string;
+  itemCount: number;
+  totalQty: number;
+  batchCode: string;
+  batchName: string;
+};
+
+function StatusBadge({ status, name }: { status: string; name: string }) {
+  const label = name || status;
+  if (status === "FA" || name.toLowerCase().includes("complete")) {
+    return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-50 text-green-700 border border-green-200"><CheckCircle2 className="w-3 h-3" />{label}</span>;
   }
-  if (s === "BB" || s.includes("PICKING") || s.includes("PROGRESS")) {
-    return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200"><Loader2 className="w-3 h-3" />In Progress</span>;
+  if (status === "AA" || name.toLowerCase().includes("request") || name.toLowerCase().includes("outbound")) {
+    return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200"><Clock className="w-3 h-3" />{label}</span>;
   }
-  if (s === "DA" || s.includes("COMPLETE") || s.includes("DONE")) {
-    return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-50 text-green-700 border border-green-200"><CheckCircle2 className="w-3 h-3" />Complete</span>;
+  if (name.toLowerCase().includes("pick") || name.toLowerCase().includes("progress")) {
+    return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200"><Loader2 className="w-3 h-3" />{label}</span>;
   }
-  return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200">{status}</span>;
+  return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200">{label || status}</span>;
 }
 
 export default function BatchTestPage() {
@@ -33,22 +62,16 @@ export default function BatchTestPage() {
     [user]
   );
 
-  useEffect(() => {
-    if (!user) router.replace("/");
-  }, [user, router]);
+  useEffect(() => { if (!user) router.replace("/"); }, [user, router]);
 
-  // ── State ─────────────────────────────────────────────────────────────────
   const [batches, setBatches] = useState<WmsBatch[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [rawResponse, setRawResponse] = useState<unknown>(null);
 
   const [search, setSearch] = useState("");
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedCode, setExpandedCode] = useState<string | null>(null);
   const [orders, setOrders] = useState<Record<string, WmsOrder[]>>({});
   const [loadingOrders, setLoadingOrders] = useState<Record<string, boolean>>({});
-  const [ordersRaw, setOrdersRaw] = useState<Record<string, unknown>>({});
-  const [endpointLog, setEndpointLog] = useState<Record<string, { url: string; method: string; status: number | string; hit: boolean }[]>>({});
 
   const [warehouseCode, setWarehouseCode] = useState("STOO1");
   const [customerCode, setCustomerCode] = useState("FCOUS");
@@ -58,35 +81,27 @@ export default function BatchTestPage() {
   });
   const [dateTo, setDateTo] = useState(() => new Date().toISOString().slice(0, 10));
 
-  // ── Load batch list ───────────────────────────────────────────────────────
+  // ── Load batch list: POST /api/batch/list ─────────────────────────────────
   const loadBatches = useCallback(async () => {
     setLoading(true);
     setError("");
-    setRawResponse(null);
     setBatches([]);
     try {
-      const params = new URLSearchParams({
-        warehouseCode,
-        ...(customerCode ? { customerCode } : {}),
-        ...(dateFrom ? { startDate: dateFrom.replace(/-/g, "") } : {}),
-        ...(dateTo   ? { endDate:   dateTo.replace(/-/g, "")   } : {}),
+      const res = await fetch("/api/wms/batch/list", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          searchText: "",
+          warehouseCode,
+          customerCode,
+          dateFrom: dateFrom.replace(/-/g, ""),
+          dateTo: dateTo.replace(/-/g, ""),
+        }),
       });
-      const res = await fetch(`/api/wms/dashboard/sidebar-batch?${params}`, { headers });
-      const json = await res.json().catch(() => null);
-      setRawResponse(json);
-
-      // Try common response shapes
-      const list =
-        Array.isArray(json?.data?.list)  ? json.data.list  :
-        Array.isArray(json?.data)         ? json.data        :
-        Array.isArray(json?.list)         ? json.list        :
-        Array.isArray(json)               ? json             : null;
-
-      if (list) {
-        setBatches(list);
-      } else {
-        setError(`Unexpected response shape — check Raw Response below.`);
-      }
+      const json = await res.json();
+      const list: WmsBatch[] = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
+      setBatches(list);
+      if (!json?.isSuccess && list.length === 0) setError(json?.message ?? "No data returned");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Fetch failed");
     } finally {
@@ -96,105 +111,40 @@ export default function BatchTestPage() {
 
   useEffect(() => { loadBatches(); }, [loadBatches]); // eslint-disable-line
 
-  // ── Load orders for a batch ───────────────────────────────────────────────
-  async function loadBatchOrders(batch: WmsBatch) {
-    // Collect every plausible ID field from the batch object
-    const batchCode = String(batch.batchCode ?? batch.batchNo ?? batch.batchName ?? "");
-    const batchId   = String(batch.batchId   ?? batch.id ?? batchCode ?? "");
-    const key = batchId || batchCode;
-    if (!key || loadingOrders[key]) return;
-
-    setLoadingOrders((p) => ({ ...p, [key]: true }));
-    const log: { url: string; method: string; status: number | string; hit: boolean }[] = [];
-
-    // All candidate calls — GET and POST variants, every plausible ID param name
-    type Attempt = { method: "GET" | "POST"; url: string; body?: Record<string, unknown> };
-    const attempts: Attempt[] = [
-      // GET variants
-      { method: "GET", url: `/api/wms/outbound/list?batchCode=${encodeURIComponent(batchCode)}&warehouseCode=${encodeURIComponent(warehouseCode)}` },
-      { method: "GET", url: `/api/wms/outbound/list?batchId=${encodeURIComponent(batchId)}&warehouseCode=${encodeURIComponent(warehouseCode)}` },
-      { method: "GET", url: `/api/wms/batch/order/list?batchCode=${encodeURIComponent(batchCode)}` },
-      { method: "GET", url: `/api/wms/batch/order/list?batchId=${encodeURIComponent(batchId)}` },
-      { method: "GET", url: `/api/wms/batch/orders?batchCode=${encodeURIComponent(batchCode)}&warehouseCode=${encodeURIComponent(warehouseCode)}` },
-      { method: "GET", url: `/api/wms/batch/orders?batchId=${encodeURIComponent(batchId)}&warehouseCode=${encodeURIComponent(warehouseCode)}` },
-      { method: "GET", url: `/api/wms/shipping/list?batchCode=${encodeURIComponent(batchCode)}&warehouseCode=${encodeURIComponent(warehouseCode)}` },
-      { method: "GET", url: `/api/wms/dashboard/list?batchCode=${encodeURIComponent(batchCode)}&warehouseCode=${encodeURIComponent(warehouseCode)}` },
-      // POST variants
-      { method: "POST", url: `/api/wms/outbound/list`, body: { batchCode, warehouseCode } },
-      { method: "POST", url: `/api/wms/outbound/list`, body: { batchId, warehouseCode } },
-      { method: "POST", url: `/api/wms/batch/order/list`, body: { batchCode, warehouseCode } },
-      { method: "POST", url: `/api/wms/batch/order/list`, body: { batchId, warehouseCode } },
-      { method: "POST", url: `/api/wms/shipping/b2c/list`, body: { batchCode, warehouseCode, pageSize: 100 } },
-      { method: "POST", url: `/api/wms/shipping/list`, body: { batchCode, warehouseCode, pageSize: 100 } },
-    ];
-
-    let found = false;
-    for (const { method, url, body } of attempts) {
-      try {
-        const res = await fetch(url, {
-          method,
-          headers,
-          ...(body ? { body: JSON.stringify(body) } : {}),
-        });
-        const json = await res.json().catch(() => null);
-        const list =
-          Array.isArray(json?.data?.list) ? json.data.list :
-          Array.isArray(json?.data)        ? json.data       :
-          Array.isArray(json?.list)        ? json.list       :
-          Array.isArray(json)              ? json            : null;
-        const hit = res.ok && list !== null && list.length > 0;
-        log.push({ url: `${method} ${url}${body ? ` body:${JSON.stringify(body)}` : ""}`, method, status: res.status, hit });
-        if (hit) {
-          setOrders((p) => ({ ...p, [key]: list! }));
-          setOrdersRaw((p) => ({ ...p, [key]: json }));
-          found = true;
-          break;
-        }
-      } catch (e) {
-        log.push({ url: `${method} ${url}`, method, status: String(e), hit: false });
-      }
-    }
-
-    setEndpointLog((p) => ({ ...p, [key]: log }));
-    if (!found) setOrders((p) => ({ ...p, [key]: [] }));
-    setLoadingOrders((p) => ({ ...p, [key]: false }));
-  }
-
-  function toggleBatch(batch: WmsBatch) {
-    const key = String(batch.batchId ?? batch.id ?? batch.batchCode ?? batch.batchNo ?? "");
-    if (expandedId === key) {
-      setExpandedId(null);
-    } else {
-      setExpandedId(key);
-      if (!orders[key]) loadBatchOrders(batch);
+  // ── Load orders: POST /api/batch/orders  body = ["batchCode"] ────────────
+  async function loadBatchOrders(batchCode: string) {
+    if (loadingOrders[batchCode]) return;
+    setLoadingOrders((p) => ({ ...p, [batchCode]: true }));
+    try {
+      const res = await fetch("/api/wms/batch/orders", {
+        method: "POST",
+        headers,
+        body: JSON.stringify([batchCode]),
+      });
+      const json = await res.json();
+      const list: WmsOrder[] = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
+      setOrders((p) => ({ ...p, [batchCode]: list }));
+    } catch {
+      setOrders((p) => ({ ...p, [batchCode]: [] }));
+    } finally {
+      setLoadingOrders((p) => ({ ...p, [batchCode]: false }));
     }
   }
 
-  // ── Filter ────────────────────────────────────────────────────────────────
+  function toggle(batchCode: string) {
+    if (expandedCode === batchCode) { setExpandedCode(null); return; }
+    setExpandedCode(batchCode);
+    if (!orders[batchCode]) loadBatchOrders(batchCode);
+  }
+
   const filtered = useMemo(() => {
-    if (!search.trim()) return batches;
     const q = search.toLowerCase();
-    return batches.filter((b) =>
-      Object.values(b).some((v) => String(v ?? "").toLowerCase().includes(q))
-    );
+    return q ? batches.filter((b) =>
+      b.batchName.toLowerCase().includes(q) ||
+      b.batchCode.toLowerCase().includes(q) ||
+      b.customerCode.toLowerCase().includes(q)
+    ) : batches;
   }, [batches, search]);
-
-  // ── Helpers ───────────────────────────────────────────────────────────────
-  function batchLabel(b: WmsBatch) {
-    return String(b.batchName ?? b.batchNo ?? b.batchCode ?? b.batchId ?? b.id ?? "—");
-  }
-  function batchStatus(b: WmsBatch) {
-    return String(b.status ?? b.batchStatus ?? b.statusName ?? "");
-  }
-  function batchDate(b: WmsBatch) {
-    return String(b.batchDate ?? b.createdAt ?? b.createDate ?? b.date ?? "");
-  }
-  function batchOrderCount(b: WmsBatch) {
-    return Number(b.orderCount ?? b.totalCount ?? b.count ?? b.qty ?? 0);
-  }
-  function batchId(b: WmsBatch) {
-    return String(b.batchId ?? b.id ?? b.batchNo ?? b.batchCode ?? "");
-  }
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -206,15 +156,12 @@ export default function BatchTestPage() {
               <Layers className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-slate-900">WMS Batch Test</h1>
-              <p className="text-sm text-slate-500">Fetch batch data directly from WMS</p>
+              <h1 className="text-xl font-bold text-slate-900">WMS Batch List</h1>
+              <p className="text-sm text-slate-500">POST /api/batch/list → orders via POST /api/batch/orders</p>
             </div>
           </div>
-          <button
-            onClick={loadBatches}
-            disabled={loading}
-            className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm text-slate-700 hover:bg-slate-50 transition-colors disabled:opacity-50"
-          >
+          <button onClick={loadBatches} disabled={loading}
+            className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm text-slate-700 hover:bg-slate-50 transition-colors disabled:opacity-50">
             <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
             Refresh
           </button>
@@ -224,209 +171,130 @@ export default function BatchTestPage() {
         <div className="bg-white border border-slate-200 rounded-xl p-4 mb-5 flex flex-wrap gap-3 items-end">
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">Warehouse</label>
-            <input
-              value={warehouseCode}
-              onChange={(e) => setWarehouseCode(e.target.value)}
-              className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm w-28 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+            <input value={warehouseCode} onChange={(e) => setWarehouseCode(e.target.value)}
+              className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm w-28 focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">Customer</label>
-            <input
-              value={customerCode}
-              onChange={(e) => setCustomerCode(e.target.value)}
-              placeholder="(all)"
-              className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm w-28 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+            <input value={customerCode} onChange={(e) => setCustomerCode(e.target.value)} placeholder="(all)"
+              className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm w-28 focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">From</label>
-            <input
-              type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
-              className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+            <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
+              className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">To</label>
-            <input
-              type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
-              className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
+              className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
-          <button
-            onClick={loadBatches}
-            disabled={loading}
-            className="px-4 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
-          >
+          <button onClick={loadBatches} disabled={loading}
+            className="px-4 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors">
             Search
           </button>
-
-          {/* Search within results */}
           <div className="ml-auto flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-1.5 bg-white">
             <Search className="w-3.5 h-3.5 text-slate-400" />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Filter results…"
-              className="text-sm outline-none w-36"
-            />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter…"
+              className="text-sm outline-none w-32" />
           </div>
         </div>
 
-        {/* API endpoint info */}
-        <div className="bg-slate-800 rounded-lg px-4 py-2 mb-5 flex items-center gap-2">
-          <span className="text-xs font-mono text-green-400 font-medium">GET</span>
-          <span className="text-xs font-mono text-slate-300">
-            /api/dashboard/sidebar-batch?warehouseCode={warehouseCode}{customerCode ? `&customerCode=${customerCode}` : ""}{dateFrom ? `&startDate=${dateFrom.replace(/-/g,"")}` : ""}{dateTo ? `&endDate=${dateTo.replace(/-/g,"")}` : ""}
-          </span>
-          <span className={`ml-auto text-xs font-medium px-2 py-0.5 rounded-full ${loading ? "bg-amber-900 text-amber-300" : batches.length > 0 ? "bg-green-900 text-green-300" : error ? "bg-red-900 text-red-300" : "bg-slate-700 text-slate-400"}`}>
-            {loading ? "loading…" : batches.length > 0 ? `${batches.length} batches` : error ? "error" : "—"}
-          </span>
-        </div>
-
-        {/* Error */}
         {error && (
           <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-4 py-3 mb-4 text-red-700 text-sm">
-            <AlertCircle className="w-4 h-4 flex-shrink-0" />
-            {error}
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />{error}
           </div>
         )}
 
-        {/* Loading */}
         {loading && (
           <div className="flex items-center justify-center py-16 text-slate-500 text-sm gap-2">
-            <Loader2 className="w-5 h-5 animate-spin" />
-            Fetching from WMS…
+            <Loader2 className="w-5 h-5 animate-spin" />Loading batches…
           </div>
         )}
 
         {/* Batch list */}
-        {!loading && batches.length > 0 && (
-          <div className="space-y-2 mb-6">
-            {filtered.map((batch, idx) => {
-              const id = batchId(batch) || String(idx);
-              const isOpen = expandedId === id;
-              const bOrders = orders[id] ?? [];
-              const isLoadingOrders = loadingOrders[id];
-              const statusStr = batchStatus(batch);
-              const count = batchOrderCount(batch);
+        {!loading && filtered.length > 0 && (
+          <div className="space-y-2">
+            {filtered.map((batch) => {
+              const isOpen = expandedCode === batch.batchCode;
+              const bOrders = orders[batch.batchCode];
+              const isLoadingO = loadingOrders[batch.batchCode];
 
               return (
-                <div key={id} className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-                  {/* Batch row */}
-                  <button
-                    onClick={() => toggleBatch(batch)}
-                    className="w-full flex items-center gap-4 px-5 py-3.5 hover:bg-slate-50 transition-colors text-left"
-                  >
+                <div key={batch.batchCode} className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                  <button onClick={() => toggle(batch.batchCode)}
+                    className="w-full flex items-center gap-4 px-5 py-3.5 hover:bg-slate-50 transition-colors text-left">
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-semibold text-slate-900 text-sm">{batchLabel(batch)}</span>
-                        {statusStr && statusBadge(statusStr)}
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-slate-900 text-sm">{batch.batchName}</span>
+                        <span className="text-xs text-slate-400 font-mono">{batch.batchCode}</span>
                       </div>
                       <div className="flex items-center gap-4 mt-1 text-xs text-slate-400">
-                        {batchDate(batch) && (
-                          <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />{batchDate(batch)}</span>
-                        )}
-                        {!!(batch.warehouseCode || batch.warehouse) && (
-                          <span className="flex items-center gap-1"><Warehouse className="w-3 h-3" />{String(batch.warehouseCode ?? batch.warehouse)}</span>
-                        )}
-                        {!!(batch.customerCode || batch.customer) && (
-                          <span className="flex items-center gap-1"><Users className="w-3 h-3" />{String(batch.customerCode ?? batch.customer)}</span>
-                        )}
-                        <span className="text-xs text-slate-400 font-mono">id: {id}</span>
+                        <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />
+                          {batch.batchDate.replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3")}
+                        </span>
+                        <span className="flex items-center gap-1"><Warehouse className="w-3 h-3" />{batch.warehouseCode}</span>
+                        <span className="flex items-center gap-1"><Users className="w-3 h-3" />{batch.customerCode}</span>
+                        <span>by {batch.createdBy}</span>
                       </div>
                     </div>
                     <div className="flex items-center gap-3">
-                      {count > 0 && (
-                        <span className="flex items-center gap-1 text-sm font-medium text-slate-700">
-                          <Package className="w-3.5 h-3.5 text-slate-400" />{count}
-                        </span>
-                      )}
+                      <span className="flex items-center gap-1 text-sm font-medium text-slate-700">
+                        <Package className="w-3.5 h-3.5 text-slate-400" />{batch.orderCount}
+                      </span>
                       {isOpen ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
                     </div>
                   </button>
 
-                  {/* Expanded: raw batch object + orders */}
                   {isOpen && (
                     <div className="border-t border-slate-100">
-                      {/* Raw batch data */}
-                      <div className="px-5 py-3 bg-slate-50 border-b border-slate-100">
-                        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Raw batch fields</p>
-                        <div className="flex flex-wrap gap-x-6 gap-y-1">
-                          {Object.entries(batch).map(([k, v]) => (
-                            <div key={k} className="text-xs">
-                              <span className="text-slate-400">{k}: </span>
-                              <span className="text-slate-700 font-medium font-mono">{JSON.stringify(v)}</span>
-                            </div>
-                          ))}
+                      {isLoadingO ? (
+                        <div className="flex items-center justify-center py-6 text-slate-400 text-sm gap-2">
+                          <Loader2 className="w-4 h-4 animate-spin" />Loading orders…
                         </div>
-                      </div>
-
-                      {/* Orders */}
-                      <div className="px-5 py-3">
-                        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
-                          Orders in batch
-                          {isLoadingOrders && <Loader2 className="inline w-3 h-3 ml-2 animate-spin" />}
-                        </p>
-
-                        {isLoadingOrders ? (
-                          <div className="text-sm text-slate-400 py-4 text-center">Loading orders…</div>
-                        ) : bOrders.length === 0 ? (
-                          <div className="text-sm text-slate-400 py-4 text-center">
-                            No orders found (endpoint may need adjustment — check raw response)
-                          </div>
-                        ) : (
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-xs">
-                              <thead>
-                                <tr className="border-b border-slate-100">
-                                  {Object.keys(bOrders[0]).slice(0, 10).map((k) => (
-                                    <th key={k} className="px-2 py-1.5 text-left font-semibold text-slate-500 whitespace-nowrap">{k}</th>
-                                  ))}
+                      ) : !bOrders || bOrders.length === 0 ? (
+                        <div className="text-center py-6 text-slate-400 text-sm">No orders found</div>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="bg-slate-50 border-b border-slate-100">
+                                <th className="px-4 py-2.5 text-left font-semibold text-slate-500 whitespace-nowrap">Order Code</th>
+                                <th className="px-4 py-2.5 text-left font-semibold text-slate-500 whitespace-nowrap">Order No</th>
+                                <th className="px-4 py-2.5 text-left font-semibold text-slate-500 whitespace-nowrap">Consignee</th>
+                                <th className="px-4 py-2.5 text-left font-semibold text-slate-500 whitespace-nowrap">Status</th>
+                                <th className="px-4 py-2.5 text-left font-semibold text-slate-500 whitespace-nowrap">Order Date</th>
+                                <th className="px-4 py-2.5 text-left font-semibold text-slate-500 whitespace-nowrap">Out Date</th>
+                                <th className="px-4 py-2.5 text-right font-semibold text-slate-500">Qty</th>
+                                <th className="px-4 py-2.5 text-left font-semibold text-slate-500 whitespace-nowrap">Tracking</th>
+                                <th className="px-4 py-2.5 text-left font-semibold text-slate-500 whitespace-nowrap">Carrier</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {bOrders.map((o) => (
+                                <tr key={o.shippingOrderCode} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
+                                  <td className="px-4 py-2.5 font-mono text-slate-700">{o.shippingOrderCode}</td>
+                                  <td className="px-4 py-2.5 text-slate-500">{o.shippingOrderNo}</td>
+                                  <td className="px-4 py-2.5 text-slate-700">{o.consigneeName}</td>
+                                  <td className="px-4 py-2.5"><StatusBadge status={o.status} name={o.statusName} /></td>
+                                  <td className="px-4 py-2.5 text-slate-500">{o.orderDate.replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3")}</td>
+                                  <td className="px-4 py-2.5 text-slate-500">{o.outDate ? o.outDate.replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3") : "—"}</td>
+                                  <td className="px-4 py-2.5 text-right font-medium text-slate-700">{o.totalQty}</td>
+                                  <td className="px-4 py-2.5 font-mono text-slate-500 max-w-[180px] truncate">
+                                    {o.trackingNo ? (
+                                      <span className="flex items-center gap-1">
+                                        <Truck className="w-3 h-3 text-slate-400 flex-shrink-0" />
+                                        {o.trackingNo}
+                                      </span>
+                                    ) : "—"}
+                                  </td>
+                                  <td className="px-4 py-2.5 text-slate-500">{o.carrierName || o.serviceName || "—"}</td>
                                 </tr>
-                              </thead>
-                              <tbody>
-                                {bOrders.map((o, i) => (
-                                  <tr key={i} className="border-b border-slate-50 hover:bg-slate-50">
-                                    {Object.keys(bOrders[0]).slice(0, 10).map((k) => (
-                                      <td key={k} className="px-2 py-1.5 text-slate-700 whitespace-nowrap">{String(o[k] ?? "")}</td>
-                                    ))}
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-
-                        {/* Endpoint probe log */}
-                        {endpointLog[id] && (
-                          <details className="mt-3" open={bOrders.length === 0}>
-                            <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-600">
-                              Endpoint probe log ({endpointLog[id].filter(l => l.hit).length}/{endpointLog[id].length} hit)
-                            </summary>
-                            <div className="mt-2 space-y-0.5">
-                              {endpointLog[id].map((l, i) => (
-                                <div key={i} className={`flex items-center gap-2 text-xs font-mono px-2 py-1 rounded ${l.hit ? "bg-green-950 text-green-400" : "bg-slate-900 text-slate-400"}`}>
-                                  <span className={`w-12 text-center font-bold ${l.hit ? "text-green-400" : typeof l.status === "number" && l.status < 500 ? "text-amber-400" : "text-red-400"}`}>
-                                    {l.hit ? "✓ HIT" : String(l.status)}
-                                  </span>
-                                  <span className="truncate">{l.url}</span>
-                                </div>
                               ))}
-                            </div>
-                          </details>
-                        )}
-
-                        {/* Raw orders response */}
-                        {!!ordersRaw[id] && (
-                          <details className="mt-2">
-                            <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-600">Raw orders API response</summary>
-                            <pre className="mt-2 text-xs bg-slate-900 text-green-400 rounded-lg p-3 overflow-x-auto max-h-48">
-                              {JSON.stringify(ordersRaw[id], null, 2)}
-                            </pre>
-                          </details>
-                        )}
-                      </div>
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -436,21 +304,7 @@ export default function BatchTestPage() {
         )}
 
         {!loading && batches.length === 0 && !error && (
-          <div className="text-center py-16 text-slate-400 text-sm">
-            No batches returned — adjust filters and search again.
-          </div>
-        )}
-
-        {/* Raw API response (always visible for debugging) */}
-        {rawResponse !== null && (
-          <details className="mt-2">
-            <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-600 mb-2">
-              Raw sidebar-batch response
-            </summary>
-            <pre className="text-xs bg-slate-900 text-green-400 rounded-lg p-4 overflow-x-auto max-h-64">
-              {JSON.stringify(rawResponse, null, 2)}
-            </pre>
-          </details>
+          <div className="text-center py-16 text-slate-400 text-sm">No batches — adjust filters.</div>
         )}
       </div>
     </div>
