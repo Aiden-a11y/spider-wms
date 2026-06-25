@@ -64,29 +64,30 @@ export default function BatchTestPage() {
 
   useEffect(() => { if (!user) router.replace("/"); }, [user, router]);
 
+  const today = new Date().toISOString().slice(0, 10);
+  const todayCompact = today.replace(/-/g, ""); // "20260625"
+
   const [batches, setBatches] = useState<WmsBatch[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   const [search, setSearch] = useState("");
+  const [filterDate, setFilterDate] = useState(today); // UI date filter — defaults to today
   const [expandedCode, setExpandedCode] = useState<string | null>(null);
   const [orders, setOrders] = useState<Record<string, WmsOrder[]>>({});
   const [loadingOrders, setLoadingOrders] = useState<Record<string, boolean>>({});
 
   const [warehouseCode, setWarehouseCode] = useState("STOO1");
   const [customerCode, setCustomerCode] = useState("FCOUS");
-  const [dateFrom, setDateFrom] = useState(() => {
-    const d = new Date(); d.setDate(d.getDate() - 30);
-    return d.toISOString().slice(0, 10);
-  });
-  const [dateTo, setDateTo] = useState(() => new Date().toISOString().slice(0, 10));
 
-  // ── Load batch list: POST /api/batch/list ─────────────────────────────────
+  // ── Load ALL batches (90-day window): POST /api/batch/list ────────────────
   const loadBatches = useCallback(async () => {
     setLoading(true);
     setError("");
     setBatches([]);
     try {
+      const from = new Date(); from.setDate(from.getDate() - 90);
+      const dateFrom = from.toISOString().slice(0, 10).replace(/-/g, "");
       const res = await fetch("/api/wms/batch/list", {
         method: "POST",
         headers,
@@ -94,8 +95,8 @@ export default function BatchTestPage() {
           searchText: "",
           warehouseCode,
           customerCode,
-          dateFrom: dateFrom.replace(/-/g, ""),
-          dateTo: dateTo.replace(/-/g, ""),
+          dateFrom,
+          dateTo: todayCompact,
         }),
       });
       const json = await res.json();
@@ -107,7 +108,7 @@ export default function BatchTestPage() {
     } finally {
       setLoading(false);
     }
-  }, [warehouseCode, customerCode, dateFrom, dateTo, headers]);
+  }, [warehouseCode, customerCode, todayCompact, headers]);
 
   useEffect(() => { loadBatches(); }, [loadBatches]); // eslint-disable-line
 
@@ -137,14 +138,28 @@ export default function BatchTestPage() {
     if (!orders[batchCode]) loadBatchOrders(batchCode);
   }
 
+  // Client-side filter: by date + search text
   const filtered = useMemo(() => {
+    let list = batches;
+    if (filterDate) {
+      const compact = filterDate.replace(/-/g, "");
+      list = list.filter((b) => b.batchDate === compact);
+    }
     const q = search.toLowerCase();
-    return q ? batches.filter((b) =>
+    if (q) list = list.filter((b) =>
       b.batchName.toLowerCase().includes(q) ||
       b.batchCode.toLowerCase().includes(q) ||
       b.customerCode.toLowerCase().includes(q)
-    ) : batches;
-  }, [batches, search]);
+    );
+    return list;
+  }, [batches, filterDate, search]);
+
+  // Unique dates available in fetched data (for the date picker hint)
+  const availableDates = useMemo(() => {
+    const seen: Record<string, boolean> = {};
+    batches.forEach((b) => { seen[b.batchDate.replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3")] = true; });
+    return Object.keys(seen).sort().reverse();
+  }, [batches]);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -179,20 +194,24 @@ export default function BatchTestPage() {
             <input value={customerCode} onChange={(e) => setCustomerCode(e.target.value)} placeholder="(all)"
               className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm w-28 focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">From</label>
-            <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
-              className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">To</label>
-            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
-              className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-          </div>
           <button onClick={loadBatches} disabled={loading}
             className="px-4 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors">
-            Search
+            Reload
           </button>
+
+          {/* Date filter — client-side, defaults to today */}
+          <div className="flex items-end gap-2 ml-2">
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Date filter</label>
+              <input type="date" value={filterDate} onChange={(e) => setFilterDate(e.target.value)}
+                className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <button onClick={() => setFilterDate("")}
+              className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${!filterDate ? "bg-slate-800 text-white border-slate-800" : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"}`}>
+              All dates
+            </button>
+          </div>
+
           <div className="ml-auto flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-1.5 bg-white">
             <Search className="w-3.5 h-3.5 text-slate-400" />
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter…"
@@ -209,6 +228,31 @@ export default function BatchTestPage() {
         {loading && (
           <div className="flex items-center justify-center py-16 text-slate-500 text-sm gap-2">
             <Loader2 className="w-5 h-5 animate-spin" />Loading batches…
+          </div>
+        )}
+
+        {/* Summary bar */}
+        {!loading && batches.length > 0 && (
+          <div className="flex items-center gap-3 mb-3 text-sm text-slate-500">
+            <span>
+              Showing <span className="font-semibold text-slate-900">{filtered.length}</span>
+              {filtered.length !== batches.length && <> of {batches.length} total</>} batch{filtered.length !== 1 ? "es" : ""}
+            </span>
+            {filterDate && (
+              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-full px-2 py-0.5">
+                {filterDate === today ? "Today" : filterDate}
+              </span>
+            )}
+            {availableDates.length > 1 && (
+              <div className="flex items-center gap-1 ml-auto text-xs text-slate-400">
+                {availableDates.slice(0, 7).map((d) => (
+                  <button key={d} onClick={() => setFilterDate(d)}
+                    className={`px-2 py-0.5 rounded-full border transition-colors ${filterDate === d ? "bg-blue-600 text-white border-blue-600" : "border-slate-200 hover:bg-slate-100"}`}>
+                    {d.slice(5)}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
