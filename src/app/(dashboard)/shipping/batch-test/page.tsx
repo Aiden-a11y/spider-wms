@@ -48,6 +48,7 @@ export default function BatchTestPage() {
   const [orders, setOrders] = useState<Record<string, WmsOrder[]>>({});
   const [loadingOrders, setLoadingOrders] = useState<Record<string, boolean>>({});
   const [ordersRaw, setOrdersRaw] = useState<Record<string, unknown>>({});
+  const [endpointLog, setEndpointLog] = useState<Record<string, { url: string; method: string; status: number | string; hit: boolean }[]>>({});
 
   const [warehouseCode, setWarehouseCode] = useState("STOO1");
   const [customerCode, setCustomerCode] = useState("FCOUS");
@@ -97,55 +98,75 @@ export default function BatchTestPage() {
 
   // ── Load orders for a batch ───────────────────────────────────────────────
   async function loadBatchOrders(batch: WmsBatch) {
-    const batchId = String(
-      batch.batchId ?? batch.id ?? batch.batchNo ?? batch.batchCode ?? ""
-    );
-    if (!batchId || loadingOrders[batchId]) return;
+    // Collect every plausible ID field from the batch object
+    const batchCode = String(batch.batchCode ?? batch.batchNo ?? batch.batchName ?? "");
+    const batchId   = String(batch.batchId   ?? batch.id ?? batchCode ?? "");
+    const key = batchId || batchCode;
+    if (!key || loadingOrders[key]) return;
 
-    setLoadingOrders((p) => ({ ...p, [batchId]: true }));
-    try {
-      // Try multiple likely endpoints
-      const endpoints = [
-        `/api/wms/batch/orders?batchId=${encodeURIComponent(batchId)}&warehouseCode=${encodeURIComponent(warehouseCode)}`,
-        `/api/wms/batch/order/list?batchId=${encodeURIComponent(batchId)}`,
-        `/api/wms/shipping/batch/list?batchId=${encodeURIComponent(batchId)}`,
-        `/api/wms/dashboard/list?batchId=${encodeURIComponent(batchId)}&warehouseCode=${encodeURIComponent(warehouseCode)}`,
-      ];
+    setLoadingOrders((p) => ({ ...p, [key]: true }));
+    const log: { url: string; method: string; status: number | string; hit: boolean }[] = [];
 
-      let found = false;
-      for (const ep of endpoints) {
-        try {
-          const res = await fetch(ep, { headers });
-          if (!res.ok) continue;
-          const json = await res.json().catch(() => null);
-          const list =
-            Array.isArray(json?.data?.list) ? json.data.list :
-            Array.isArray(json?.data)        ? json.data       :
-            Array.isArray(json?.list)        ? json.list       :
-            Array.isArray(json)              ? json            : null;
-          if (list !== null) {
-            setOrders((p) => ({ ...p, [batchId]: list }));
-            setOrdersRaw((p) => ({ ...p, [batchId]: json }));
-            found = true;
-            break;
-          }
-        } catch { /* try next */ }
+    // All candidate calls — GET and POST variants, every plausible ID param name
+    type Attempt = { method: "GET" | "POST"; url: string; body?: Record<string, unknown> };
+    const attempts: Attempt[] = [
+      // GET variants
+      { method: "GET", url: `/api/wms/outbound/list?batchCode=${encodeURIComponent(batchCode)}&warehouseCode=${encodeURIComponent(warehouseCode)}` },
+      { method: "GET", url: `/api/wms/outbound/list?batchId=${encodeURIComponent(batchId)}&warehouseCode=${encodeURIComponent(warehouseCode)}` },
+      { method: "GET", url: `/api/wms/batch/order/list?batchCode=${encodeURIComponent(batchCode)}` },
+      { method: "GET", url: `/api/wms/batch/order/list?batchId=${encodeURIComponent(batchId)}` },
+      { method: "GET", url: `/api/wms/batch/orders?batchCode=${encodeURIComponent(batchCode)}&warehouseCode=${encodeURIComponent(warehouseCode)}` },
+      { method: "GET", url: `/api/wms/batch/orders?batchId=${encodeURIComponent(batchId)}&warehouseCode=${encodeURIComponent(warehouseCode)}` },
+      { method: "GET", url: `/api/wms/shipping/list?batchCode=${encodeURIComponent(batchCode)}&warehouseCode=${encodeURIComponent(warehouseCode)}` },
+      { method: "GET", url: `/api/wms/dashboard/list?batchCode=${encodeURIComponent(batchCode)}&warehouseCode=${encodeURIComponent(warehouseCode)}` },
+      // POST variants
+      { method: "POST", url: `/api/wms/outbound/list`, body: { batchCode, warehouseCode } },
+      { method: "POST", url: `/api/wms/outbound/list`, body: { batchId, warehouseCode } },
+      { method: "POST", url: `/api/wms/batch/order/list`, body: { batchCode, warehouseCode } },
+      { method: "POST", url: `/api/wms/batch/order/list`, body: { batchId, warehouseCode } },
+      { method: "POST", url: `/api/wms/shipping/b2c/list`, body: { batchCode, warehouseCode, pageSize: 100 } },
+      { method: "POST", url: `/api/wms/shipping/list`, body: { batchCode, warehouseCode, pageSize: 100 } },
+    ];
+
+    let found = false;
+    for (const { method, url, body } of attempts) {
+      try {
+        const res = await fetch(url, {
+          method,
+          headers,
+          ...(body ? { body: JSON.stringify(body) } : {}),
+        });
+        const json = await res.json().catch(() => null);
+        const list =
+          Array.isArray(json?.data?.list) ? json.data.list :
+          Array.isArray(json?.data)        ? json.data       :
+          Array.isArray(json?.list)        ? json.list       :
+          Array.isArray(json)              ? json            : null;
+        const hit = res.ok && list !== null && list.length > 0;
+        log.push({ url: `${method} ${url}${body ? ` body:${JSON.stringify(body)}` : ""}`, method, status: res.status, hit });
+        if (hit) {
+          setOrders((p) => ({ ...p, [key]: list! }));
+          setOrdersRaw((p) => ({ ...p, [key]: json }));
+          found = true;
+          break;
+        }
+      } catch (e) {
+        log.push({ url: `${method} ${url}`, method, status: String(e), hit: false });
       }
-      if (!found) {
-        setOrders((p) => ({ ...p, [batchId]: [] }));
-      }
-    } finally {
-      setLoadingOrders((p) => ({ ...p, [batchId]: false }));
     }
+
+    setEndpointLog((p) => ({ ...p, [key]: log }));
+    if (!found) setOrders((p) => ({ ...p, [key]: [] }));
+    setLoadingOrders((p) => ({ ...p, [key]: false }));
   }
 
   function toggleBatch(batch: WmsBatch) {
-    const batchId = String(batch.batchId ?? batch.id ?? batch.batchNo ?? batch.batchCode ?? "");
-    if (expandedId === batchId) {
+    const key = String(batch.batchId ?? batch.id ?? batch.batchCode ?? batch.batchNo ?? "");
+    if (expandedId === key) {
       setExpandedId(null);
     } else {
-      setExpandedId(batchId);
-      if (!orders[batchId]) loadBatchOrders(batch);
+      setExpandedId(key);
+      if (!orders[key]) loadBatchOrders(batch);
     }
   }
 
@@ -377,9 +398,28 @@ export default function BatchTestPage() {
                           </div>
                         )}
 
+                        {/* Endpoint probe log */}
+                        {endpointLog[id] && (
+                          <details className="mt-3" open={bOrders.length === 0}>
+                            <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-600">
+                              Endpoint probe log ({endpointLog[id].filter(l => l.hit).length}/{endpointLog[id].length} hit)
+                            </summary>
+                            <div className="mt-2 space-y-0.5">
+                              {endpointLog[id].map((l, i) => (
+                                <div key={i} className={`flex items-center gap-2 text-xs font-mono px-2 py-1 rounded ${l.hit ? "bg-green-950 text-green-400" : "bg-slate-900 text-slate-400"}`}>
+                                  <span className={`w-12 text-center font-bold ${l.hit ? "text-green-400" : typeof l.status === "number" && l.status < 500 ? "text-amber-400" : "text-red-400"}`}>
+                                    {l.hit ? "✓ HIT" : String(l.status)}
+                                  </span>
+                                  <span className="truncate">{l.url}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        )}
+
                         {/* Raw orders response */}
                         {!!ordersRaw[id] && (
-                          <details className="mt-3">
+                          <details className="mt-2">
                             <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-600">Raw orders API response</summary>
                             <pre className="mt-2 text-xs bg-slate-900 text-green-400 rounded-lg p-3 overflow-x-auto max-h-48">
                               {JSON.stringify(ordersRaw[id], null, 2)}
