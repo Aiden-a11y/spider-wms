@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/contexts/auth-context";
 import { Loader2, Printer } from "lucide-react";
+import QRCode from "qrcode";
 
 type SkuRow = { sku: string; name: string; qtyPerOrder: number; totalQty: number };
 
@@ -23,6 +24,7 @@ function PrintInner() {
   );
 
   const [skus, setSkus] = useState<SkuRow[]>([]);
+  const [qrDataUrl, setQrDataUrl] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -30,7 +32,11 @@ function PrintInner() {
     if (!batchCode) { setError("No batch code"); setLoading(false); return; }
     (async () => {
       try {
-        // Step 1: get orders to find the first order code
+        // QR code
+        const qr = await QRCode.toDataURL(batchCode, { width: 200, margin: 1, color: { dark: "#000", light: "#fff" } }).catch(() => "");
+        setQrDataUrl(qr);
+
+        // Orders → first order → items
         const ordRes = await fetch("/api/wms/batch/orders", {
           method: "POST", headers, body: JSON.stringify([batchCode]),
         });
@@ -38,7 +44,6 @@ function PrintInner() {
         const orders: { shippingOrderCode: string }[] = Array.isArray(ordJson?.data) ? ordJson.data : [];
         if (!orders.length) { setSkus([]); setLoading(false); return; }
 
-        // Step 2: fetch items from first order
         const firstCode = orders[0].shippingOrderCode;
         const itemRes = await fetch(`/api/wms/shipping/items/${encodeURIComponent(firstCode)}`, { headers });
         const itemJson = await itemRes.json();
@@ -62,12 +67,16 @@ function PrintInner() {
   const dateDisplay = batchDate.length === 8
     ? `${batchDate.slice(0, 4)}-${batchDate.slice(4, 6)}-${batchDate.slice(6, 8)}`
     : batchDate;
-  const printedOn = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+
+  const generatedAt = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+    + ", " + new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+
+  const totalQty = skus.reduce((s, r) => s + r.totalQty, 0);
 
   if (loading) return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", gap: 12, background: "#fff", fontFamily: "Arial, sans-serif" }}>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", gap: 10, background: "#fff", fontFamily: "Arial, sans-serif" }}>
       <Loader2 className="w-5 h-5 animate-spin" style={{ color: "#94a3b8" }} />
-      <span style={{ color: "#64748b", fontSize: 14 }}>Loading…</span>
+      <span style={{ color: "#64748b", fontSize: 13 }}>Loading…</span>
     </div>
   );
 
@@ -77,36 +86,48 @@ function PrintInner() {
     </div>
   );
 
+  const ticket = (
+    <Ticket
+      batchName={batchName} batchCode={batchCode} dateDisplay={dateDisplay}
+      whCode={whCode} custCode={custCode} orderCount={orderCount}
+      skus={skus} totalQty={totalQty} qrDataUrl={qrDataUrl} generatedAt={generatedAt}
+    />
+  );
+
   return (
     <>
-      {/* Toolbar — hidden on print */}
+      {/* Toolbar */}
       <div className="no-print" style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "10px 20px", background: "#0f172a", color: "white",
         position: "fixed", top: 0, left: 0, right: 0, zIndex: 50,
+        boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
       }}>
         <div style={{ fontSize: 13 }}>
           <span style={{ fontWeight: 700 }}>{batchName}</span>
-          <span style={{ color: "#94a3b8", marginLeft: 10 }}>{orderCount} orders · {skus.length} SKU{skus.length !== 1 ? "s" : ""} · 4×6</span>
+          <span style={{ color: "#94a3b8", marginLeft: 10 }}>
+            {orderCount} orders · {skus.length} SKU{skus.length !== 1 ? "s" : ""} · Total {totalQty} pcs · 4×6
+          </span>
         </div>
         <button onClick={() => window.print()} style={{
-          display: "flex", alignItems: "center", gap: 8,
-          padding: "8px 20px", background: "white", color: "#0f172a",
-          border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer",
+          display: "flex", alignItems: "center", gap: 8, padding: "8px 20px",
+          background: "white", color: "#0f172a", border: "none", borderRadius: 8,
+          fontSize: 13, fontWeight: 700, cursor: "pointer",
         }}>
           <Printer size={15} /> Print
         </button>
       </div>
 
       {/* Screen preview */}
-      <div className="no-print" style={{ background: "#94a3b8", minHeight: "100vh", paddingTop: 64, paddingBottom: 40, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-        <Label batchName={batchName} batchCode={batchCode} dateDisplay={dateDisplay} whCode={whCode} custCode={custCode} orderCount={orderCount} skus={skus} printedOn={printedOn} />
+      <div className="no-print" style={{
+        background: "#94a3b8", minHeight: "100vh", paddingTop: 68, paddingBottom: 40,
+        display: "flex", flexDirection: "column", alignItems: "center", gap: 24,
+      }}>
+        {ticket}
       </div>
 
       {/* Print-only */}
-      <div className="print-only">
-        <Label batchName={batchName} batchCode={batchCode} dateDisplay={dateDisplay} whCode={whCode} custCode={custCode} orderCount={orderCount} skus={skus} printedOn={printedOn} />
-      </div>
+      <div className="print-only">{ticket}</div>
 
       <style>{`
         @media screen { .print-only { display: none !important; } }
@@ -115,135 +136,138 @@ function PrintInner() {
           .print-only { display: block !important; }
           body, html { margin: 0 !important; padding: 0 !important; background: white !important; }
           @page { size: 4in 6in; margin: 0; }
+          .label {
+            width: 4in !important; height: 6in !important;
+            padding: 5mm !important; box-sizing: border-box !important;
+            page-break-after: always !important; page-break-inside: avoid !important;
+            border: none !important; box-shadow: none !important;
+          }
         }
       `}</style>
     </>
   );
 }
 
-function Label({ batchName, batchCode, dateDisplay, whCode, custCode, orderCount, skus, printedOn }: {
-  batchName: string; batchCode: string; dateDisplay: string; whCode: string; custCode: string;
-  orderCount: number; skus: SkuRow[]; printedOn: string;
+function Ticket({ batchName, batchCode, dateDisplay, whCode, custCode, orderCount, skus, totalQty, qrDataUrl, generatedAt }: {
+  batchName: string; batchCode: string; dateDisplay: string;
+  whCode: string; custCode: string; orderCount: number;
+  skus: SkuRow[]; totalQty: number; qrDataUrl: string; generatedAt: string;
 }) {
+  const F = "Arial, sans-serif";
+
   return (
-    <div style={{
-      width: "4in", height: "6in", padding: "0.22in 0.28in",
+    <div className="label" style={{
+      fontFamily: F, width: "4in", height: "6in", padding: "5mm",
       boxSizing: "border-box", background: "white",
-      fontFamily: "Arial, sans-serif",
-      display: "flex", flexDirection: "column",
-      border: "1px solid #cbd5e1",
-      boxShadow: "0 4px 20px rgba(0,0,0,0.15)",
+      border: "1px solid #cbd5e1", boxShadow: "0 2px 12px rgba(0,0,0,0.1)",
+      display: "flex", flexDirection: "column", overflow: "hidden",
     }}>
 
-      {/* ── Header ── */}
-      <div style={{ borderBottom: "3px solid #000", paddingBottom: "3mm", marginBottom: "3mm" }}>
-        <div style={{ fontSize: "6pt", fontWeight: 700, letterSpacing: "0.18em", color: "#64748b", textTransform: "uppercase", marginBottom: "2mm" }}>
-          BATCH PICK TICKET
+      {/* ── Top header: client info + QR ── */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: "2.5mm" }}>
+        <div>
+          <div style={{ fontSize: "9.5pt", fontWeight: 700, color: "#000", marginBottom: "1mm" }}>
+            Client: <span style={{ fontWeight: 900 }}>{custCode || "ALL"}</span>
+          </div>
+          <div style={{ fontSize: "8pt", color: "#334155", lineHeight: 1.6 }}>
+            Total SKU: <strong>{skus.length}</strong>
+          </div>
+          <div style={{ fontSize: "8pt", color: "#334155", lineHeight: 1.6 }}>
+            Total Qty: <strong>{totalQty}</strong>
+          </div>
+          <div style={{ marginTop: "1.5mm" }}>
+            <span style={{
+              display: "inline-block", fontSize: "6.5pt", fontWeight: 700,
+              background: "#e2e8f0", color: "#475569", padding: "1px 6px", borderRadius: 3,
+              letterSpacing: "0.05em",
+            }}>
+              Batch Pick
+            </span>
+          </div>
         </div>
-        <div style={{ fontSize: "16pt", fontWeight: 900, color: "#000", lineHeight: 1.1, marginBottom: "1.5mm" }}>
-          {batchName}
+        {qrDataUrl && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={qrDataUrl} alt={batchCode}
+            style={{ width: "22mm", height: "22mm", flexShrink: 0, imageRendering: "pixelated" }} />
+        )}
+      </div>
+
+      {/* ── Batch info rows ── */}
+      <div style={{ borderTop: "1.5px solid #000", borderBottom: "1px solid #e2e8f0", padding: "2mm 0", marginBottom: "2.5mm" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+          <div style={{ fontSize: "7.5pt", color: "#475569" }}>
+            Batch No.: &nbsp;<span style={{ fontFamily: "'Courier New', monospace", fontWeight: 700, color: "#000", fontSize: "8pt" }}>{batchCode}</span>
+          </div>
+          <div style={{ fontSize: "8pt", fontWeight: 800, color: "#000" }}>
+            {orderCount} orders
+          </div>
         </div>
-        <div style={{ fontSize: "6.5pt", color: "#64748b", display: "flex", gap: "6px", flexWrap: "wrap" }}>
-          <span style={{ fontFamily: "'Courier New', monospace", color: "#475569" }}>{batchCode}</span>
-          <span>·</span>
-          <span>{dateDisplay}</span>
-          <span>·</span>
-          <span>{whCode}</span>
-          {custCode && <><span>·</span><span>{custCode}</span></>}
+        <div style={{ fontSize: "7.5pt", color: "#475569", marginTop: "0.8mm" }}>
+          Date: <strong>{dateDisplay}</strong> &nbsp;·&nbsp; WH: <strong>{whCode}</strong>
         </div>
       </div>
 
-      {/* ── Order count ── */}
-      <div style={{ display: "flex", alignItems: "baseline", gap: "5px", marginBottom: "3mm" }}>
-        <span style={{ fontSize: "42pt", fontWeight: 900, color: "#000", lineHeight: 1 }}>{orderCount}</span>
-        <span style={{ fontSize: "13pt", fontWeight: 800, color: "#334155", letterSpacing: "0.04em" }}>ORDERS</span>
+      {/* ── Batch name block (like "Ship To") ── */}
+      <div style={{ borderLeft: "3.5px solid #3b82f6", paddingLeft: "3mm", marginBottom: "3mm" }}>
+        <div style={{ fontSize: "6pt", fontWeight: 700, letterSpacing: "0.1em", color: "#94a3b8", textTransform: "uppercase", marginBottom: "1mm" }}>
+          Batch Name
+        </div>
+        <div style={{ fontSize: "11pt", fontWeight: 900, color: "#000", lineHeight: 1.2 }}>{batchName}</div>
       </div>
 
-      {/* ── Divider ── */}
-      <div style={{ borderTop: "2px solid #000", marginBottom: "3mm" }} />
-
-      {/* ── SKU Table ── */}
-      <div style={{ fontSize: "7pt", fontWeight: 700, letterSpacing: "0.1em", color: "#64748b", textTransform: "uppercase", marginBottom: "2mm" }}>
-        SKU LIST
-      </div>
-
+      {/* ── Items table ── */}
       <div style={{ flex: 1, overflow: "hidden" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "Arial, sans-serif" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: F }}>
           <thead>
             <tr style={{ borderBottom: "2px solid #000" }}>
-              <th style={thStyle("left", "28%")}>SKU</th>
-              <th style={thStyle("left")}>Product</th>
-              <th style={thStyle("right", "13%")}>/ Order</th>
-              <th style={thStyle("right", "13%")}>Total</th>
-              <th style={thStyle("center", "8%")}>✓</th>
+              <th style={{ width: "7%",  textAlign: "center", padding: "1.5mm 1mm", fontSize: "6.5pt", fontWeight: 700, color: "#475569", letterSpacing: "0.08em" }}>No.</th>
+              <th style={{               textAlign: "left",   padding: "1.5mm 1mm", fontSize: "6.5pt", fontWeight: 700, color: "#475569", letterSpacing: "0.08em" }}>Item</th>
+              <th style={{ width: "18%", textAlign: "right",  padding: "1.5mm 1mm", fontSize: "6.5pt", fontWeight: 700, color: "#475569", letterSpacing: "0.08em" }}>Qty</th>
             </tr>
           </thead>
           <tbody>
-            {skus.length === 0 ? (
-              <tr><td colSpan={5} style={{ textAlign: "center", padding: "8px", fontSize: "8pt", color: "#94a3b8" }}>No SKU data</td></tr>
-            ) : skus.map((row, i) => (
-              <tr key={row.sku} style={{ background: i % 2 === 1 ? "#f8fafc" : "white", borderBottom: "0.5px solid #e2e8f0" }}>
-                <td style={tdMono}>{row.sku}</td>
-                <td style={tdName}>{row.name || "—"}</td>
-                <td style={tdQty}>{row.qtyPerOrder}</td>
-                <td style={tdTotal}>{row.totalQty}</td>
-                <td style={tdCheck}><span style={{ display: "inline-block", width: "4mm", height: "4mm", border: "1.5px solid #94a3b8", borderRadius: "1px" }} /></td>
+            {skus.map((row, i) => (
+              <tr key={row.sku} style={{ borderBottom: "0.5px solid #e2e8f0", verticalAlign: "top" }}>
+                <td style={{ textAlign: "center", padding: "2mm 1mm", fontSize: "8pt", fontWeight: 700, color: "#334155" }}>{i + 1}</td>
+                <td style={{ padding: "2mm 1mm" }}>
+                  <div style={{ fontSize: "7pt", color: "#64748b", marginBottom: "0.5mm" }}>
+                    SKU: <span style={{ fontFamily: "'Courier New', monospace", fontWeight: 700, color: "#000" }}>{row.sku}</span>
+                  </div>
+                  <div style={{ fontSize: "7.5pt", fontWeight: 600, color: "#0f172a", lineHeight: 1.3 }}>{row.name || "—"}</div>
+                </td>
+                <td style={{ textAlign: "right", padding: "2mm 1mm", verticalAlign: "top" }}>
+                  <div style={{ fontSize: "7pt", color: "#64748b" }}>{row.qtyPerOrder}/order</div>
+                  <div style={{ fontSize: "10pt", fontWeight: 900, color: "#000", lineHeight: 1.1 }}>{row.totalQty} EA</div>
+                </td>
               </tr>
             ))}
           </tbody>
-          {/* Totals row */}
-          {skus.length > 0 && (
-            <tfoot>
-              <tr style={{ borderTop: "1.5px solid #000" }}>
-                <td colSpan={2} style={{ padding: "2px 3px", fontSize: "7.5pt", fontWeight: 800, color: "#000" }}>TOTAL</td>
-                <td style={{ ...tdQty, fontWeight: 800, color: "#000" }}>
-                  {skus.reduce((s, r) => s + r.qtyPerOrder, 0)}
-                </td>
-                <td style={{ ...tdTotal, fontSize: "10pt", fontWeight: 900, color: "#000" }}>
-                  {skus.reduce((s, r) => s + r.totalQty, 0)}
-                </td>
-                <td />
-              </tr>
-            </tfoot>
-          )}
+          <tfoot>
+            <tr style={{ borderTop: "1.5px solid #000" }}>
+              <td colSpan={2} style={{ padding: "2mm 1mm", fontSize: "8pt", fontWeight: 800, color: "#000", textAlign: "right", letterSpacing: "0.05em" }}>TOTAL</td>
+              <td style={{ padding: "2mm 1mm", fontSize: "11pt", fontWeight: 900, color: "#000", textAlign: "right" }}>{totalQty} EA</td>
+            </tr>
+          </tfoot>
         </table>
       </div>
 
-      {/* ── Footer ── */}
-      <div style={{ borderTop: "1px solid #cbd5e1", paddingTop: "2mm", marginTop: "auto", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={{ fontSize: "5.5pt", color: "#94a3b8", fontFamily: "'Courier New', monospace" }}>{batchCode}</span>
-        <span style={{ fontSize: "6pt", color: "#64748b" }}>Printed: {printedOn}</span>
-        <span style={{ fontSize: "6pt", color: "#64748b" }}>□ Picked &nbsp; □ Done</span>
+      {/* ── Footer signature lines ── */}
+      <div style={{ borderTop: "1px solid #cbd5e1", paddingTop: "2.5mm", marginTop: "auto" }}>
+        <div style={{ display: "flex", gap: "4mm", marginBottom: "2mm" }}>
+          {["Picker", "Checked", "Date/Time"].map((label) => (
+            <div key={label} style={{ flex: 1 }}>
+              <div style={{ fontSize: "6pt", color: "#94a3b8", marginBottom: "1.5mm" }}>{label}</div>
+              <div style={{ borderBottom: "1px solid #334155", height: "4mm" }} />
+            </div>
+          ))}
+        </div>
+        <div style={{ textAlign: "right", fontSize: "5.5pt", color: "#94a3b8" }}>
+          Generated: {generatedAt}
+        </div>
       </div>
     </div>
   );
 }
-
-function thStyle(align: "left" | "right" | "center", width?: string): React.CSSProperties {
-  return {
-    textAlign: align, padding: "2px 3px", fontSize: "6.5pt", fontWeight: 800,
-    letterSpacing: "0.12em", color: "#475569", textTransform: "uppercase",
-    ...(width ? { width } : {}),
-  };
-}
-
-const tdMono: React.CSSProperties = {
-  padding: "3px 3px", fontSize: "7.5pt", fontFamily: "'Courier New', monospace",
-  fontWeight: 700, color: "#000", whiteSpace: "nowrap",
-};
-const tdName: React.CSSProperties = {
-  padding: "3px 3px", fontSize: "7pt", color: "#334155",
-  maxWidth: "1.4in", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-};
-const tdQty: React.CSSProperties = {
-  padding: "3px 3px", fontSize: "9pt", fontWeight: 600, textAlign: "right", color: "#000",
-};
-const tdTotal: React.CSSProperties = {
-  padding: "3px 3px", fontSize: "9.5pt", fontWeight: 900, textAlign: "right", color: "#000",
-};
-const tdCheck: React.CSSProperties = {
-  padding: "3px 0 3px 3px", textAlign: "center",
-};
 
 export default function WmsBatchPrintPage() {
   return (
