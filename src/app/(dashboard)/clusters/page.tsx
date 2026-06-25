@@ -878,13 +878,17 @@ export default function ClustersPage() {
         ...(replenishmentBins.length > 0 ? { replenishmentBins } : {}),
       };
 
-      await fetch("/api/cluster", {
+      const saveRes = await fetch("/api/cluster", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(cluster),
       });
+      if (!saveRes.ok) {
+        const errBody = await saveRes.json().catch(() => ({}));
+        throw new Error(errBody?.error ?? `Failed to save cluster (${saveRes.status})`);
+      }
 
-      setClusters((p) => [cluster, ...p]);
+      await loadClusters();
       setSelectedCodes({});
       setCreateStep("");
     } catch (e) {
