@@ -153,112 +153,108 @@ function Ticket({ batchName, batchCode, dateDisplay, whCode, custCode, orderCoun
   skus: SkuRow[]; totalQty: number; qrDataUrl: string; generatedAt: string;
 }) {
   const F = "Arial, sans-serif";
+  const B = "1px solid #000";
+  const B2 = "2px solid #000";
 
   return (
     <div className="label" style={{
-      fontFamily: F, width: "4in", minHeight: "6in", padding: "5mm",
-      boxSizing: "border-box", background: "white",
-      border: "1px solid #cbd5e1", boxShadow: "0 2px 12px rgba(0,0,0,0.1)",
-      display: "flex", flexDirection: "column",
+      fontFamily: F, width: "4in", minHeight: "6in", padding: "4mm",
+      boxSizing: "border-box", background: "#fff",
+      border: "2px solid #000",
+      display: "flex", flexDirection: "column", gap: 0,
     }}>
 
-      {/* ── Top header: client info + QR ── */}
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: "2.5mm" }}>
+      {/* ── Top: BATCH PICK banner ── */}
+      <div style={{ borderBottom: B2, paddingBottom: "2mm", marginBottom: "2mm", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
-          <div style={{ fontSize: "9.5pt", fontWeight: 700, color: "#000", marginBottom: "1mm" }}>
-            Client: <span style={{ fontWeight: 900 }}>{custCode || "ALL"}</span>
+          <div style={{ fontSize: "7pt", fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "#000", marginBottom: "1mm" }}>
+            ▌ BATCH PICK TICKET
           </div>
-          <div style={{ fontSize: "8pt", color: "#334155", lineHeight: 1.6 }}>
-            Total SKU: <strong>{skus.length}</strong>
-          </div>
-          <div style={{ fontSize: "8pt", color: "#334155", lineHeight: 1.6 }}>
-            Total Qty: <strong>{totalQty}</strong>
-          </div>
-          <div style={{ marginTop: "1.5mm" }}>
-            <span style={{
-              display: "inline-block", fontSize: "6.5pt", fontWeight: 700,
-              background: "#e2e8f0", color: "#475569", padding: "1px 6px", borderRadius: 3,
-              letterSpacing: "0.05em",
-            }}>
-              Batch Pick
-            </span>
+          <div style={{ fontSize: "8pt", fontWeight: 900, color: "#000" }}>
+            {batchName}
           </div>
         </div>
         {qrDataUrl && (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={qrDataUrl} alt={batchCode}
-            style={{ width: "22mm", height: "22mm", flexShrink: 0, imageRendering: "pixelated" }} />
+            style={{ width: "20mm", height: "20mm", flexShrink: 0, imageRendering: "pixelated" }} />
         )}
       </div>
 
-      {/* ── Batch info rows ── */}
-      <div style={{ borderTop: "1.5px solid #000", borderBottom: "1px solid #e2e8f0", padding: "2mm 0", marginBottom: "2.5mm" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-          <div style={{ fontSize: "7.5pt", color: "#475569" }}>
-            Batch No.: &nbsp;<span style={{ fontFamily: "'Courier New', monospace", fontWeight: 700, color: "#000", fontSize: "8pt" }}>{batchCode}</span>
-          </div>
-          <div style={{ fontSize: "8pt", fontWeight: 800, color: "#000" }}>
-            {orderCount} orders
-          </div>
-        </div>
-        <div style={{ fontSize: "7.5pt", color: "#475569", marginTop: "0.8mm" }}>
-          Date: <strong>{dateDisplay}</strong> &nbsp;·&nbsp; WH: <strong>{whCode}</strong>
-        </div>
-      </div>
-
-      {/* ── Batch name block (like "Ship To") ── */}
-      <div style={{ borderLeft: "3.5px solid #3b82f6", paddingLeft: "3mm", marginBottom: "3mm" }}>
-        <div style={{ fontSize: "6pt", fontWeight: 700, letterSpacing: "0.1em", color: "#94a3b8", textTransform: "uppercase", marginBottom: "1mm" }}>
-          Batch Name
-        </div>
-        <div style={{ fontSize: "11pt", fontWeight: 900, color: "#000", lineHeight: 1.2 }}>{batchName}</div>
-      </div>
+      {/* ── Info grid (2×2 table) ── */}
+      <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: "3mm", fontSize: "7.5pt", color: "#000" }}>
+        <tbody>
+          <tr>
+            <td style={{ border: B, padding: "1.5mm 2mm", width: "50%", fontWeight: 700 }}>
+              Batch No.<br />
+              <span style={{ fontFamily: "'Courier New', monospace", fontWeight: 900, fontSize: "8pt" }}>{batchCode}</span>
+            </td>
+            <td style={{ border: B, padding: "1.5mm 2mm" }}>
+              <span style={{ fontWeight: 700 }}>Client: </span><span style={{ fontWeight: 900 }}>{custCode || "ALL"}</span><br />
+              <span style={{ fontWeight: 700 }}>WH: </span><span style={{ fontWeight: 900 }}>{whCode}</span>
+            </td>
+          </tr>
+          <tr>
+            <td style={{ border: B, padding: "1.5mm 2mm" }}>
+              <span style={{ fontWeight: 700 }}>Date: </span><span style={{ fontWeight: 900 }}>{dateDisplay}</span><br />
+              <span style={{ fontWeight: 700 }}>Orders: </span><span style={{ fontWeight: 900 }}>{orderCount}</span>
+            </td>
+            <td style={{ border: B, padding: "1.5mm 2mm" }}>
+              <span style={{ fontWeight: 700 }}>Total SKU: </span><span style={{ fontWeight: 900 }}>{skus.length}</span><br />
+              <span style={{ fontWeight: 700 }}>Total Qty: </span><span style={{ fontWeight: 900 }}>{totalQty} EA</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
 
       {/* ── Items table ── */}
       <div style={{ flex: 1 }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: F, border: "1.5px solid #000" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: F }}>
           <thead>
-            <tr style={{ background: "#1e293b" }}>
-              <th style={{ width: "8%", textAlign: "center", padding: "2mm 1.5mm", fontSize: "6.5pt", fontWeight: 800, color: "#fff", letterSpacing: "0.1em", border: "1px solid #334155", borderBottom: "1.5px solid #000" }}>#</th>
-              <th style={{ textAlign: "left", padding: "2mm 1.5mm", fontSize: "6.5pt", fontWeight: 800, color: "#fff", letterSpacing: "0.1em", border: "1px solid #334155", borderBottom: "1.5px solid #000" }}>SKU / ITEM</th>
-              <th style={{ width: "20%", textAlign: "center", padding: "2mm 1.5mm", fontSize: "6.5pt", fontWeight: 800, color: "#fff", letterSpacing: "0.1em", border: "1px solid #334155", borderBottom: "1.5px solid #000" }}>QTY</th>
+            <tr>
+              <th style={{ width: "8%", textAlign: "center", padding: "2mm 1mm", fontSize: "6.5pt", fontWeight: 900, color: "#000", letterSpacing: "0.1em", border: B2, borderBottom: B2, textTransform: "uppercase" }}>#</th>
+              <th style={{ textAlign: "left", padding: "2mm 1.5mm", fontSize: "6.5pt", fontWeight: 900, color: "#000", letterSpacing: "0.1em", border: B2, borderBottom: B2, textTransform: "uppercase" }}>SKU / Item</th>
+              <th style={{ width: "22%", textAlign: "center", padding: "2mm 1mm", fontSize: "6.5pt", fontWeight: 900, color: "#000", letterSpacing: "0.1em", border: B2, borderBottom: B2, textTransform: "uppercase" }}>Qty</th>
+              <th style={{ width: "12%", textAlign: "center", padding: "2mm 1mm", fontSize: "6.5pt", fontWeight: 900, color: "#000", letterSpacing: "0.1em", border: B2, borderBottom: B2, textTransform: "uppercase" }}>✓</th>
             </tr>
           </thead>
           <tbody>
             {skus.map((row, i) => (
-              <tr key={row.sku} style={{ background: i % 2 === 0 ? "#fff" : "#f8fafc", verticalAlign: "top" }}>
-                <td style={{ textAlign: "center", padding: "2mm 1.5mm", fontSize: "8pt", fontWeight: 800, color: "#0f172a", border: "1px solid #cbd5e1", borderColor: "#cbd5e1" }}>{i + 1}</td>
-                <td style={{ padding: "2mm 1.5mm", border: "1px solid #cbd5e1" }}>
-                  <div style={{ fontFamily: "'Courier New', monospace", fontSize: "7.5pt", fontWeight: 700, color: "#000", marginBottom: "0.8mm", letterSpacing: "0.02em" }}>{row.sku}</div>
-                  <div style={{ fontSize: "7pt", fontWeight: 500, color: "#334155", lineHeight: 1.3 }}>{row.name || "—"}</div>
+              <tr key={row.sku} style={{ verticalAlign: "top" }}>
+                <td style={{ textAlign: "center", padding: "2mm 1mm", fontSize: "8pt", fontWeight: 900, color: "#000", border: B }}>{i + 1}</td>
+                <td style={{ padding: "2mm 1.5mm", border: B }}>
+                  <div style={{ fontFamily: "'Courier New', monospace", fontSize: "8pt", fontWeight: 900, color: "#000", letterSpacing: "0.02em" }}>{row.sku}</div>
+                  <div style={{ fontSize: "6.5pt", fontWeight: 500, color: "#000", lineHeight: 1.3, marginTop: "0.5mm" }}>{row.name || "—"}</div>
                 </td>
-                <td style={{ textAlign: "center", padding: "2mm 1.5mm", border: "1px solid #cbd5e1", verticalAlign: "middle" }}>
-                  <div style={{ fontSize: "10pt", fontWeight: 900, color: "#000", lineHeight: 1.1 }}>{row.totalQty}</div>
-                  <div style={{ fontSize: "6pt", color: "#64748b", marginTop: "0.5mm" }}>×{orderCount} orders</div>
+                <td style={{ textAlign: "center", padding: "2mm 1mm", border: B, verticalAlign: "middle" }}>
+                  <div style={{ fontSize: "11pt", fontWeight: 900, color: "#000" }}>{row.totalQty}</div>
+                  <div style={{ fontSize: "5.5pt", color: "#000", marginTop: "0.3mm" }}>×{orderCount}</div>
                 </td>
+                <td style={{ border: B }} />
               </tr>
             ))}
           </tbody>
           <tfoot>
-            <tr style={{ background: "#0f172a" }}>
-              <td colSpan={2} style={{ padding: "2.5mm 2mm", fontSize: "8pt", fontWeight: 800, color: "#fff", textAlign: "right", letterSpacing: "0.08em", border: "1.5px solid #000" }}>TOTAL</td>
-              <td style={{ padding: "2.5mm 1.5mm", fontSize: "12pt", fontWeight: 900, color: "#fff", textAlign: "center", border: "1.5px solid #000" }}>{totalQty} EA</td>
+            <tr>
+              <td colSpan={2} style={{ padding: "2mm 1.5mm", fontSize: "8.5pt", fontWeight: 900, color: "#000", textAlign: "right", border: B2, borderTop: B2, letterSpacing: "0.1em" }}>TOTAL</td>
+              <td style={{ padding: "2mm 1mm", fontSize: "13pt", fontWeight: 900, color: "#000", textAlign: "center", border: B2, borderTop: B2 }}>{totalQty}</td>
+              <td style={{ border: B2, borderTop: B2 }} />
             </tr>
           </tfoot>
         </table>
       </div>
 
       {/* ── Footer signature lines ── */}
-      <div style={{ borderTop: "1px solid #cbd5e1", paddingTop: "2.5mm", marginTop: "auto" }}>
-        <div style={{ display: "flex", gap: "4mm", marginBottom: "2mm" }}>
-          {["Picker", "Checked", "Date/Time"].map((label) => (
+      <div style={{ borderTop: B2, paddingTop: "2.5mm", marginTop: "3mm" }}>
+        <div style={{ display: "flex", gap: "3mm", marginBottom: "1.5mm" }}>
+          {["Picker", "Checked", "Date / Time"].map((label) => (
             <div key={label} style={{ flex: 1 }}>
-              <div style={{ fontSize: "6pt", color: "#94a3b8", marginBottom: "1.5mm" }}>{label}</div>
-              <div style={{ borderBottom: "1px solid #334155", height: "4mm" }} />
+              <div style={{ fontSize: "6pt", fontWeight: 700, color: "#000", marginBottom: "1.5mm", textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</div>
+              <div style={{ borderBottom: B2, height: "5mm" }} />
             </div>
           ))}
         </div>
-        <div style={{ textAlign: "right", fontSize: "5.5pt", color: "#94a3b8" }}>
+        <div style={{ textAlign: "right", fontSize: "5pt", color: "#000", marginTop: "1mm" }}>
           Generated: {generatedAt}
         </div>
       </div>
