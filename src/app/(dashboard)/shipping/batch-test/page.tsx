@@ -256,7 +256,7 @@ export default function BatchTestPage() {
     } catch { setSkuField(batch.batchCode, sku, "loading", false); }
   }
 
-  // ── Assign SKU to all orders ───────────────────────────────────────────────
+  // ── Assign SKU to all orders (parallel) ───────────────────────────────────
   async function assignSku(batch: WmsBatch, skuEntry: SkuEntry) {
     const state = getSkuState(batch.batchCode, skuEntry.sku);
     if (!state.selected) return;
@@ -269,45 +269,75 @@ export default function BatchTestPage() {
     setSkuField(batch.batchCode, skuEntry.sku, "assigning", true);
     setSkuField(batch.batchCode, skuEntry.sku, "result", null);
     setSkuField(batch.batchCode, skuEntry.sku, "message", "");
-    setAssignProgress({ batchCode: batch.batchCode, sku: skuEntry.sku, done: 0, total: bOrders.length });
 
+    const total = bOrders.length;
     let done = 0;
     const issues: string[] = [];
 
-    for (const order of bOrders) {
-      const orderCode = order.shippingOrderCode;
-      try {
-        const itemsRes = await fetch(`/api/wms/shipping/items/${encodeURIComponent(orderCode)}`, { headers });
-        const itemsJson = await itemsRes.json().catch(() => ({}));
-        const ijData = ((itemsJson as Record<string, unknown>)?.data ?? {}) as Record<string, unknown>;
-        const items = (Array.isArray(ijData.items) ? ijData.items : []) as Record<string, unknown>[];
-        const lineItem = items.find((it) => String(it.productSku ?? "") === skuEntry.sku);
-        if (!lineItem) { issues.push(`${orderCode}: SKU not found`); done++; setAssignProgress((p) => p ? { ...p, done: done } : null); continue; }
-        const qty = Number(lineItem.unassignedQty ?? lineItem.qty ?? skuEntry.qtyPerOrder);
-        if (qty <= 0) { done++; setAssignProgress((p) => p ? { ...p, done: done } : null); continue; }
+    const FETCH_CONCURRENCY = 10; // parallel items fetches
+    const ASSIGN_CONCURRENCY = 6; // parallel assign calls
 
+    // helper: run tasks with concurrency cap
+    async function runCapped<T>(tasks: (() => Promise<T>)[], limit: number): Promise<T[]> {
+      const results: T[] = [];
+      let i = 0;
+      async function worker() {
+        while (i < tasks.length) {
+          const idx = i++;
+          results[idx] = await tasks[idx]();
+        }
+      }
+      await Promise.all(Array.from({ length: limit }, worker));
+      return results;
+    }
+
+    // Phase 1: fetch shippingItemId for every order (parallel)
+    setAssignProgress({ batchCode: batch.batchCode, sku: skuEntry.sku, done: 0, total, phase: "fetch" } as typeof assignProgress extends null ? never : NonNullable<typeof assignProgress>);
+
+    type ItemInfo = { orderCode: string; customerCode: string; shippingItemId: unknown; qty: number } | null;
+    const fetchTasks = bOrders.map((order) => async (): Promise<ItemInfo> => {
+      try {
+        const res = await fetch(`/api/wms/shipping/items/${encodeURIComponent(order.shippingOrderCode)}`, { headers });
+        const json = await res.json().catch(() => ({}));
+        const data = ((json as Record<string, unknown>)?.data ?? {}) as Record<string, unknown>;
+        const items = (Array.isArray(data.items) ? data.items : []) as Record<string, unknown>[];
+        const lineItem = items.find((it) => String(it.productSku ?? "") === skuEntry.sku);
+        if (!lineItem) { issues.push(`${order.shippingOrderCode}: SKU not found`); return null; }
+        const qty = Number(lineItem.unassignedQty ?? lineItem.qty ?? skuEntry.qtyPerOrder);
+        if (qty <= 0) return null;
+        return { orderCode: order.shippingOrderCode, customerCode: order.customerCode, shippingItemId: lineItem.shippingItemId, qty };
+      } catch (e) { issues.push(`${order.shippingOrderCode}: ${e instanceof Error ? e.message : "fetch error"}`); return null; }
+    });
+
+    const fetched = (await runCapped(fetchTasks, FETCH_CONCURRENCY)).filter(Boolean) as NonNullable<ItemInfo>[];
+
+    // Phase 2: assign in parallel
+    setAssignProgress({ batchCode: batch.batchCode, sku: skuEntry.sku, done: 0, total });
+
+    const assignTasks = fetched.map((info) => async () => {
+      try {
         const body = {
-          shippingOrderCode: orderCode,
-          shippingItemId: lineItem.shippingItemId,
-          customerCode: order.customerCode,
+          shippingOrderCode: info.orderCode,
+          shippingItemId: info.shippingItemId,
+          customerCode: info.customerCode,
           warehouseCode: batch.warehouseCode,
           warehouseCd: stockOption.location,
           productSku: skuEntry.sku,
           lotNo: stockOption.lotNo ?? "",
           expireDate: stockOption.expireDate ?? "",
           itemCondition: stockOption.itemCondition ?? "GOOD",
-          qty,
+          qty: info.qty,
         };
         const r = await fetch("/api/wms/shipping/assign", { method: "POST", headers, body: JSON.stringify(body) });
         const rj = await r.json().catch(() => ({}));
-        if (!r.ok || !(rj as Record<string, unknown>)?.isSuccess) {
-          issues.push(`${orderCode}: ${String((rj as Record<string, unknown>)?.message ?? "failed")}`);
-        }
-      } catch (e) { issues.push(`${orderCode}: ${e instanceof Error ? e.message : "error"}`); }
+        if (!r.ok || !(rj as Record<string, unknown>)?.isSuccess)
+          issues.push(`${info.orderCode}: ${String((rj as Record<string, unknown>)?.message ?? "failed")}`);
+      } catch (e) { issues.push(`${info.orderCode}: ${e instanceof Error ? e.message : "error"}`); }
       done++;
-      setAssignProgress((p) => p ? { ...p, done: done } : null);
-      await sleep(200);
-    }
+      setAssignProgress((p) => p ? { ...p, done } : null);
+    });
+
+    await runCapped(assignTasks, ASSIGN_CONCURRENCY);
 
     setAssignProgress(null);
     const ok = issues.length === 0;
