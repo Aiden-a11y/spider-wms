@@ -1,5 +1,7 @@
 "use client";
 
+export const dynamic = "force-dynamic";
+
 import { useEffect, useState, useMemo } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import { Loader2, CheckCircle2, AlertCircle, XCircle } from "lucide-react";
@@ -9,7 +11,7 @@ type BatchResult = { batchCode: string; batchName: string; orderCount: number; o
 export default function BatchCompleteAllPage() {
   const { user } = useAuth();
   const headers = useMemo(
-    () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
+    () => ({ Authorization: `Bearer ${user?.token ?? ""}`, "Content-Type": "application/json" }),
     [user]
   );
 
