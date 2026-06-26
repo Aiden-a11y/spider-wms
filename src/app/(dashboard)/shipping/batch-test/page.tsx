@@ -115,6 +115,7 @@ export default function BatchTestPage() {
   // Assign panel
   const [assignPanelCode, setAssignPanelCode] = useState<string | null>(null);
   const [batchSkus, setBatchSkus] = useState<Record<string, SkuEntry[]>>({});
+  const [batchAssignments, setBatchAssignments] = useState<Record<string, Record<string, string>>>({});  // batchCode → { sku: locationLabel }
   const [loadingSkus, setLoadingSkus] = useState<Record<string, boolean>>({});
   const [skuState, setSkuState] = useState<Record<string, SkuAssignState>>({});
   const [assignProgress, setAssignProgress] = useState<{ batchCode: string; sku: string; done: number; total: number } | null>(null);
@@ -191,6 +192,18 @@ export default function BatchTestPage() {
       const itemRes = await fetch(`/api/wms/shipping/items/${encodeURIComponent(firstCode)}`, { headers });
       const itemJson = await itemRes.json();
       const items: Record<string, unknown>[] = Array.isArray(itemJson?.data?.items) ? itemJson.data.items : [];
+      const asgns: Record<string, unknown>[] = Array.isArray(itemJson?.data?.assignments) ? itemJson.data.assignments : [];
+
+      // Build sku → location label map from assignments
+      const asgMap: Record<string, string> = {};
+      for (const a of asgns) {
+        const sku = String(a.productSku ?? "");
+        if (!sku) continue;
+        const label = [a.zoneNm, a.aisleNm, a.bayNm, a.levelNm, a.positionNm].filter(Boolean).join("-") || String(a.location ?? "");
+        if (!asgMap[sku]) asgMap[sku] = label;
+      }
+      setBatchAssignments((p) => ({ ...p, [batch.batchCode]: asgMap }));
+
       setBatchSkus((p) => ({
         ...p,
         [batch.batchCode]: items
@@ -538,6 +551,7 @@ export default function BatchTestPage() {
                           {skus.map((skuEntry) => {
                             const state = getSkuState(batch.batchCode, skuEntry.sku);
                             const isActive = assignProgress?.batchCode === batch.batchCode && assignProgress.sku === skuEntry.sku;
+                            const assignedLoc = batchAssignments[batch.batchCode]?.[skuEntry.sku];
 
                             return (
                               <div key={skuEntry.sku} className="px-5 py-4">
@@ -550,6 +564,14 @@ export default function BatchTestPage() {
                                       <span className="text-sm text-slate-500">{skuEntry.qtyPerOrder}/order × {batch.orderCount} orders</span>
                                       <span className="text-base font-extrabold text-violet-700">= {skuEntry.totalQty} total</span>
                                     </div>
+                                    {assignedLoc && (
+                                      <div className="flex items-center gap-1.5 mt-2 px-2.5 py-1 rounded-md w-fit"
+                                        style={{ background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.3)" }}>
+                                        <CheckCircle2 className="w-3.5 h-3.5 text-green-600 flex-shrink-0" />
+                                        <span className="font-mono text-xs font-bold text-green-700">{assignedLoc}</span>
+                                        <span className="text-xs text-green-600 ml-0.5">assigned</span>
+                                      </div>
+                                    )}
                                   </div>
                                   {state.options.length === 0 && !state.loading && (
                                     <button onClick={() => loadLocations(batch, skuEntry.sku)}
