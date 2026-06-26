@@ -135,11 +135,10 @@ function PrintInner() {
           .no-print { display: none !important; }
           .print-only { display: block !important; }
           body, html { margin: 0 !important; padding: 0 !important; background: white !important; }
-          @page { size: 4in 6in; margin: 0; }
+          @page { size: 4in auto; margin: 4mm; }
           .label {
-            width: 4in !important; height: 6in !important;
-            padding: 5mm !important; box-sizing: border-box !important;
-            page-break-after: always !important; page-break-inside: avoid !important;
+            width: 100% !important; height: auto !important; min-height: 0 !important;
+            padding: 0 !important; box-sizing: border-box !important;
             border: none !important; box-shadow: none !important;
           }
         }
@@ -157,10 +156,10 @@ function Ticket({ batchName, batchCode, dateDisplay, whCode, custCode, orderCoun
 
   return (
     <div className="label" style={{
-      fontFamily: F, width: "4in", height: "6in", padding: "5mm",
+      fontFamily: F, width: "4in", minHeight: "6in", padding: "5mm",
       boxSizing: "border-box", background: "white",
       border: "1px solid #cbd5e1", boxShadow: "0 2px 12px rgba(0,0,0,0.1)",
-      display: "flex", flexDirection: "column", overflow: "hidden",
+      display: "flex", flexDirection: "column",
     }}>
 
       {/* ── Top header: client info + QR ── */}
@@ -216,36 +215,34 @@ function Ticket({ batchName, batchCode, dateDisplay, whCode, custCode, orderCoun
       </div>
 
       {/* ── Items table ── */}
-      <div style={{ flex: 1, overflow: "hidden" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: F }}>
+      <div style={{ flex: 1 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: F, border: "1.5px solid #000" }}>
           <thead>
-            <tr style={{ borderBottom: "2px solid #000" }}>
-              <th style={{ width: "7%",  textAlign: "center", padding: "1.5mm 1mm", fontSize: "6.5pt", fontWeight: 700, color: "#475569", letterSpacing: "0.08em" }}>No.</th>
-              <th style={{               textAlign: "left",   padding: "1.5mm 1mm", fontSize: "6.5pt", fontWeight: 700, color: "#475569", letterSpacing: "0.08em" }}>Item</th>
-              <th style={{ width: "18%", textAlign: "right",  padding: "1.5mm 1mm", fontSize: "6.5pt", fontWeight: 700, color: "#475569", letterSpacing: "0.08em" }}>Qty</th>
+            <tr style={{ background: "#1e293b" }}>
+              <th style={{ width: "8%", textAlign: "center", padding: "2mm 1.5mm", fontSize: "6.5pt", fontWeight: 800, color: "#fff", letterSpacing: "0.1em", border: "1px solid #334155", borderBottom: "1.5px solid #000" }}>#</th>
+              <th style={{ textAlign: "left", padding: "2mm 1.5mm", fontSize: "6.5pt", fontWeight: 800, color: "#fff", letterSpacing: "0.1em", border: "1px solid #334155", borderBottom: "1.5px solid #000" }}>SKU / ITEM</th>
+              <th style={{ width: "20%", textAlign: "center", padding: "2mm 1.5mm", fontSize: "6.5pt", fontWeight: 800, color: "#fff", letterSpacing: "0.1em", border: "1px solid #334155", borderBottom: "1.5px solid #000" }}>QTY</th>
             </tr>
           </thead>
           <tbody>
             {skus.map((row, i) => (
-              <tr key={row.sku} style={{ borderBottom: "0.5px solid #e2e8f0", verticalAlign: "top" }}>
-                <td style={{ textAlign: "center", padding: "2mm 1mm", fontSize: "8pt", fontWeight: 700, color: "#334155" }}>{i + 1}</td>
-                <td style={{ padding: "2mm 1mm" }}>
-                  <div style={{ fontSize: "7pt", color: "#64748b", marginBottom: "0.5mm" }}>
-                    SKU: <span style={{ fontFamily: "'Courier New', monospace", fontWeight: 700, color: "#000" }}>{row.sku}</span>
-                  </div>
-                  <div style={{ fontSize: "7.5pt", fontWeight: 600, color: "#0f172a", lineHeight: 1.3 }}>{row.name || "—"}</div>
+              <tr key={row.sku} style={{ background: i % 2 === 0 ? "#fff" : "#f8fafc", verticalAlign: "top" }}>
+                <td style={{ textAlign: "center", padding: "2mm 1.5mm", fontSize: "8pt", fontWeight: 800, color: "#0f172a", border: "1px solid #cbd5e1", borderColor: "#cbd5e1" }}>{i + 1}</td>
+                <td style={{ padding: "2mm 1.5mm", border: "1px solid #cbd5e1" }}>
+                  <div style={{ fontFamily: "'Courier New', monospace", fontSize: "7.5pt", fontWeight: 700, color: "#000", marginBottom: "0.8mm", letterSpacing: "0.02em" }}>{row.sku}</div>
+                  <div style={{ fontSize: "7pt", fontWeight: 500, color: "#334155", lineHeight: 1.3 }}>{row.name || "—"}</div>
                 </td>
-                <td style={{ textAlign: "right", padding: "2mm 1mm", verticalAlign: "top" }}>
-                  <div style={{ fontSize: "7pt", color: "#64748b" }}>{row.qtyPerOrder}/order</div>
-                  <div style={{ fontSize: "10pt", fontWeight: 900, color: "#000", lineHeight: 1.1 }}>{row.totalQty} EA</div>
+                <td style={{ textAlign: "center", padding: "2mm 1.5mm", border: "1px solid #cbd5e1", verticalAlign: "middle" }}>
+                  <div style={{ fontSize: "10pt", fontWeight: 900, color: "#000", lineHeight: 1.1 }}>{row.totalQty}</div>
+                  <div style={{ fontSize: "6pt", color: "#64748b", marginTop: "0.5mm" }}>×{orderCount} orders</div>
                 </td>
               </tr>
             ))}
           </tbody>
           <tfoot>
-            <tr style={{ borderTop: "1.5px solid #000" }}>
-              <td colSpan={2} style={{ padding: "2mm 1mm", fontSize: "8pt", fontWeight: 800, color: "#000", textAlign: "right", letterSpacing: "0.05em" }}>TOTAL</td>
-              <td style={{ padding: "2mm 1mm", fontSize: "11pt", fontWeight: 900, color: "#000", textAlign: "right" }}>{totalQty} EA</td>
+            <tr style={{ background: "#0f172a" }}>
+              <td colSpan={2} style={{ padding: "2.5mm 2mm", fontSize: "8pt", fontWeight: 800, color: "#fff", textAlign: "right", letterSpacing: "0.08em", border: "1.5px solid #000" }}>TOTAL</td>
+              <td style={{ padding: "2.5mm 1.5mm", fontSize: "12pt", fontWeight: 900, color: "#fff", textAlign: "center", border: "1.5px solid #000" }}>{totalQty} EA</td>
             </tr>
           </tfoot>
         </table>
