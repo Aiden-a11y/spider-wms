@@ -872,32 +872,68 @@ export default function ClustersPage() {
   const [reopeningId, setReopeningId] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
 
+  // Statuses at or beyond DA — sending CA to these would revert packing progress
+  const SKIP_CA_STATUSES = new Set(["DA", "FA", "AC", "LC", "EA"]);
+
+  async function fetchOrderStatus(warehouseCode: string, customerCode: string, orderCode: string): Promise<string | null> {
+    for (const ep of ["/api/wms/shipping/b2c/list", "/api/wms/shipping/list"]) {
+      try {
+        const res = await fetch(ep, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ page: 1, limit: 50, pageSize: 50, warehouseCode, customerCode, shippingOrderCode: orderCode }),
+        });
+        const j = await res.json().catch(() => null);
+        if (!j) continue;
+        const list: Record<string, unknown>[] =
+          (j?.data as Record<string, unknown>)?.list as Record<string, unknown>[] ??
+          (j?.data as Record<string, unknown>)?.items as Record<string, unknown>[] ??
+          j?.data ?? j?.list ?? [];
+        if (!Array.isArray(list)) continue;
+        const order = list.find((o) => String(o.shippingOrderCode ?? o.orderCode ?? "") === orderCode);
+        if (order) return String(order.status ?? order.orderStatus ?? "AA");
+      } catch { /* try next */ }
+    }
+    return null;
+  }
+
   async function completeCluster(id: string) {
     setConfirmCompleteId(null);
     setCompletingId(id);
     const cluster = clusters.find((c) => c.id === id);
     if (cluster && cluster.status !== "completed") {
-      // Group bins by customerCode to batch status-change calls
+      // Group bins by customerCode, then pre-flight check each order's WMS status.
+      // Skip orders already at DA/FA or beyond — CA would revert their packing progress.
       const grouped = new Map<string, string[]>();
       for (const bin of cluster.bins) {
         if (!grouped.has(bin.customerCode)) grouped.set(bin.customerCode, []);
         grouped.get(bin.customerCode)!.push(bin.orderCode);
       }
       await Promise.all(
-        Array.from(grouped.entries()).map(([customerCode, orderCodes]) =>
-          fetch("/api/wms/shipping/status-change", {
+        Array.from(grouped.entries()).map(async ([customerCode, orderCodes]) => {
+          const statusChecks = await Promise.all(
+            orderCodes.map(async (code) => ({
+              code,
+              status: await fetchOrderStatus(cluster.warehouseCode, customerCode, code),
+            }))
+          );
+          const eligible = statusChecks
+            .filter(({ status }) => !status || !SKIP_CA_STATUSES.has(status))
+            .map(({ code }) => code);
+          if (eligible.length === 0) return;
+          await fetch("/api/wms/shipping/status-change", {
             method: "POST",
             headers,
             body: JSON.stringify({
               warehouseCode: cluster.warehouseCode,
               customerCode,
-              orderCodes,
+              orderCodes: eligible,
               newStatus: "CA",
               completeDate: "",
               cancelComment: "",
             }),
-          }).catch(() => {})
-        )
+          }).catch(() => {});
+        })
       );
     }
     await fetch("/api/cluster", {
