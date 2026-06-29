@@ -93,7 +93,6 @@ const nav: NavItem[] = [
       { href: "/locations/available", label: "Available Locations", icon: CheckSquare },
     ],
   },
-  { href: "/batches", label: "Batch Pick", icon: Layers, children: undefined },
   { href: "/returns", label: "Returns", icon: RotateCcw, children: undefined },
   {
     href: undefined,
