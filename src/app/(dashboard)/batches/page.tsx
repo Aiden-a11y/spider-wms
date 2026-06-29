@@ -343,8 +343,11 @@ export default function BatchesPage() {
                     ))}
                   </div>
 
-                  {/* Row 3: timestamp */}
-                  <p className="text-xs text-slate-400">{new Date(batch.createdAt).toLocaleString()}</p>
+                  {/* Row 3: timestamp + creator */}
+                  <p className="text-xs text-slate-400">
+                    {new Date(batch.createdAt).toLocaleString()}
+                    {batch.createdBy ? <span className="ml-2 text-slate-500 font-medium">by {batch.createdBy}</span> : null}
+                  </p>
                 </div>
 
                 {/* Actions */}
