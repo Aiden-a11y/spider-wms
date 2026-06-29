@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import {
-  CheckCircle2, ChevronDown, ChevronUp, Layers, RefreshCw, Trash2, Loader2, Printer,
+  CheckCircle2, ChevronDown, ChevronUp, Layers, RefreshCw, Trash2, Loader2, Printer, Download,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { B2CCluster } from "@/lib/b2c-cluster";
@@ -21,6 +21,29 @@ export default function ClusterHistoryPage() {
   const [loading, setLoading] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [exportingId, setExportingId] = useState<string | null>(null);
+
+  async function exportCluster(cluster: B2CCluster) {
+    setExportingId(cluster.id);
+    try {
+      const res = await fetch("/api/cluster/export", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ clusterIds: [cluster.id] }),
+      });
+      if (!res.ok) throw new Error("Export failed");
+      const blob = await res.blob();
+      const label = cluster.clusterNo != null ? `cluster-${String(cluster.clusterNo).padStart(4, "0")}` : cluster.id;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${label}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch { /* silent */ } finally {
+      setExportingId(null);
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -129,6 +152,14 @@ export default function ClusterHistoryPage() {
                       title="Print Pick Tickets"
                     >
                       <Printer className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => exportCluster(cluster)}
+                      disabled={exportingId === cluster.id}
+                      className="p-2 rounded-lg text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors disabled:opacity-50"
+                      title="Export to Excel"
+                    >
+                      {exportingId === cluster.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
                     </button>
                     <button
                       onClick={() => { isDeleting ? null : deleteCluster(cluster.id); }}
