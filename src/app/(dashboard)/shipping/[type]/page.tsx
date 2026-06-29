@@ -195,7 +195,7 @@ export default function ShippingTypePage() {
   const [detail,        setDetail]        = useState<Order | null>(null);
   const [itemsRaw,      setItemsRaw]      = useState<Order[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [activeTab,     setActiveTab]     = useState<"info" | "address" | "package" | "additional" | "picking" | "history" | "raw">("info");
+  const [activeTab,     setActiveTab]     = useState<"info" | "address" | "package" | "additional" | "picking" | "raw">("info");
   const [editMode,      setEditMode]      = useState(false);
   const [editData,      setEditData]      = useState<Order>({});
   const [saving,        setSaving]        = useState(false);
@@ -235,11 +235,6 @@ export default function ShippingTypePage() {
   /* ── Pagination ── */
   const [tablePage,        setTablePage]        = useState(1);
   const TABLE_PAGE_SIZE = 100;
-
-  /* ── History tab state ── */
-  const [historyRows,    setHistoryRows]    = useState<Order[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyError,   setHistoryError]   = useState("");
 
   /* ── Manual Assign modal state ── */
   const [assignModalItem,  setAssignModalItem]  = useState<Order | null>(null);
@@ -539,52 +534,10 @@ export default function ShippingTypePage() {
     setOccupancyMap(new Map()); setPickingSaved(false);
     setAutoAssigning(false); setAutoAssignResult(""); setAutoAssignMsg("");
     setStatusModal(false); setNewStatus(""); setCancelComment(""); setOutDate(""); setNeedOutDate(false); setStatusError("");
-    setHistoryRows([]); setHistoryError("");
     closeAssignModal();
   }
 
   /* ── Load order status history ── */
-  async function loadHistory(code: string) {
-    if (!code || historyLoading) return;
-    setHistoryLoading(true); setHistoryError(""); setHistoryRows([]);
-    const endpoints = [
-      `/api/wms/shipping/status-log/${code}`,
-      `/api/wms/shipping/${code}/status-log`,
-      `/api/wms/shipping/history/${code}`,
-      `/api/wms/shipping/${code}/history`,
-      `/api/wms/shipping/${code}/log`,
-      `/api/wms/outbound/status-log/${code}`,
-      `/api/wms/outbound/${code}/history`,
-    ];
-    for (const ep of endpoints) {
-      try {
-        const res  = await fetch(ep, { headers });
-        const json = await res.json().catch(() => null);
-        if (!res.ok || !json) continue;
-        const data = json?.data ?? json;
-        const list = Array.isArray(data) ? data
-          : Array.isArray(data?.list) ? data.list
-          : Array.isArray(data?.items) ? data.items
-          : Array.isArray(data?.logs) ? data.logs
-          : null;
-        if (list && list.length > 0) {
-          setHistoryRows(list as Order[]);
-          setHistoryLoading(false);
-          return;
-        }
-        // single-object response (no list)
-        if (list !== null && list.length === 0) {
-          setHistoryRows([]);
-          setHistoryError("No history records found.");
-          setHistoryLoading(false);
-          return;
-        }
-      } catch { /* try next */ }
-    }
-    setHistoryError("History endpoint not available for this WMS.");
-    setHistoryLoading(false);
-  }
-
   /* ── Start Packing: save address data from detail and navigate ── */
   function startPacking() {
     if (!detail) return;
@@ -2485,25 +2438,18 @@ ${labels}
 
             {/* Tabs */}
             <div className="flex border-b border-slate-200 px-6 flex-shrink-0 overflow-x-auto">
-              {(["info", "address", "package", "additional", "picking", "history", "raw"] as const).map((tab) => {
+              {(["info", "address", "package", "additional", "picking", "raw"] as const).map((tab) => {
                 const label =
                   tab === "info"       ? "Info"
                   : tab === "address"  ? "Address"
                   : tab === "package"  ? "Package"
                   : tab === "additional" ? "Additional"
                   : tab === "picking"  ? `Picking${pickingRows.length ? ` (${pickingRows.length})` : ""}`
-                  : tab === "history"  ? "History"
                   : "Raw";
                 return (
-                  <button key={tab} onClick={() => {
-                    setActiveTab(tab);
-                    if (tab === "history" && historyRows.length === 0 && !historyLoading && !historyError) {
-                      loadHistory(String(d.shippingOrderCode ?? d.orderCode ?? d.outboundCode ?? ""));
-                    }
-                  }}
+                  <button key={tab} onClick={() => setActiveTab(tab)}
                     className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px whitespace-nowrap flex items-center gap-1.5 ${activeTab === tab ? "border-blue-600 text-blue-600" : "border-transparent text-slate-500 hover:text-slate-700"}`}>
                     {tab === "picking" && <MapPin className="w-3.5 h-3.5" />}
-                    {tab === "history" && historyLoading && <Loader2 className="w-3 h-3 animate-spin" />}
                     {label}
                   </button>
                 );
@@ -2891,68 +2837,6 @@ ${labels}
                 )}
 
                 {/* ── Raw tab ── */}
-                {activeTab === "history" && (
-                  <div className="p-6">
-                    {historyLoading && (
-                      <div className="flex items-center justify-center py-16 gap-3 text-slate-400">
-                        <Loader2 className="w-5 h-5 animate-spin" />
-                        <span className="text-sm">Loading history…</span>
-                      </div>
-                    )}
-                    {!historyLoading && historyError && (
-                      <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
-                        <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-                        {historyError}
-                      </div>
-                    )}
-                    {!historyLoading && !historyError && historyRows.length === 0 && (
-                      <p className="text-sm text-slate-400 text-center py-16">No history records.</p>
-                    )}
-                    {!historyLoading && historyRows.length > 0 && (
-                      <div className="relative">
-                        {/* vertical line */}
-                        <div className="absolute left-[7px] top-2 bottom-2 w-0.5 bg-slate-200" />
-                        <ol className="space-y-4 pl-7">
-                          {historyRows.map((row, i) => {
-                            const status   = String(row.status ?? row.statusCode ?? row.orderStatus ?? "");
-                            const name     = String(row.statusName ?? row.statusNm ?? statusLabel(status) ?? status);
-                            const at       = String(row.changedAt ?? row.createdAt ?? row.updatedAt ?? row.date ?? row.logDate ?? "");
-                            const by       = String(row.changedBy ?? row.createdBy ?? row.userId ?? row.user ?? "");
-                            const comment  = String(row.comment ?? row.memo ?? row.remark ?? "");
-                            return (
-                              <li key={i} className="relative">
-                                {/* dot */}
-                                <div className="absolute -left-7 top-1 w-3.5 h-3.5 rounded-full border-2 border-white bg-blue-500 shadow-sm" />
-                                <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
-                                  <div className="flex items-center justify-between gap-3 flex-wrap">
-                                    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold border ${statusBadge(status)}`}>
-                                      {name || status || "—"}
-                                    </span>
-                                    <span className="text-xs text-slate-400 font-mono">{at || "—"}</span>
-                                  </div>
-                                  {(by || comment) && (
-                                    <div className="mt-1.5 text-xs text-slate-500 space-y-0.5">
-                                      {by      && <p>By: <span className="font-medium text-slate-700">{by}</span></p>}
-                                      {comment && <p className="text-slate-400 italic">{comment}</p>}
-                                    </div>
-                                  )}
-                                  {/* show remaining keys for discoverability */}
-                                  {Object.keys(row).filter(k => !["status","statusCode","orderStatus","statusName","statusNm","changedAt","createdAt","updatedAt","date","logDate","changedBy","createdBy","userId","user","comment","memo","remark"].includes(k)).length > 0 && (
-                                    <details className="mt-2">
-                                      <summary className="text-[10px] text-slate-400 cursor-pointer hover:text-slate-600">raw fields</summary>
-                                      <pre className="text-[10px] text-slate-500 mt-1 overflow-auto max-h-24">{JSON.stringify(row, null, 2)}</pre>
-                                    </details>
-                                  )}
-                                </div>
-                              </li>
-                            );
-                          })}
-                        </ol>
-                      </div>
-                    )}
-                  </div>
-                )}
-
                 {activeTab === "raw" && (
                   <div className="p-6">
                     <pre className="bg-slate-900 text-green-400 rounded-xl p-4 text-xs overflow-auto max-h-[60vh]">
