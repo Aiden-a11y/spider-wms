@@ -1969,7 +1969,12 @@ ${labels}
       )}
 
       {error && <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm mb-5"><AlertCircle className="w-4 h-4 flex-shrink-0" /> {error}</div>}
-      {loading && <div className="space-y-2">{[...Array(6)].map((_, i) => <div key={i} className="bg-white rounded-xl border border-slate-100 h-11 animate-pulse" />)}</div>}
+      {loading && (
+        <div className="flex flex-col items-center justify-center py-24 gap-4 text-slate-400">
+          <Loader2 className="w-10 h-10 animate-spin text-blue-500" />
+          <p className="text-sm font-medium">Loading orders…</p>
+        </div>
+      )}
       {!loading && !error && filtered.length === 0 && (
         <div className="text-center py-20 text-slate-400">
           <Truck className="w-10 h-10 mx-auto mb-3 opacity-40" />
