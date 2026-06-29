@@ -869,6 +869,7 @@ export default function ClustersPage() {
   // ── Complete cluster ──────────────────────────────────────────────────────
   const [completingId, setCompletingId] = useState<string | null>(null);
   const [confirmCompleteId, setConfirmCompleteId] = useState<string | null>(null);
+  const [reopeningId, setReopeningId] = useState<string | null>(null);
 
   async function completeCluster(id: string) {
     setConfirmCompleteId(null);
@@ -904,6 +905,18 @@ export default function ClustersPage() {
       body: JSON.stringify({ id, status: "completed", completedAt: new Date().toISOString() }),
     });
     setCompletingId(null);
+    await loadClusters();
+  }
+
+  // ── Reopen cluster ────────────────────────────────────────────────────────
+  async function reopenCluster(id: string) {
+    setReopeningId(id);
+    await fetch("/api/cluster", {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ id, status: "active", completedAt: null }),
+    });
+    setReopeningId(null);
     await loadClusters();
   }
 
@@ -1467,6 +1480,117 @@ export default function ClustersPage() {
                           <div key={grp.locationCode} className="flex items-start gap-3 p-2.5 rounded-xl bg-slate-50 border border-slate-100">
                             <span className="text-xs font-bold text-slate-400 w-5 flex-shrink-0 mt-0.5">{idx + 1}</span>
                             <span className="font-mono text-sm font-bold text-slate-800 flex-shrink-0">{grp.locationCode}</span>
+                            <div className="flex flex-wrap gap-1">
+                              {grp.tasks.map((t, ti) => (
+                                <span key={ti} className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-md font-medium"
+                                  style={{ backgroundColor: `${binColor(t.binNo)}20`, color: binColor(t.binNo) }}>
+                                  Bin {t.binNo} · {t.sku} ×{t.qty}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Completed clusters (history) ── */}
+      {clusters.filter((c) => c.status === "completed").length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wide">Completed Clusters</h2>
+          {clusters.filter((c) => c.status === "completed").map((cluster) => {
+            const isExpanded = expandedCluster === cluster.id;
+            const isDeleting = deletingId === cluster.id;
+            const isReopening = reopeningId === cluster.id;
+            return (
+              <div key={cluster.id} className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden opacity-80 hover:opacity-100 transition-opacity">
+                <div className="px-5 py-4 flex items-start gap-4">
+                  {/* Bin color grid */}
+                  <div className="grid grid-cols-5 gap-0.5 flex-shrink-0 opacity-50">
+                    {Array.from({ length: Math.min(cluster.bins.length, 25) }).map((_, i) => (
+                      <div key={i}
+                        style={{ backgroundColor: binColor(i + 1), width: 14, height: 14, borderRadius: 2 }}
+                      />
+                    ))}
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap mb-1">
+                      <span className="text-base font-extrabold text-slate-700">{cluster.bins.length} bins</span>
+                      <span className="text-sm text-slate-400">· {cluster.locationGroups.length} locations</span>
+                      <span className="text-sm text-slate-400">· {cluster.warehouseCode}</span>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-700">
+                        <CheckCircle2 className="w-3 h-3" /> Completed
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400">Created: {new Date(cluster.createdAt).toLocaleString()}</p>
+                    {cluster.completedAt && (
+                      <p className="text-xs text-emerald-600">Completed: {new Date(cluster.completedAt).toLocaleString()}</p>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <button
+                      onClick={() => reopenCluster(cluster.id)}
+                      disabled={isReopening}
+                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-semibold bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50 transition-colors"
+                      title="Restore cluster to active — allows mobile picking again"
+                    >
+                      {isReopening
+                        ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Reopening…</>
+                        : <><RefreshCw className="w-3.5 h-3.5" /> Reopen</>}
+                    </button>
+                    <button
+                      onClick={() => { isDeleting ? null : deleteCluster(cluster.id); }}
+                      disabled={isDeleting}
+                      className="p-2 rounded-lg text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50"
+                    >
+                      {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                    </button>
+                    <button
+                      onClick={() => setExpandedCluster(isExpanded ? null : cluster.id)}
+                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-semibold bg-slate-100 text-slate-500 hover:bg-slate-200 transition-colors"
+                    >
+                      {isExpanded ? <><ChevronUp className="w-3.5 h-3.5" /> Collapse</> : <><ChevronDown className="w-3.5 h-3.5" /> Detail</>}
+                    </button>
+                  </div>
+                </div>
+
+                {isExpanded && (
+                  <div className="border-t border-slate-100">
+                    {/* Bin list */}
+                    <div className="px-5 py-3 border-b border-slate-100">
+                      <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">Bins ({cluster.bins.length})</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {cluster.bins.map((bin) => (
+                          <div key={bin.binNo} className="flex items-start gap-2 p-2.5 rounded-xl border border-slate-100 bg-slate-50">
+                            <div className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
+                              style={{ backgroundColor: binColor(bin.binNo) }}>
+                              {bin.binNo}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-mono text-xs font-bold text-slate-700 truncate">{bin.orderNo || bin.orderCode}</p>
+                              {bin.consigneeName && <p className="text-xs text-slate-400 truncate">{bin.consigneeName}</p>}
+                              <p className="text-xs text-slate-400">{bin.items.length} item{bin.items.length !== 1 ? "s" : ""}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    {/* Location groups */}
+                    <div className="px-5 py-3">
+                      <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">Pick Route ({cluster.locationGroups.length} locations)</p>
+                      <div className="space-y-1.5">
+                        {cluster.locationGroups.map((grp, idx) => (
+                          <div key={grp.locationCode} className="flex items-start gap-3 p-2.5 rounded-xl bg-slate-50 border border-slate-100">
+                            <span className="text-xs font-bold text-slate-400 w-5 flex-shrink-0 mt-0.5">{idx + 1}</span>
+                            <span className="font-mono text-sm font-bold text-slate-600 flex-shrink-0">{grp.locationCode}</span>
                             <div className="flex flex-wrap gap-1">
                               {grp.tasks.map((t, ti) => (
                                 <span key={ti} className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-md font-medium"
