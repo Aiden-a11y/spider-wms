@@ -30,8 +30,11 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   const body = (await req.json()) as B2CCluster;
-  await redis.set(`wms:b2ccluster:${body.id}`, body, { ex: CLUSTER_TTL });
-  return NextResponse.json({ ok: true, id: body.id });
+  // Assign sequential cluster number if not already set
+  const clusterNo = body.clusterNo ?? await redis.incr("wms:b2ccluster:counter");
+  const cluster: B2CCluster = { ...body, clusterNo };
+  await redis.set(`wms:b2ccluster:${body.id}`, cluster, { ex: CLUSTER_TTL });
+  return NextResponse.json({ ok: true, id: body.id, clusterNo });
 }
 
 export async function PATCH(req: Request) {

@@ -54,6 +54,7 @@ export interface B2CClusterBin {
 
 export interface B2CCluster {
   id: string;
+  clusterNo?: number;
   warehouseCode: string;
   createdAt: string;
   createdBy: string;

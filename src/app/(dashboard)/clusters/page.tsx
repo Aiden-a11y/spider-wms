@@ -917,8 +917,10 @@ export default function ClustersPage() {
               status: await fetchOrderStatus(cluster.warehouseCode, customerCode, code),
             }))
           );
+          // Only CA orders confirmed at AA/CA, or unknown (first-close, expected AA).
+          // DA/FA/AC/LC/EA are skipped — never revert packing progress.
           const eligible = statusChecks
-            .filter(({ status }) => !status || !SKIP_CA_STATUSES.has(status))
+            .filter(({ status }) => status === null || status === "AA" || status === "CA")
             .map(({ code }) => code);
           if (eligible.length === 0) return;
           await fetch("/api/wms/shipping/status-change", {
@@ -1279,6 +1281,11 @@ export default function ClustersPage() {
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap mb-1">
+                      {cluster.clusterNo != null && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-black bg-indigo-600 text-white tracking-wide">
+                          #{String(cluster.clusterNo).padStart(4, "0")}
+                        </span>
+                      )}
                       <span className="text-base font-extrabold text-slate-900">{cluster.bins.length} bins</span>
                       <span className="text-sm text-slate-400">· {cluster.locationGroups.length} locations</span>
                       <span className="text-sm text-slate-400">· {cluster.warehouseCode}</span>
@@ -1568,6 +1575,11 @@ export default function ClustersPage() {
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap mb-1">
+                      {cluster.clusterNo != null && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-black bg-slate-200 text-slate-500 tracking-wide">
+                          #{String(cluster.clusterNo).padStart(4, "0")}
+                        </span>
+                      )}
                       <span className="text-base font-extrabold text-slate-700">{cluster.bins.length} bins</span>
                       <span className="text-sm text-slate-400">· {cluster.locationGroups.length} locations</span>
                       <span className="text-sm text-slate-400">· {cluster.warehouseCode}</span>
