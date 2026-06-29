@@ -566,152 +566,136 @@ export default function ClustersPage() {
     const replenishmentBins: number[] = [];
     const locMap = new Map<string, { locationCode: string; locationId: string; tasks: B2CClusterTask[] }>();
 
+    const parseAssignments = (j: Record<string, unknown>): Record<string, unknown>[] => {
+      const d2 = (j?.data ?? {}) as Record<string, unknown>;
+      for (const arr of [d2.assignments, j.assignments, d2.list, j.list]) {
+        if (Array.isArray(arr) && arr.length > 0) return arr as Record<string, unknown>[];
+      }
+      return [];
+    };
+    const parseLineItems = (j: Record<string, unknown>): Record<string, unknown>[] => {
+      const d2 = (j?.data ?? {}) as Record<string, unknown>;
+      for (const arr of [d2.items, j.items, d2.shippingItems, j.shippingItems, d2.orderItems, j.orderItems]) {
+        if (Array.isArray(arr) && arr.length > 0) return arr as Record<string, unknown>[];
+      }
+      return [];
+    };
+
     try {
+      // Phase 1: parallel — fetch all orders' items/assignments simultaneously
+      setCreateStep(`Fetching ${selected.length} orders in parallel…`);
+      const prefetched = await Promise.all(
+        selected.map(async (o) => {
+          const code = orderCodeOf(o);
+          for (const ep of [
+            `/api/wms/shipping/b2c/items/${encodeURIComponent(code)}`,
+            `/api/wms/shipping/items/${encodeURIComponent(code)}`,
+          ]) {
+            try {
+              const res = await fetch(ep, { headers });
+              const j = await res.json().catch(() => ({})) as Record<string, unknown>;
+              const asgn = parseAssignments(j);
+              const itms = parseLineItems(j);
+              if (asgn.length > 0 || itms.length > 0) return { rawAssignments: asgn, rawItems: itms };
+            } catch { /* try next */ }
+          }
+          return { rawAssignments: [] as Record<string, unknown>[], rawItems: [] as Record<string, unknown>[] };
+        })
+      );
+
+      // Phase 2: sequential — check shelf stock + auto-assign per order
       for (let i = 0; i < selected.length; i++) {
         const o = selected[i];
         const code = orderCodeOf(o);
         const binNo = i + 1;
-        setCreateStep(`[${binNo}/${selected.length}] ${code} — fetching assignments…`);
+        const { rawAssignments, rawItems } = prefetched[i];
 
-        // 1. Fetch items/assignments — try B2C-specific and generic endpoints
-        const parseAssignments = (j: Record<string, unknown>): Record<string, unknown>[] => {
-          const d2 = (j?.data ?? {}) as Record<string, unknown>;
-          for (const arr of [d2.assignments, j.assignments, d2.list, j.list]) {
-            if (Array.isArray(arr) && arr.length > 0) return arr as Record<string, unknown>[];
-          }
-          return [];
-        };
-        const parseLineItems = (j: Record<string, unknown>): Record<string, unknown>[] => {
-          const d2 = (j?.data ?? {}) as Record<string, unknown>;
-          for (const arr of [d2.items, j.items, d2.shippingItems, j.shippingItems, d2.orderItems, j.orderItems]) {
-            if (Array.isArray(arr) && arr.length > 0) return arr as Record<string, unknown>[];
-          }
-          return [];
-        };
-
-        let rawAssignments: Record<string, unknown>[] = [];
-        let rawItems: Record<string, unknown>[] = [];
-        for (const ep of [
-          `/api/wms/shipping/b2c/items/${encodeURIComponent(code)}`,
-          `/api/wms/shipping/items/${encodeURIComponent(code)}`,
-        ]) {
-          try {
-            const res = await fetch(ep, { headers });
-            const j = await res.json().catch(() => ({})) as Record<string, unknown>;
-            const asgn = parseAssignments(j);
-            const itms = parseLineItems(j);
-            if (asgn.length > 0 || itms.length > 0) {
-              rawAssignments = asgn;
-              rawItems = itms;
-              break;
-            }
-          } catch { /* try next */ }
-        }
-
-        // Diagnostic: show what zones exist
-        const zoneSet: Record<string, true> = {};
-        rawAssignments.forEach((a) => { zoneSet[String(a.zoneNm ?? a.zoneName ?? a.zone ?? "—")] = true; });
-        const zoneNames = Object.keys(zoneSet).join(", ") || "(none)";
-        setCreateStep(`[${binNo}/${selected.length}] ${code} — ${rawAssignments.length} asgn / ${rawItems.length} items, zones: ${zoneNames}`);
-        await sleep(80);
+        setCreateStep(`[${binNo}/${selected.length}] ${code} — processing…`);
 
         // 2. Filter to shelf zone assignments
         let shelfAssignments = rawAssignments.filter((a) => isShelfLoc(a));
 
-        // 3. If no shelf assignments → check available shelf stock or flag replenishment
+        // 3. Determine replenishment need
         let needsReplenishment = false;
 
         // Case A: no items at all
         if (rawAssignments.length === 0 && rawItems.length === 0) {
           needsReplenishment = true;
           setCreateStep(`[${binNo}/${selected.length}] ${code} — ⚠ No items in order. Replenishment required.`);
-          await sleep(400);
         }
 
         // Case B: assignments exist but ALL in non-shelf zones, no unassigned items to re-assign
         if (shelfAssignments.length === 0 && rawAssignments.length > 0 && rawItems.length === 0) {
+          const zoneSet: Record<string, true> = {};
+          rawAssignments.forEach((a) => { zoneSet[String(a.zoneNm ?? a.zoneName ?? a.zone ?? "—")] = true; });
           const zones = Object.keys(zoneSet).join(", ");
           needsReplenishment = true;
           setCreateStep(`[${binNo}/${selected.length}] ${code} — ⚠ Assigned to non-shelf (${zones}). Move to shelf first.`);
-          await sleep(400);
         }
 
         type ReplenItem = NonNullable<B2CClusterBin["replenishmentItems"]>[number];
         let replenishmentItems: ReplenItem[] = [];
         const custCode = String(o.customerCode ?? "");
 
+        // Helper: fetch available-stock for a SKU
+        const fetchStock = async (sku: string): Promise<Record<string, unknown>[]> => {
+          const res = await fetch(
+            `/api/wms/shipping/available-stock/${encodeURIComponent(warehouseCode)}/${encodeURIComponent(custCode)}?productSku=${encodeURIComponent(sku)}`,
+            { headers }
+          );
+          const j = await res.json().catch(() => ({})) as Record<string, unknown>;
+          return (Array.isArray(j?.data) ? j.data : []) as Record<string, unknown>[];
+        };
+        const byFefo = (a: Record<string, unknown>, b: Record<string, unknown>) =>
+          (String(a.expireDate ?? "") || "99999999").localeCompare(String(b.expireDate ?? "") || "99999999");
+
         if (!needsReplenishment && shelfAssignments.length === 0 && rawItems.length > 0) {
-          setCreateStep(`[${binNo}/${selected.length}] ${code} — checking shelf stock…`);
-          let anyShelfStockFound = false;
-
-          for (const item of rawItems) {
+          // Parallel: fetch available-stock for all unassigned SKUs at once
+          const unassignedItems = rawItems.filter((item) => {
             const sku = String(item.productSku ?? item.sku ?? "");
-            if (!sku) continue;
+            return sku && Number(item.unassignedQty ?? item.qty ?? 0) > 0;
+          });
+
+          setCreateStep(`[${binNo}/${selected.length}] ${code} — checking shelf stock (${unassignedItems.length} SKUs)…`);
+          const stockResults = await Promise.all(
+            unassignedItems.map((item) => fetchStock(String(item.productSku ?? item.sku ?? "")))
+          );
+
+          let anyShelfStockFound = false;
+          for (let si = 0; si < unassignedItems.length; si++) {
+            const item = unassignedItems[si];
+            const sku = String(item.productSku ?? item.sku ?? "");
             const unassignedQty = Number(item.unassignedQty ?? item.qty ?? 0);
-            if (unassignedQty <= 0) continue;
-
-            const stockRes = await fetch(
-              `/api/wms/shipping/available-stock/${encodeURIComponent(warehouseCode)}/${encodeURIComponent(custCode)}?productSku=${encodeURIComponent(sku)}`,
-              { headers }
-            );
-            const stockJson = await stockRes.json().catch(() => ({})) as Record<string, unknown>;
-            const stockList = (Array.isArray(stockJson?.data) ? stockJson.data : []) as Record<string, unknown>[];
-            const shelfStock = stockList
-              .filter((s) => isShelfLoc(s) && Number(s.availQty ?? 0) > 0)
-              .sort((a, b) => {
-                const expA = String(a.expireDate ?? "") || "99999999";
-                const expB = String(b.expireDate ?? "") || "99999999";
-                return expA.localeCompare(expB);
-              });
-
+            const allStock = stockResults[si];
+            const shelfStock = allStock.filter((s) => isShelfLoc(s) && Number(s.availQty ?? 0) > 0).sort(byFefo);
             const best = shelfStock[0];
             if (!best) continue;
 
             anyShelfStockFound = true;
-            const assignBody = {
-              shippingOrderCode: code,
-              shippingItemId: item.shippingItemId,
-              customerCode: custCode,
-              warehouseCode,
-              warehouseCd: best.location,
-              productSku: sku,
-              lotNo: String(best.lotNo ?? ""),
-              expireDate: String(best.expireDate ?? ""),
-              itemCondition: String(best.itemCondition ?? "GOOD"),
-              qty: unassignedQty,
-            };
-            await fetch("/api/wms/shipping/assign", { method: "POST", headers, body: JSON.stringify(assignBody) });
-            shelfAssignments.push({
-              ...item, ...best,
-              locationCode: readableLocation(best),
-              productSku: sku,
+            setCreateStep(`[${binNo}/${selected.length}] ${code} — assigning ${sku}…`);
+            await fetch("/api/wms/shipping/assign", {
+              method: "POST", headers,
+              body: JSON.stringify({
+                shippingOrderCode: code, shippingItemId: item.shippingItemId,
+                customerCode: custCode, warehouseCode, warehouseCd: best.location,
+                productSku: sku, lotNo: String(best.lotNo ?? ""),
+                expireDate: String(best.expireDate ?? ""), itemCondition: String(best.itemCondition ?? "GOOD"),
+                qty: unassignedQty,
+              }),
             });
-            await sleep(200);
+            shelfAssignments.push({ ...item, ...best, locationCode: readableLocation(best), productSku: sku });
           }
 
-          // No shelf stock → look up ALL storage locations for replenishment
           if (!anyShelfStockFound && shelfAssignments.length === 0) {
             needsReplenishment = true;
             setCreateStep(`[${binNo}/${selected.length}] ${code} — ⚠ No shelf stock. Finding storage locations…`);
-            for (const item of rawItems) {
+            for (let si = 0; si < unassignedItems.length; si++) {
+              const item = unassignedItems[si];
               const sku = String(item.productSku ?? item.sku ?? "");
-              if (!sku) continue;
               const unassignedQty = Number(item.unassignedQty ?? item.qty ?? 0);
-              if (unassignedQty <= 0) continue;
-
-              const sRes = await fetch(
-                `/api/wms/shipping/available-stock/${encodeURIComponent(warehouseCode)}/${encodeURIComponent(custCode)}?productSku=${encodeURIComponent(sku)}`,
-                { headers }
-              );
-              const sJson = await sRes.json().catch(() => ({})) as Record<string, unknown>;
-              const allStock = (Array.isArray(sJson?.data) ? sJson.data : []) as Record<string, unknown>[];
-              const best = allStock
-                .filter((s) => Number(s.availQty ?? 0) > 0)
-                .sort((a, b) => (String(a.expireDate ?? "") || "9").localeCompare(String(b.expireDate ?? "") || "9"))[0];
-
+              const best = stockResults[si].filter((s) => Number(s.availQty ?? 0) > 0).sort(byFefo)[0];
               replenishmentItems.push({
-                sku,
-                name: String(item.productName ?? item.skuName ?? item.itemName ?? ""),
+                sku, name: String(item.productName ?? item.skuName ?? item.itemName ?? ""),
                 qty: unassignedQty,
                 locationCode: best ? readableLocation(best) : "",
                 locationId: best ? String(best.inKey ?? best.locationId ?? "") : "",
@@ -721,78 +705,63 @@ export default function ClustersPage() {
                 shippingItemId: Number(item.shippingItemId ?? 0) || undefined,
               });
             }
-            await sleep(400);
           }
         }
 
-        // Mixed case: some shelf assignments exist but other SKUs in this order are still unassigned (REMAIN)
-        // Try to auto-assign from shelf stock first; only flag replenishment if no shelf stock available.
+        // Mixed: some shelf assignments exist but other SKUs still unassigned
         if (shelfAssignments.length > 0 && rawItems.length > 0) {
           const assignedSkuSet = new Set(shelfAssignments.map((a) => String(a.productSku ?? a.sku ?? "")));
-          for (const item of rawItems) {
+          const unassignedMixed = rawItems.filter((item) => {
             const sku = String(item.productSku ?? item.sku ?? "");
-            if (!sku || assignedSkuSet.has(sku)) continue;
-            const unassignedQty = Number(item.remainQty ?? item.unassignedQty ?? item.remainingQty ?? 0);
-            if (unassignedQty <= 0) continue;
+            return sku && !assignedSkuSet.has(sku) && Number(item.remainQty ?? item.unassignedQty ?? item.remainingQty ?? 0) > 0;
+          });
 
-            setCreateStep(`[${binNo}/${selected.length}] ${code} — checking shelf stock for unassigned ${sku}…`);
-            const sRes = await fetch(
-              `/api/wms/shipping/available-stock/${encodeURIComponent(warehouseCode)}/${encodeURIComponent(custCode)}?productSku=${encodeURIComponent(sku)}`,
-              { headers }
+          if (unassignedMixed.length > 0) {
+            setCreateStep(`[${binNo}/${selected.length}] ${code} — checking ${unassignedMixed.length} unassigned SKUs…`);
+            const mixedStock = await Promise.all(
+              unassignedMixed.map((item) => fetchStock(String(item.productSku ?? item.sku ?? "")))
             );
-            const sJson = await sRes.json().catch(() => ({})) as Record<string, unknown>;
-            const allStock = (Array.isArray(sJson?.data) ? sJson.data : []) as Record<string, unknown>[];
 
-            // Prefer shelf stock → auto-assign (same approach as no-shelf case)
-            const shelfStock = allStock
-              .filter((s) => isShelfLoc(s) && Number(s.availQty ?? 0) > 0)
-              .sort((a, b) => (String(a.expireDate ?? "") || "9").localeCompare(String(b.expireDate ?? "") || "9"));
+            for (let mi = 0; mi < unassignedMixed.length; mi++) {
+              const item = unassignedMixed[mi];
+              const sku = String(item.productSku ?? item.sku ?? "");
+              const unassignedQty = Number(item.remainQty ?? item.unassignedQty ?? item.remainingQty ?? 0);
+              const allStock = mixedStock[mi];
+              const shelfStock = allStock.filter((s) => isShelfLoc(s) && Number(s.availQty ?? 0) > 0).sort(byFefo);
+              const best = shelfStock[0];
 
-            const best = shelfStock[0];
-            if (best) {
-              setCreateStep(`[${binNo}/${selected.length}] ${code} — auto-assigning ${sku} from ${readableLocation(best)}…`);
-              const assignBody = {
-                shippingOrderCode: code,
-                shippingItemId: item.shippingItemId,
-                customerCode: custCode,
-                warehouseCode,
-                warehouseCd: best.location,
-                productSku: sku,
-                lotNo: String(best.lotNo ?? ""),
-                expireDate: String(best.expireDate ?? ""),
-                itemCondition: String(best.itemCondition ?? "GOOD"),
-                qty: unassignedQty,
-              };
-              await fetch("/api/wms/shipping/assign", { method: "POST", headers, body: JSON.stringify(assignBody) });
-              shelfAssignments.push({
-                ...item, ...best,
-                locationCode: readableLocation(best),
-                productSku: sku,
-              });
-            } else {
-              // No shelf stock available → true replenishment needed
-              needsReplenishment = true;
-              const anyBest = allStock
-                .filter((s) => Number(s.availQty ?? 0) > 0)
-                .sort((a, b) => (String(a.expireDate ?? "") || "9").localeCompare(String(b.expireDate ?? "") || "9"))[0];
-
-              replenishmentItems.push({
-                sku,
-                name: String(item.productName ?? item.skuName ?? item.itemName ?? ""),
-                qty: unassignedQty,
-                locationCode: anyBest ? readableLocation(anyBest) : "",
-                locationId: anyBest ? String(anyBest.inKey ?? anyBest.locationId ?? "") : "",
-                lotNo: anyBest ? String(anyBest.lotNo ?? "") : "",
-                expireDate: anyBest ? String(anyBest.expireDate ?? "") : "",
-                itemCondition: anyBest ? String(anyBest.itemCondition ?? "GOOD") : "",
-                shippingItemId: Number(item.shippingItemId ?? 0) || undefined,
-              });
+              if (best) {
+                setCreateStep(`[${binNo}/${selected.length}] ${code} — assigning ${sku}…`);
+                await fetch("/api/wms/shipping/assign", {
+                  method: "POST", headers,
+                  body: JSON.stringify({
+                    shippingOrderCode: code, shippingItemId: item.shippingItemId,
+                    customerCode: custCode, warehouseCode, warehouseCd: best.location,
+                    productSku: sku, lotNo: String(best.lotNo ?? ""),
+                    expireDate: String(best.expireDate ?? ""), itemCondition: String(best.itemCondition ?? "GOOD"),
+                    qty: unassignedQty,
+                  }),
+                });
+                shelfAssignments.push({ ...item, ...best, locationCode: readableLocation(best), productSku: sku });
+              } else {
+                needsReplenishment = true;
+                const anyBest = allStock.filter((s) => Number(s.availQty ?? 0) > 0).sort(byFefo)[0];
+                replenishmentItems.push({
+                  sku, name: String(item.productName ?? item.skuName ?? item.itemName ?? ""),
+                  qty: unassignedQty,
+                  locationCode: anyBest ? readableLocation(anyBest) : "",
+                  locationId: anyBest ? String(anyBest.inKey ?? anyBest.locationId ?? "") : "",
+                  lotNo: anyBest ? String(anyBest.lotNo ?? "") : "",
+                  expireDate: anyBest ? String(anyBest.expireDate ?? "") : "",
+                  itemCondition: anyBest ? String(anyBest.itemCondition ?? "GOOD") : "",
+                  shippingItemId: Number(item.shippingItemId ?? 0) || undefined,
+                });
+              }
             }
-            await sleep(200);
           }
         }
 
-        // Case B: assigned to non-shelf → build replenishmentItems from rawAssignments
+        // Case B fallback: assigned to non-shelf → build replenishmentItems from rawAssignments
         if (needsReplenishment && rawAssignments.length > 0 && replenishmentItems.length === 0) {
           replenishmentItems = rawAssignments.map((a) => ({
             sku: String(a.productSku ?? a.sku ?? ""),
@@ -809,7 +778,7 @@ export default function ClustersPage() {
 
         if (needsReplenishment) replenishmentBins.push(binNo);
 
-        // 4. Build bin items (empty if replenishment needed)
+        // 4. Build bin items
         const binItems: B2CClusterItem[] = shelfAssignments.map((a) => ({
           sku: String(a.productSku ?? a.sku ?? ""),
           name: String(a.productName ?? a.skuName ?? a.itemName ?? ""),
@@ -846,20 +815,11 @@ export default function ClustersPage() {
           if (!key) continue;
           if (!locMap.has(key)) locMap.set(key, { locationCode: key, locationId: item.locationId ?? "", tasks: [] });
           locMap.get(key)!.tasks.push({
-            binNo,
-            orderCode: code,
-            sku: item.sku,
-            skuName: item.name,
-            qty: item.qty,
-            locationId: item.locationId,
-            lotNo: item.lotNo,
-            expireDate: item.expireDate,
-            itemCondition: item.itemCondition,
-            shippingItemId: item.shippingItemId,
+            binNo, orderCode: code, sku: item.sku, skuName: item.name, qty: item.qty,
+            locationId: item.locationId, lotNo: item.lotNo, expireDate: item.expireDate,
+            itemCondition: item.itemCondition, shippingItemId: item.shippingItemId,
           });
         }
-
-        if (i < selected.length - 1) await sleep(300 + Math.random() * 200);
       }
 
       setCreateStep("Building cluster…");
