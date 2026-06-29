@@ -11,83 +11,77 @@ interface WMSOrderInfo {
   status: string;
 }
 
-// Extract tracking/status from any WMS response shape
-function extractOrderInfo(order: Record<string, unknown>): WMSOrderInfo {
-  return {
-    trackingNo: String(
-      order.trackingNo ?? order.trackingNumber ?? order.tracking ??
-      order.waybillNo ?? order.carrierTrackingNo ?? ""
-    ),
-    shippingOrderNo: String(
-      order.shippingOrderNo ?? order.orderNo ?? order.outboundNo ?? ""
-    ),
-    status: String(order.status ?? order.orderStatus ?? order.shippingStatus ?? ""),
-  };
+function pickTracking(o: Record<string, unknown>): string {
+  for (const k of ["trackingNo", "trackingNumber", "tracking", "waybillNo", "carrierTrackingNo"]) {
+    if (o[k] && String(o[k]).length > 5) return String(o[k]);
+  }
+  return "";
+}
+function pickOrderNo(o: Record<string, unknown>): string {
+  for (const k of ["shippingOrderNo", "orderNo", "outboundNo"]) {
+    if (o[k]) return String(o[k]);
+  }
+  return "";
+}
+function pickStatus(o: Record<string, unknown>): string {
+  return String(o.status ?? o.orderStatus ?? o.shippingStatus ?? "");
+}
+function pickCode(o: Record<string, unknown>): string {
+  return String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? "");
 }
 
-// Query WMS list filtered by a single order code — most reliable way to get tracking
-async function fetchOrderFromList(
+// Load all B2C orders for the given date from WMS (paginates automatically)
+async function loadAllOrders(
   warehouseCode: string,
   customerCode: string,
-  orderCode: string,
+  date: string, // YYYYMMDD
   auth: string,
-): Promise<WMSOrderInfo | null> {
-  for (const ep of [
-    `${WMS_BASE}/shipping/b2c/list`,
-    `${WMS_BASE}/shipping/list`,
-  ]) {
-    try {
-      const res = await fetch(ep, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: auth },
-        body: JSON.stringify({
-          page: 1, limit: 50, pageSize: 50,
-          warehouseCode, customerCode,
-          shippingOrderCode: orderCode,
-        }),
-      });
-      const j = await res.json().catch(() => null);
-      if (!j) continue;
-      const list: Record<string, unknown>[] =
-        (j?.data as Record<string, unknown>)?.list as Record<string, unknown>[] ??
-        (j?.data as Record<string, unknown>)?.items as Record<string, unknown>[] ??
-        j?.data ?? j?.list ?? [];
-      if (!Array.isArray(list) || list.length === 0) continue;
-      // Find exact match
-      const match = list.find(
-        (o) => String(o.shippingOrderCode ?? o.orderCode ?? "") === orderCode,
-      ) ?? list[0];
-      const info = extractOrderInfo(match);
-      if (info.trackingNo || info.status) return info;
-    } catch { /* try next */ }
-  }
-  return null;
-}
+): Promise<Map<string, WMSOrderInfo>> {
+  const map = new Map<string, WMSOrderInfo>();
 
-// Fallback: fetch order detail endpoint and look for tracking in the response
-async function fetchOrderFromDetail(
-  orderCode: string,
-  auth: string,
-): Promise<WMSOrderInfo | null> {
-  for (const ep of [
-    `${WMS_BASE}/shipping/b2c/items/${encodeURIComponent(orderCode)}`,
-    `${WMS_BASE}/shipping/items/${encodeURIComponent(orderCode)}`,
-  ]) {
-    try {
-      const res = await fetch(ep, {
-        headers: { "Content-Type": "application/json", Authorization: auth },
-      });
-      const j = await res.json().catch(() => null);
-      if (!j) continue;
-      // Detail response may wrap order-level fields under data or data.order
-      const order: Record<string, unknown> =
-        (j?.data as Record<string, unknown>)?.order as Record<string, unknown> ??
-        j?.data ?? j ?? {};
-      const info = extractOrderInfo(order as Record<string, unknown>);
-      if (info.trackingNo || info.status) return info;
-    } catch { /* try next */ }
+  for (const ep of [`${WMS_BASE}/shipping/b2c/list`, `${WMS_BASE}/shipping/list`]) {
+    let page = 1;
+    while (true) {
+      try {
+        const res = await fetch(ep, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: auth },
+          body: JSON.stringify({
+            page, limit: 500, pageSize: 500,
+            warehouseCode, customerCode,
+            // Try common date filter param names — WMS will silently ignore unknown ones
+            startDate: date, endDate: date,
+            fromDate: date, toDate: date,
+            orderDate: date,
+          }),
+        });
+        const j = await res.json().catch(() => null);
+        if (!j) break;
+        const list: Record<string, unknown>[] =
+          (j?.data as Record<string, unknown>)?.list as Record<string, unknown>[] ??
+          (j?.data as Record<string, unknown>)?.items as Record<string, unknown>[] ??
+          j?.data ?? j?.list ?? [];
+        if (!Array.isArray(list) || list.length === 0) break;
+
+        for (const o of list) {
+          const code = pickCode(o);
+          if (code) {
+            map.set(code, {
+              trackingNo: pickTracking(o),
+              shippingOrderNo: pickOrderNo(o),
+              status: pickStatus(o),
+            });
+          }
+        }
+
+        if (list.length < 500) break; // last page
+        page++;
+        if (page > 20) break; // safety cap
+      } catch { break; }
+    }
+    if (map.size > 0) break; // got results from this endpoint
   }
-  return null;
+  return map;
 }
 
 export async function POST(req: NextRequest) {
@@ -102,47 +96,48 @@ export async function POST(req: NextRequest) {
   const clusters = raws
     .map((r) => (r ? (typeof r === "string" ? JSON.parse(r) : r) as B2CCluster : null))
     .filter(Boolean) as B2CCluster[];
-
   if (!clusters.length) return NextResponse.json({ error: "no clusters found" }, { status: 404 });
 
-  // 2. Fetch WMS info for each bin in parallel
-  //    Strategy: list endpoint filtered by orderCode → detail endpoint fallback
-  type BinInfo = {
-    cluster: B2CCluster;
-    bin: (typeof clusters)[0]["bins"][0];
-    wms: WMSOrderInfo;
-  };
+  // 2. Collect unique warehouse / customer / dates from all clusters
+  const combos = new Map<string, { warehouseCode: string; customerCode: string; date: string }>();
+  for (const c of clusters) {
+    const date = c.createdAt.slice(0, 10).replace(/-/g, ""); // YYYYMMDD
+    for (const bin of c.bins) {
+      const key = `${c.warehouseCode}|${bin.customerCode}|${date}`;
+      if (!combos.has(key)) combos.set(key, { warehouseCode: c.warehouseCode, customerCode: bin.customerCode, date });
+    }
+  }
 
-  const binInfos: BinInfo[] = await Promise.all(
-    clusters.flatMap((cluster) =>
-      cluster.bins.map(async (bin) => {
-        let wms = await fetchOrderFromList(cluster.warehouseCode, bin.customerCode, bin.orderCode, auth);
-        if (!wms?.trackingNo) {
-          wms = await fetchOrderFromDetail(bin.orderCode, auth) ?? wms ?? { trackingNo: "", shippingOrderNo: "", status: "" };
-        }
-        return { cluster, bin, wms: wms ?? { trackingNo: "", shippingOrderNo: "", status: "" } };
-      })
-    )
+  // 3. Load WMS order data for each combo
+  const orderMap = new Map<string, WMSOrderInfo>();
+  await Promise.all(
+    Array.from(combos.values()).map(async ({ warehouseCode, customerCode, date }) => {
+      const result = await loadAllOrders(warehouseCode, customerCode, date, auth);
+      result.forEach((info, code) => orderMap.set(code, info));
+    })
   );
 
-  // 3. Build Excel rows
-  const rows = binInfos.map(({ cluster, bin, wms }) => ({
-    "Cluster": cluster.clusterNo != null ? `#${String(cluster.clusterNo).padStart(4, "0")}` : cluster.id,
-    "Created (PDT)": new Date(cluster.createdAt).toLocaleString("en-US", { timeZone: "America/Los_Angeles" }),
-    "Completed (PDT)": cluster.completedAt
-      ? new Date(cluster.completedAt).toLocaleString("en-US", { timeZone: "America/Los_Angeles" })
-      : "",
-    "Bin": bin.binNo,
-    "Order Code": bin.orderCode,
-    "Order No": wms.shippingOrderNo || bin.orderNo || "",
-    "Tracking #": wms.trackingNo,
-    "WMS Status": wms.status,
-    "Customer": bin.customerCode,
-    "Consignee": bin.consigneeName ?? "",
-    "Warehouse": cluster.warehouseCode,
-  }));
+  // 4. Build Excel rows — EXACT match only, never fall back to wrong data
+  const rows = clusters.flatMap((cluster) =>
+    cluster.bins.map((bin) => {
+      const wms = orderMap.get(bin.orderCode);
+      return {
+        "Cluster":          cluster.clusterNo != null ? `#${String(cluster.clusterNo).padStart(4, "0")}` : cluster.id,
+        "Created (PDT)":    new Date(cluster.createdAt).toLocaleString("en-US", { timeZone: "America/Los_Angeles" }),
+        "Completed (PDT)":  cluster.completedAt ? new Date(cluster.completedAt).toLocaleString("en-US", { timeZone: "America/Los_Angeles" }) : "",
+        "Bin":              bin.binNo,
+        "Order Code":       bin.orderCode,
+        "Order No":         wms?.shippingOrderNo || bin.orderNo || "",
+        "Tracking #":       wms?.trackingNo ?? "",
+        "WMS Status":       wms?.status ?? "",
+        "Customer":         bin.customerCode,
+        "Consignee":        bin.consigneeName ?? "",
+        "Warehouse":        cluster.warehouseCode,
+      };
+    })
+  );
 
-  // 4. Generate Excel
+  // 5. Generate Excel
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(rows);
   ws["!cols"] = [
@@ -153,9 +148,9 @@ export async function POST(req: NextRequest) {
   XLSX.utils.book_append_sheet(wb, ws, "Cluster Orders");
   const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
 
-  const label = clusters.map((c) =>
-    c.clusterNo != null ? String(c.clusterNo).padStart(4, "0") : c.id.slice(-6)
-  ).join("_");
+  const label = clusters
+    .map((c) => c.clusterNo != null ? String(c.clusterNo).padStart(4, "0") : c.id.slice(-6))
+    .join("_");
 
   return new NextResponse(buf, {
     headers: {
