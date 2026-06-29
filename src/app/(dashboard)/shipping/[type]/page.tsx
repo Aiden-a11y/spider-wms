@@ -228,6 +228,14 @@ export default function ShippingTypePage() {
   const [creatingBatch,    setCreatingBatch]     = useState<string | null>(null); // fingerprint being created
   const [createdBatchIds,  setCreatedBatchIds]   = useState<Record<string, string>>({}); // fingerprint → id
 
+  /* ── Batch column state ── */
+  const [batchOrderCodes,  setBatchOrderCodes]  = useState<Set<string>>(new Set());
+  const [loadingBatches,   setLoadingBatches]   = useState(false);
+
+  /* ── Pagination ── */
+  const [tablePage,        setTablePage]        = useState(1);
+  const TABLE_PAGE_SIZE = 100;
+
   /* ── Manual Assign modal state ── */
   const [assignModalItem,  setAssignModalItem]  = useState<Order | null>(null);
   const [assignStockOptions, setAssignStockOptions] = useState<Order[]>([]);
@@ -352,7 +360,41 @@ export default function ShippingTypePage() {
     }
     setError("Could not load orders."); setLoading(false);
   }
-  useEffect(() => { if (warehouseCode) loadOrders(); }, [warehouseCode, type]); // eslint-disable-line
+  useEffect(() => { if (warehouseCode) { loadOrders(); loadBatchOrderCodes(warehouseCode); } }, [warehouseCode, type]); // eslint-disable-line
+
+  /* ── Load WMS batch order codes (background, for Batch Y/N column) ── */
+  async function loadBatchOrderCodes(whCode: string) {
+    if (!whCode) return;
+    setLoadingBatches(true);
+    setBatchOrderCodes(new Set());
+    try {
+      const today = new Date();
+      const from  = new Date(today); from.setDate(from.getDate() - 30);
+      const fmt   = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, "");
+      const res   = await fetch("/api/wms/batch/list", {
+        method: "POST", headers,
+        body: JSON.stringify({ searchText: "", warehouseCode: whCode, customerCode: "", dateFrom: fmt(from), dateTo: fmt(today), page: 1, pageSize: 500 }),
+      });
+      const json    = await res.json().catch(() => ({}));
+      const batches: Record<string, unknown>[] = Array.isArray(json?.data) ? json.data : [];
+      if (!batches.length) { setLoadingBatches(false); return; }
+
+      const codes = new Set<string>();
+      const CONC  = 10;
+      let   idx   = 0;
+      const worker = async () => {
+        while (idx < batches.length) {
+          const b    = batches[idx++];
+          const ores = await fetch("/api/wms/batch/orders", { method: "POST", headers, body: JSON.stringify([b.batchCode]) }).catch(() => null);
+          const oj   = await ores?.json().catch(() => ({})) ?? {};
+          const ords: { shippingOrderCode?: string }[] = Array.isArray(oj?.data) ? oj.data : [];
+          ords.forEach((o) => { if (o.shippingOrderCode) codes.add(o.shippingOrderCode); });
+        }
+      };
+      await Promise.all(Array.from({ length: CONC }, worker));
+      setBatchOrderCodes(new Set(codes));
+    } catch { /* best-effort */ } finally { setLoadingBatches(false); }
+  }
 
   /* ── 4. Fetch order detail on row click ── */
   async function openDetail(order: Order) {
@@ -407,45 +449,6 @@ export default function ShippingTypePage() {
         });
         break;
       } catch { /* try next */ }
-    }
-
-    // ── Step 3: fresh status from WMS — reload the list, find this order
-    {
-      const whCode   = String(order.warehouseCode ?? order.warehouse ?? warehouseCode ?? "");
-      const custCode = String(order.customerCode ?? "");
-      const listBody: Record<string, unknown> = {
-        page: 1, pageSize: 500, orderType: meta.orderType, warehouseCode: whCode,
-      };
-      if (custCode) listBody.customerCode = custCode;
-      for (const ep of [`/api/wms/shipping/${type}/list`, `/api/wms/shipping/list`, `/api/wms/outbound/list`]) {
-        try {
-          const res  = await fetch(ep, { method: "POST", headers, body: JSON.stringify(listBody) });
-          const json = await res.json().catch(() => null);
-          if (!res.ok || !json) continue;
-          const list: Record<string, unknown>[] =
-            json?.data?.list ?? json?.data?.items ?? json?.data ?? json?.list ?? json?.items ?? (Array.isArray(json) ? json : []);
-          if (!Array.isArray(list) || list.length === 0) continue;
-          const match = list.find((r) => {
-            const rc = String(r.shippingOrderCode ?? r.orderCode ?? r.outboundCode ?? "");
-            return rc === code;
-          });
-          if (match) {
-            const freshStatus = match.status ?? match.orderStatus;
-            if (freshStatus != null) {
-              // Also update the orders list so the table row reflects fresh status
-              setOrders((prev) => prev.map((o) => {
-                const oc = String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? "");
-                return oc === code ? { ...o, status: freshStatus, orderStatus: freshStatus } : o;
-              }));
-              setDetail((prev) => prev
-                ? { ...prev, status: freshStatus, orderStatus: freshStatus }
-                : match as Order
-              );
-            }
-            break;
-          }
-        } catch { /* ignore */ }
-      }
     }
 
     // Helper: extract item array from any response shape
@@ -1738,6 +1741,7 @@ ${labels}
   }, [orders, cols]);
 
   const filtered = useMemo(() => {
+    setTablePage(1);
     let list = orders;
     if (customerCode && customerCode !== "ALL") list = list.filter((o) => String(o.customerCode ?? "") === customerCode);
     for (const [col, val] of Object.entries(colFilters)) { if (val) list = list.filter((o) => String(o[col] ?? "") === val); }
@@ -1745,6 +1749,9 @@ ${labels}
     if (q) list = list.filter((o) => Object.values(o).some((v) => String(v).toLowerCase().includes(q)));
     return list;
   }, [orders, customerCode, colFilters, search]);
+
+  const totalPages  = Math.max(1, Math.ceil(filtered.length / TABLE_PAGE_SIZE));
+  const pageOrders  = filtered.slice((tablePage - 1) * TABLE_PAGE_SIZE, tablePage * TABLE_PAGE_SIZE);
 
   const statusSummary = useMemo(() => {
     const map: Record<string, number> = {};
@@ -1992,6 +1999,10 @@ ${labels}
                       {COL_LABELS[c] ?? c}
                     </th>
                   ))}
+                  {/* Batch column */}
+                  <th className="px-3 py-2.5 text-center text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">
+                    {loadingBatches ? <Loader2 className="w-3 h-3 animate-spin mx-auto text-violet-400" /> : "Batch"}
+                  </th>
                   {/* Fixed: Packing/Billing Info column */}
                   <th className="px-4 py-2.5 text-center text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">
                     Task
@@ -2017,12 +2028,13 @@ ${labels}
                       </th>
                     );
                   })}
-                  {/* filter placeholder for Packing Info */}
+                  {/* filter placeholder for Batch + Packing Info */}
+                  <th className="px-2 py-1.5"><div className="h-6" /></th>
                   <th className="px-2 py-1.5"><div className="h-6" /></th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((order, idx) => {
+                {pageOrders.map((order, idx) => {
                   // Task check: tasks are saved as "Labels×3, Picking per Piece×1" (contains ×)
                   // Only show checkmark if comment has actual task entries (not arbitrary comment text)
                   const comment = String(order.comment ?? order.orderComment ?? order.memo ?? "").trim();
@@ -2058,6 +2070,16 @@ ${labels}
                           </td>
                         );
                       })}
+                      {/* Batch cell */}
+                      <td className="px-3 py-2.5 text-center">
+                        {loadingBatches ? (
+                          <span className="text-slate-300 text-xs">…</span>
+                        ) : batchOrderCodes.has(orderCode_) ? (
+                          <span className="px-1.5 py-0.5 rounded text-xs font-bold bg-violet-100 text-violet-700 border border-violet-200">Y</span>
+                        ) : (
+                          <span className="text-slate-300 text-xs font-medium">N</span>
+                        )}
+                      </td>
                       {/* Task cell — ✓ only if task items exist (comment contains ×) */}
                       <td className="px-4 py-2.5 text-center">
                         {hasTask ? (
@@ -2082,6 +2104,25 @@ ${labels}
               </tbody>
             </table>
           </div>
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between px-4 py-2.5 border-t border-slate-100 bg-slate-50 text-xs text-slate-500">
+              <span>
+                {((tablePage - 1) * TABLE_PAGE_SIZE + 1).toLocaleString()}–{Math.min(tablePage * TABLE_PAGE_SIZE, filtered.length).toLocaleString()} / {filtered.length.toLocaleString()}
+              </span>
+              <div className="flex items-center gap-1">
+                <button onClick={() => setTablePage(1)} disabled={tablePage === 1}
+                  className="px-2 py-1 rounded border border-slate-200 disabled:opacity-40 hover:bg-white transition-colors">«</button>
+                <button onClick={() => setTablePage((p) => Math.max(1, p - 1))} disabled={tablePage === 1}
+                  className="px-2 py-1 rounded border border-slate-200 disabled:opacity-40 hover:bg-white transition-colors">‹</button>
+                <span className="px-2 font-semibold text-slate-700">{tablePage} / {totalPages}</span>
+                <button onClick={() => setTablePage((p) => Math.min(totalPages, p + 1))} disabled={tablePage === totalPages}
+                  className="px-2 py-1 rounded border border-slate-200 disabled:opacity-40 hover:bg-white transition-colors">›</button>
+                <button onClick={() => setTablePage(totalPages)} disabled={tablePage === totalPages}
+                  className="px-2 py-1 rounded border border-slate-200 disabled:opacity-40 hover:bg-white transition-colors">»</button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
