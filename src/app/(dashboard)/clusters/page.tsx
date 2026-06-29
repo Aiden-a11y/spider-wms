@@ -868,8 +868,10 @@ export default function ClustersPage() {
 
   // ── Complete cluster ──────────────────────────────────────────────────────
   const [completingId, setCompletingId] = useState<string | null>(null);
+  const [confirmCompleteId, setConfirmCompleteId] = useState<string | null>(null);
 
   async function completeCluster(id: string) {
+    setConfirmCompleteId(null);
     setCompletingId(id);
     const cluster = clusters.find((c) => c.id === id);
     if (cluster) {
@@ -1256,7 +1258,7 @@ export default function ClustersPage() {
                       {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
                     </button>
                     <button
-                      onClick={() => completeCluster(cluster.id)}
+                      onClick={() => setConfirmCompleteId(cluster.id)}
                       disabled={completingId === cluster.id}
                       className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-semibold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors"
                       title="Mark cluster as completed"
@@ -1962,6 +1964,47 @@ export default function ClustersPage() {
           </div>
         )}
       </div>
+
+      {/* ── Complete confirmation modal ── */}
+      {confirmCompleteId && (() => {
+        const target = clusters.find((c) => c.id === confirmCompleteId);
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+            <div className="absolute inset-0 bg-black/40" onClick={() => setConfirmCompleteId(null)} />
+            <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                </div>
+                <div>
+                  <p className="text-base font-bold text-slate-900">Complete cluster?</p>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {target ? `${target.bins.length} bins · ${target.locationGroups.length} locations` : ""}
+                  </p>
+                </div>
+              </div>
+              <p className="text-sm text-slate-600">
+                All orders in this cluster will be moved to <strong>Packing Request (CA)</strong> status.
+                This cannot be undone.
+              </p>
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={() => setConfirmCompleteId(null)}
+                  className="flex-1 px-4 py-2.5 rounded-xl text-sm font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => completeCluster(confirmCompleteId)}
+                  className="flex-1 px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors"
+                >
+                  Complete
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
