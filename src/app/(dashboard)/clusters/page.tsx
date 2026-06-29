@@ -870,6 +870,7 @@ export default function ClustersPage() {
   const [completingId, setCompletingId] = useState<string | null>(null);
   const [confirmCompleteId, setConfirmCompleteId] = useState<string | null>(null);
   const [reopeningId, setReopeningId] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
 
   async function completeCluster(id: string) {
     setConfirmCompleteId(null);
@@ -1502,8 +1503,17 @@ export default function ClustersPage() {
 
       {/* ── Completed clusters (history) ── */}
       {clusters.filter((c) => c.status === "completed").length > 0 && (
-        <div className="space-y-3">
-          <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wide">Completed Clusters</h2>
+        <div>
+          <button
+            onClick={() => setShowHistory((p) => !p)}
+            className="flex items-center gap-2 text-sm font-bold text-slate-400 uppercase tracking-wide hover:text-slate-600 transition-colors"
+          >
+            {showHistory ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            History ({clusters.filter((c) => c.status === "completed").length})
+          </button>
+
+          {showHistory && (
+          <div className="space-y-3 mt-3">
           {clusters.filter((c) => c.status === "completed").map((cluster) => {
             const isExpanded = expandedCluster === cluster.id;
             const isDeleting = deletingId === cluster.id;
@@ -1608,6 +1618,8 @@ export default function ClustersPage() {
               </div>
             );
           })}
+          </div>
+          )}
         </div>
       )}
 
