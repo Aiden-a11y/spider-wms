@@ -876,7 +876,7 @@ export default function ClustersPage() {
     setConfirmCompleteId(null);
     setCompletingId(id);
     const cluster = clusters.find((c) => c.id === id);
-    if (cluster) {
+    if (cluster && cluster.status !== "completed") {
       // Group bins by customerCode to batch status-change calls
       const grouped = new Map<string, string[]>();
       for (const bin of cluster.bins) {
