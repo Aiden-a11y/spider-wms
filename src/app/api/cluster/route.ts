@@ -15,7 +15,7 @@ export async function GET(req: Request) {
     return NextResponse.json(cluster);
   }
 
-  const keys = await redis.keys("wms:b2ccluster:*");
+  const keys = (await redis.keys("wms:b2ccluster:*")).filter((k) => !k.endsWith(":counter"));
   if (keys.length === 0) return NextResponse.json([]);
   const values = await Promise.all(keys.map((k) => redis.get(k)));
   const clusters = (values
@@ -24,7 +24,29 @@ export async function GET(req: Request) {
       return (typeof v === "string" ? JSON.parse(v) : v) as B2CCluster;
     })
     .filter(Boolean) as B2CCluster[])
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+  // One-time migration: assign clusterNo to clusters that don't have one yet,
+  // ordered by createdAt ascending so oldest cluster gets the lowest number.
+  const needsNumber = clusters.filter((c) => c.clusterNo == null);
+  if (needsNumber.length > 0) {
+    const maxExisting = clusters.reduce((m, c) => Math.max(m, c.clusterNo ?? 0), 0);
+    let next = maxExisting + 1;
+    await Promise.all(
+      needsNumber.map(async (c) => {
+        const no = next++;
+        const updated: B2CCluster = { ...c, clusterNo: no };
+        await redis.set(`wms:b2ccluster:${c.id}`, updated, { ex: CLUSTER_TTL });
+        c.clusterNo = no;
+      })
+    );
+    // Ensure counter is at least as high as the highest assigned number
+    const counter = Number(await redis.get("wms:b2ccluster:counter") ?? 0);
+    if (counter < next - 1) await redis.set("wms:b2ccluster:counter", next - 1);
+  }
+
+  // Return newest-first
+  clusters.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   return NextResponse.json(clusters);
 }
 

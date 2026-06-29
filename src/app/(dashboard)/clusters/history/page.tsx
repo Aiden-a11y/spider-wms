@@ -104,6 +104,11 @@ export default function ClusterHistoryPage() {
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap mb-1">
+                      {cluster.clusterNo != null && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-black bg-indigo-600 text-white tracking-wide">
+                          #{String(cluster.clusterNo).padStart(4, "0")}
+                        </span>
+                      )}
                       <span className="text-base font-extrabold text-slate-900">{cluster.bins.length} bins</span>
                       <span className="text-sm text-slate-400">· {cluster.locationGroups.length} locations</span>
                       <span className="text-sm text-slate-400">· {cluster.warehouseCode}</span>
