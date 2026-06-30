@@ -1335,14 +1335,15 @@ function addB2CDetailSheet(
   ws.columns = [
     { width: 18 }, // A: Order Code
     { width: 12 }, // B: Date
-    { width: 12 }, // C: Total Qty
-    { width: 12 }, // D: +1 Order
-    { width: 12 }, // E: Extra Picks
-    { width: 10 }, // F: Label
-    { width: 10 }, // G: Fragile
-    { width: 10 }, // H: Inserts
+    { width: 12 }, // C: SKU Qty
+    { width: 12 }, // D: Total Qty
+    { width: 12 }, // E: +1 Order
+    { width: 12 }, // F: Extra Picks
+    { width: 10 }, // G: Label
+    { width: 10 }, // H: Fragile
+    { width: 10 }, // I: Inserts
   ];
-  const hdrRow = ws.addRow(["Order Code", "Date", "Total Qty", "+1 Order", "Extra Picks", "Label", "Fragile", "Inserts"]);
+  const hdrRow = ws.addRow(["Order Code", "Date", "SKU Qty", "Total Qty", "+1 Order", "Extra Picks", "Label", "Fragile", "Inserts"]);
   hdrRow.height = 16;
   hdrRow.eachCell((cell) => {
     cell.font = { bold: true, color: { argb: C.white }, size: 10 };
@@ -1353,16 +1354,17 @@ function addB2CDetailSheet(
 
   let rowIdx = 0;
   for (const order of orders) {
-    const code   = String(order.shippingOrderCode ?? order.orderCode ?? "");
-    const date   = String(order.outDate ?? order.deliveryDate ?? order.shippingDate ?? "");
-    const qty    = Number(order.totalQty ?? order.orderQty ?? 0);
-    const tasks  = parseTaskComment(String(order.comment ?? ""));
-    const ov     = orderEdits[code] ?? {};
-    const extra  = ov["b2c_extra_pick"] ?? Math.max(0, qty - 5);
-    const label  = ov["b2c_label"]      ?? Math.max(1, (tasks["Labels"] ?? 0) + (tasks["Amazon Labels"] ?? 0) + (tasks["FBA Labeling"] ?? 0));
+    const code    = String(order.shippingOrderCode ?? order.orderCode ?? "");
+    const date    = String(order.outDate ?? order.deliveryDate ?? order.shippingDate ?? "");
+    const qty     = Number(order.totalQty ?? order.orderQty ?? 0);
+    const skuQty  = Number(order.skuQty ?? order.skuCount ?? order.productCount ?? order.productQty ?? order.itemCount ?? 0) || "";
+    const tasks   = parseTaskComment(String(order.comment ?? ""));
+    const ov      = orderEdits[code] ?? {};
+    const extra   = ov["b2c_extra_pick"] ?? Math.max(0, qty - 5);
+    const label   = ov["b2c_label"]      ?? 1;
     const fragile = ov["b2c_fragile"]   ?? ((tasks["Fragile Pack"] ?? 0) + (tasks["Fragile"] ?? 0));
     const insert  = ov["b2c_insert"]    ?? (tasks["Inserts"] ?? 0);
-    const r = ws.addRow([code, date, qty, 1, extra, label, fragile, insert]);
+    const r = ws.addRow([code, date, skuQty, qty, 1, extra, label, fragile, insert]);
     r.height = 15;
     r.eachCell((cell, col) => {
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowIdx % 2 === 0 ? C.white : C.rowAlt } };
@@ -3505,8 +3507,7 @@ export default function BillingPage() {
         let b2cLaborRegular = 0, b2cLaborOT = 0, b2cLaborWeekend = 0;
         for (const order of listB2C) {
           const tasks = parseTaskComment(String(order.comment ?? ""));
-          const commentLabels = (tasks["Labels"] ?? 0) + (tasks["Amazon Labels"] ?? 0) + (tasks["FBA Labeling"] ?? 0);
-          b2cLabelQty   += Math.max(1, commentLabels); // at least 1 label per order
+          b2cLabelQty   += 1; // always 1 label per order
           b2cInsertQty  += (tasks["Inserts"] ?? 0);
           b2cFragileQty += (tasks["Fragile Pack"] ?? 0) + (tasks["Fragile"] ?? 0);
           b2cLaborRegular += tasks["Labor Hours"]                   ?? 0;
@@ -5573,7 +5574,7 @@ export default function BillingPage() {
                             const q = Number(ord.totalQty ?? ord.orderQty ?? 0);
                             const t = parseTaskComment(String(ord.comment ?? ""));
                             totExtra   += ov2["b2c_extra_pick"] ?? Math.max(0, q - 5);
-                            totLabel   += ov2["b2c_label"]      ?? Math.max(1, (t["Labels"] ?? 0) + (t["Amazon Labels"] ?? 0) + (t["FBA Labeling"] ?? 0));
+                            totLabel   += ov2["b2c_label"]      ?? 1;
                             totFragile += ov2["b2c_fragile"]    ?? ((t["Fragile Pack"] ?? 0) + (t["Fragile"] ?? 0));
                             totInsert  += ov2["b2c_insert"]     ?? (t["Inserts"] ?? 0);
                           });
@@ -5600,15 +5601,19 @@ export default function BillingPage() {
                         } focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200 transition-colors`;
 
                       let totExtra = 0, totLabel = 0, totFragile = 0, totInsert = 0;
+                      let totSkuQty = 0, totTotalQty = 0;
                       wmsSource.b2c.forEach((o, idx) => {
                         const c = String(o.shippingOrderCode ?? o.orderCode ?? idx);
                         const ov2 = orderEdits[c] ?? {};
                         const q = Number(o.totalQty ?? o.orderQty ?? 0);
                         const t = parseTaskComment(String(o.comment ?? ""));
-                        totExtra   += ov2["b2c_extra_pick"] ?? Math.max(0, q - 5);
-                        totLabel   += ov2["b2c_label"]      ?? Math.max(1, (t["Labels"] ?? 0) + (t["Amazon Labels"] ?? 0) + (t["FBA Labeling"] ?? 0));
-                        totFragile += ov2["b2c_fragile"]    ?? ((t["Fragile Pack"] ?? 0) + (t["Fragile"] ?? 0));
-                        totInsert  += ov2["b2c_insert"]     ?? (t["Inserts"] ?? 0);
+                        totExtra    += ov2["b2c_extra_pick"] ?? Math.max(0, q - 5);
+                        totLabel    += ov2["b2c_label"]      ?? 1;
+                        totFragile  += ov2["b2c_fragile"]    ?? ((t["Fragile Pack"] ?? 0) + (t["Fragile"] ?? 0));
+                        totInsert   += ov2["b2c_insert"]     ?? (t["Inserts"] ?? 0);
+                        totTotalQty += q;
+                        const skuQ = Number(o.skuQty ?? o.skuCount ?? o.productCount ?? o.productQty ?? o.itemCount ?? 0);
+                        totSkuQty += skuQ;
                       });
 
                       return (
@@ -5619,6 +5624,7 @@ export default function BillingPage() {
                                 <th className="px-3 py-2 text-left text-slate-500 font-semibold">Order Code</th>
                                 <th className="px-3 py-2 text-left text-slate-500 font-semibold">Shipping Order No</th>
                                 <th className="px-3 py-2 text-left text-slate-500 font-semibold">Date</th>
+                                <th className="px-3 py-2 text-right text-slate-500 font-semibold">SKU Qty</th>
                                 <th className="px-3 py-2 text-right text-slate-500 font-semibold">Total Qty</th>
                                 <th className="px-3 py-2 text-right text-slate-500 font-semibold">+1 Order</th>
                                 <th className="px-2 py-2 text-right text-teal-600 font-semibold">+Extra Picks</th>
@@ -5632,13 +5638,13 @@ export default function BillingPage() {
                                 const code = String(o.shippingOrderCode ?? o.orderCode ?? i);
                                 const ov2  = orderEdits[code] ?? {};
                                 const qty  = Number(o.totalQty ?? o.orderQty ?? 0);
+                                const skuQty = Number(o.skuQty ?? o.skuCount ?? o.productCount ?? o.productQty ?? o.itemCount ?? 0);
                                 const tasks = parseTaskComment(String(o.comment ?? ""));
                                 const defExtra   = Math.max(0, qty - 5);
-                                const defLabel   = Math.max(1, (tasks["Labels"] ?? 0) + (tasks["Amazon Labels"] ?? 0) + (tasks["FBA Labeling"] ?? 0));
                                 const defFragile = (tasks["Fragile Pack"] ?? 0) + (tasks["Fragile"] ?? 0);
                                 const defInsert  = tasks["Inserts"] ?? 0;
                                 const extra   = ov2["b2c_extra_pick"] ?? defExtra;
-                                const label   = ov2["b2c_label"]      ?? defLabel;
+                                const label   = ov2["b2c_label"]      ?? 1;
                                 const fragile = ov2["b2c_fragile"]    ?? defFragile;
                                 const insert  = ov2["b2c_insert"]     ?? defInsert;
                                 const b2cDateVal = String(o.outDate ?? o.deliveryDate ?? o.shippingDate ?? "");
@@ -5650,13 +5656,14 @@ export default function BillingPage() {
                                     <td className={`px-3 py-1.5 whitespace-nowrap font-semibold ${b2cMissingDate ? "text-yellow-600" : "text-slate-500"}`}>
                                       {b2cMissingDate ? "⚠ No date" : b2cDateVal}
                                     </td>
-                                    <td className="px-3 py-1.5 text-right">{qty}</td>
+                                    <td className="px-3 py-1.5 text-right text-slate-500">{skuQty || "—"}</td>
+                                    <td className="px-3 py-1.5 text-right font-semibold">{qty}</td>
                                     <td className="px-3 py-1.5 text-right font-semibold text-teal-600">1</td>
                                     <td className="px-2 py-1">
                                       <input type="number" min={0} className={inpCls("b2c_extra_pick" in ov2)}
                                         value={extra} onChange={e => setOvB2C(code, "b2c_extra_pick", e.target.value)} />
                                     </td>
-                                    <td className="px-2 py-1">
+<td className="px-2 py-1">
                                       <input type="number" min={0} className={inpCls("b2c_label" in ov2)}
                                         value={label} onChange={e => setOvB2C(code, "b2c_label", e.target.value)} />
                                     </td>
@@ -5672,7 +5679,9 @@ export default function BillingPage() {
                                 );
                               })}
                               <tr className="bg-teal-50 border-t border-teal-100 font-semibold text-teal-700">
-                                <td colSpan={4} className="px-3 py-1.5">Total</td>
+                                <td colSpan={3} className="px-3 py-1.5">Total</td>
+                                <td className="px-3 py-1.5 text-right">{totSkuQty || "—"}</td>
+                                <td className="px-3 py-1.5 text-right">{totTotalQty}</td>
                                 <td className="px-3 py-1.5 text-right">{wmsSource.b2c.length}</td>
                                 <td className="px-2 py-1.5 text-right">{totExtra || "—"}</td>
                                 <td className="px-2 py-1.5 text-right">{totLabel}</td>
