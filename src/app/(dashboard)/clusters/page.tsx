@@ -867,86 +867,9 @@ export default function ClustersPage() {
     setDeletingId(null);
   }
 
-  // ── Complete cluster ──────────────────────────────────────────────────────
-  const [completingId, setCompletingId] = useState<string | null>(null);
-  const [confirmCompleteId, setConfirmCompleteId] = useState<string | null>(null);
+  // ── Reopen / history UI state ─────────────────────────────────────────────
   const [reopeningId, setReopeningId] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
-
-  // Statuses at or beyond DA — sending CA to these would revert packing progress
-  const SKIP_CA_STATUSES = new Set(["DA", "FA", "AC", "LC", "EA"]);
-
-  async function fetchOrderStatus(warehouseCode: string, customerCode: string, orderCode: string): Promise<string | null> {
-    for (const ep of ["/api/wms/shipping/b2c/list", "/api/wms/shipping/list"]) {
-      try {
-        const res = await fetch(ep, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ page: 1, limit: 50, pageSize: 50, warehouseCode, customerCode, shippingOrderCode: orderCode }),
-        });
-        const j = await res.json().catch(() => null);
-        if (!j) continue;
-        const list: Record<string, unknown>[] =
-          (j?.data as Record<string, unknown>)?.list as Record<string, unknown>[] ??
-          (j?.data as Record<string, unknown>)?.items as Record<string, unknown>[] ??
-          j?.data ?? j?.list ?? [];
-        if (!Array.isArray(list)) continue;
-        const order = list.find((o) => String(o.shippingOrderCode ?? o.orderCode ?? "") === orderCode);
-        if (order) return String(order.status ?? order.orderStatus ?? "AA");
-      } catch { /* try next */ }
-    }
-    return null;
-  }
-
-  async function completeCluster(id: string) {
-    setConfirmCompleteId(null);
-    setCompletingId(id);
-    const cluster = clusters.find((c) => c.id === id);
-    if (cluster && cluster.status !== "completed") {
-      // Group bins by customerCode, then pre-flight check each order's WMS status.
-      // Skip orders already at DA/FA or beyond — CA would revert their packing progress.
-      const grouped = new Map<string, string[]>();
-      for (const bin of cluster.bins) {
-        if (!grouped.has(bin.customerCode)) grouped.set(bin.customerCode, []);
-        grouped.get(bin.customerCode)!.push(bin.orderCode);
-      }
-      await Promise.all(
-        Array.from(grouped.entries()).map(async ([customerCode, orderCodes]) => {
-          const statusChecks = await Promise.all(
-            orderCodes.map(async (code) => ({
-              code,
-              status: await fetchOrderStatus(cluster.warehouseCode, customerCode, code),
-            }))
-          );
-          // Only CA orders confirmed at AA/CA, or unknown (first-close, expected AA).
-          // DA/FA/AC/LC/EA are skipped — never revert packing progress.
-          const eligible = statusChecks
-            .filter(({ status }) => status === null || status === "AA" || status === "CA")
-            .map(({ code }) => code);
-          if (eligible.length === 0) return;
-          await fetch("/api/wms/shipping/status-change", {
-            method: "POST",
-            headers,
-            body: JSON.stringify({
-              warehouseCode: cluster.warehouseCode,
-              customerCode,
-              orderCodes: eligible,
-              newStatus: "CA",
-              completeDate: "",
-              cancelComment: "",
-            }),
-          }).catch(() => {});
-        })
-      );
-    }
-    await fetch("/api/cluster", {
-      method: "PATCH",
-      headers,
-      body: JSON.stringify({ id, status: "completed", completedAt: new Date().toISOString() }),
-    });
-    setCompletingId(null);
-    await loadClusters();
-  }
 
   // ── Reopen cluster ────────────────────────────────────────────────────────
   async function reopenCluster(id: string) {
@@ -1314,16 +1237,6 @@ export default function ClustersPage() {
                       className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50"
                     >
                       {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                    </button>
-                    <button
-                      onClick={() => setConfirmCompleteId(cluster.id)}
-                      disabled={completingId === cluster.id}
-                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-semibold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors"
-                      title="Mark cluster as completed"
-                    >
-                      {completingId === cluster.id
-                        ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Completing…</>
-                        : <><CheckCircle2 className="w-3.5 h-3.5" /> Complete</>}
                     </button>
                     <button
                       onClick={() => setExpandedCluster(isExpanded ? null : cluster.id)}
@@ -2150,46 +2063,6 @@ export default function ClustersPage() {
         )}
       </div>
 
-      {/* ── Complete confirmation modal ── */}
-      {confirmCompleteId && (() => {
-        const target = clusters.find((c) => c.id === confirmCompleteId);
-        return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
-            <div className="absolute inset-0 bg-black/40" onClick={() => setConfirmCompleteId(null)} />
-            <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-                </div>
-                <div>
-                  <p className="text-base font-bold text-slate-900">Complete cluster?</p>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    {target ? `${target.bins.length} bins · ${target.locationGroups.length} locations` : ""}
-                  </p>
-                </div>
-              </div>
-              <p className="text-sm text-slate-600">
-                All orders in this cluster will be moved to <strong>Packing Request (CA)</strong> status.
-                This cannot be undone.
-              </p>
-              <div className="flex gap-2 pt-1">
-                <button
-                  onClick={() => setConfirmCompleteId(null)}
-                  className="flex-1 px-4 py-2.5 rounded-xl text-sm font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => completeCluster(confirmCompleteId)}
-                  className="flex-1 px-4 py-2.5 rounded-xl text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition-colors"
-                >
-                  Complete
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
     </div>
   );
 }
