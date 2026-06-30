@@ -138,7 +138,33 @@ export async function POST(req: NextRequest) {
     })
   );
 
-  // 5. Generate Excel
+  // 5. Build Pick Summary — aggregate by Location + SKU across all clusters
+  // Key: "locationCode||sku" → { location, sku, totalQty, bins (Set<number>), cluster label }
+  type SummaryRow = { "Cluster": string; "Location": string; "SKU": string; "Total Qty": number; "Bins": string };
+  const summaryMap = new Map<string, { cluster: string; location: string; sku: string; qty: number; bins: Set<number> }>();
+  for (const cluster of clusters) {
+    const clusterLabel = cluster.clusterNo != null ? `#${String(cluster.clusterNo).padStart(4, "0")}` : cluster.id;
+    for (const grp of cluster.locationGroups) {
+      for (const task of grp.tasks) {
+        const key = `${clusterLabel}||${grp.locationCode}||${task.sku}`;
+        if (!summaryMap.has(key)) {
+          summaryMap.set(key, { cluster: clusterLabel, location: grp.locationCode, sku: String(task.sku), qty: 0, bins: new Set() });
+        }
+        const entry = summaryMap.get(key)!;
+        entry.qty += Number(task.qty ?? 0);
+        entry.bins.add(Number(task.binNo));
+      }
+    }
+  }
+  const summaryRows: SummaryRow[] = Array.from(summaryMap.values()).map((e) => ({
+    "Cluster":    e.cluster,
+    "Location":   e.location,
+    "SKU":        e.sku,
+    "Total Qty":  e.qty,
+    "Bins":       Array.from(e.bins).sort((a, b) => a - b).join(", "),
+  }));
+
+  // 6. Generate Excel
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(rows);
   ws["!cols"] = [
@@ -147,6 +173,10 @@ export async function POST(req: NextRequest) {
     { wch: 10 }, { wch: 24 }, { wch: 8 },
   ];
   XLSX.utils.book_append_sheet(wb, ws, "Cluster Orders");
+
+  const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
+  wsSummary["!cols"] = [{ wch: 8 }, { wch: 22 }, { wch: 24 }, { wch: 10 }, { wch: 20 }];
+  XLSX.utils.book_append_sheet(wb, wsSummary, "Pick Summary");
   const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
 
   const label = clusters
