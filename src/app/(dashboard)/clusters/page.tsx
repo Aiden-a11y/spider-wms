@@ -213,9 +213,10 @@ export default function ClustersPage() {
           page++;
         }
         if (all.length > 0) {
-          // Only show Out-Bound Request orders (AA)
+          // Only show Out-Bound Request orders (AA), excluding ones already grouped into a WMS batch
           setOrders(all.filter((o) =>
-            ["AA", "Out-Bound Request"].includes(String(o.status ?? o.orderStatus ?? "AA"))
+            ["AA", "Out-Bound Request"].includes(String(o.status ?? o.orderStatus ?? "AA")) &&
+            !String(o.batchCode ?? "").trim()
           ));
           setLoadingOrders(false);
           return;
