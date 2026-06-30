@@ -7,7 +7,6 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { B2CCluster } from "@/lib/b2c-cluster";
-import { binColor } from "@/lib/b2c-cluster";
 
 export default function ClusterHistoryPage() {
   const { user } = useAuth();
@@ -115,16 +114,6 @@ export default function ClusterHistoryPage() {
               <div key={cluster.id} className="bg-white border border-emerald-200 rounded-2xl shadow-sm overflow-hidden">
                 {/* Card header */}
                 <div className="px-5 py-4 bg-emerald-50/40 flex items-start gap-4">
-                  {/* Bin color grid */}
-                  <div className="grid grid-cols-5 gap-0.5 flex-shrink-0">
-                    {Array.from({ length: Math.min(cluster.bins.length, 25) }).map((_, i) => (
-                      <div key={i}
-                        style={{ backgroundColor: binColor(i + 1), width: 14, height: 14, borderRadius: 2 }}
-                        title={`Bin ${i + 1}: ${cluster.bins[i]?.orderCode ?? ""}`}
-                      />
-                    ))}
-                  </div>
-
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap mb-1">
                       {cluster.clusterNo != null && (
@@ -185,42 +174,51 @@ export default function ClusterHistoryPage() {
                     {/* Bin list */}
                     <div className="px-5 py-3 border-b border-slate-100">
                       <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">Bins ({cluster.bins.length})</p>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {cluster.bins.map((bin) => (
-                          <div key={bin.binNo} className="flex items-start gap-2 p-2.5 rounded-xl border border-slate-100 bg-slate-50">
-                            <div className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
-                              style={{ backgroundColor: binColor(bin.binNo) }}>
-                              {bin.binNo}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="font-mono text-xs font-bold text-slate-700 truncate">{bin.orderNo || bin.orderCode}</p>
-                              {bin.consigneeName && <p className="text-xs text-slate-400 truncate">{bin.consigneeName}</p>}
-                              <p className="text-xs text-slate-400">{bin.items.length} item{bin.items.length !== 1 ? "s" : ""}</p>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="text-left text-slate-400 border-b border-slate-100">
+                            <th className="py-1.5 pr-3 font-semibold">Bin</th>
+                            <th className="py-1.5 pr-3 font-semibold">Order</th>
+                            <th className="py-1.5 pr-3 font-semibold">Consignee</th>
+                            <th className="py-1.5 font-semibold">Items</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {cluster.bins.map((bin) => (
+                            <tr key={bin.binNo} className="border-b border-slate-50">
+                              <td className="py-1.5 pr-3 font-bold text-slate-500">{bin.binNo}</td>
+                              <td className="py-1.5 pr-3 font-mono font-semibold text-slate-700">{bin.orderNo || bin.orderCode}</td>
+                              <td className="py-1.5 pr-3 text-slate-500">{bin.consigneeName || "—"}</td>
+                              <td className="py-1.5 text-slate-400">{bin.items.length} item{bin.items.length !== 1 ? "s" : ""}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
 
                     {/* Location group list */}
                     <div className="px-5 py-3">
                       <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">Pick Route ({cluster.locationGroups.length} locations)</p>
-                      <div className="space-y-1.5">
-                        {cluster.locationGroups.map((grp, idx) => (
-                          <div key={grp.locationCode} className="flex items-start gap-3 p-2.5 rounded-xl bg-slate-50 border border-slate-100">
-                            <span className="text-xs font-bold text-slate-400 w-5 flex-shrink-0 mt-0.5">{idx + 1}</span>
-                            <span className="font-mono text-sm font-bold text-slate-800 flex-shrink-0">{grp.locationCode}</span>
-                            <div className="flex flex-wrap gap-1">
-                              {grp.tasks.map((t, ti) => (
-                                <span key={ti} className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-md font-medium"
-                                  style={{ backgroundColor: `${binColor(t.binNo)}20`, color: binColor(t.binNo) }}>
-                                  Bin {t.binNo} · {t.sku} ×{t.qty}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="text-left text-slate-400 border-b border-slate-100">
+                            <th className="py-1.5 pr-3 font-semibold w-6">#</th>
+                            <th className="py-1.5 pr-3 font-semibold">Location</th>
+                            <th className="py-1.5 font-semibold">Picks</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {cluster.locationGroups.map((grp, idx) => (
+                            <tr key={grp.locationCode} className="border-b border-slate-50">
+                              <td className="py-1.5 pr-3 text-slate-400">{idx + 1}</td>
+                              <td className="py-1.5 pr-3 font-mono font-bold text-slate-800">{grp.locationCode}</td>
+                              <td className="py-1.5 text-slate-500">
+                                {grp.tasks.map((t) => `Bin ${t.binNo} · ${t.sku} ×${t.qty}`).join(",  ")}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
                 )}
