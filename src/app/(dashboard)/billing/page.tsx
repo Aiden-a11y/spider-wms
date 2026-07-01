@@ -5288,6 +5288,7 @@ export default function BillingPage() {
                         IB_KEYS.forEach(k => { totals[k] += ov[k] ?? defs[k] ?? 0; });
                       });
 
+                      if (wmsSource.receiving.length > 0) console.log("[IB raw fields]", Object.keys(wmsSource.receiving[0]), wmsSource.receiving[0]);
                       const ibTotalPages = Math.max(1, Math.ceil(wmsSource.receiving.length / SOURCE_PAGE_SIZE));
                       const ibPageRows = wmsSource.receiving.slice((sourcePage - 1) * SOURCE_PAGE_SIZE, sourcePage * SOURCE_PAGE_SIZE);
                       return (
