@@ -3330,9 +3330,8 @@ export default function BillingPage() {
       return String(d ?? "").replace(/-/g, "");
     }
 
-    // B2B / B2C shipping: FA (Complete) or DA (Packing Complete) within the period.
-    // DA is included because FCOKR B2C orders may stop at DA before WMS auto-advances to FA.
-    const BILLING_STATUSES = new Set(["FA", "DA"]);
+    // B2B / B2C shipping: FA (Complete) within the period.
+    const BILLING_STATUSES = new Set(["FA"]);
     function isShippingComplete(order: Record<string, unknown>): boolean {
       const status = String(order.status ?? order.orderStatus ?? "");
       if (!BILLING_STATUSES.has(status)) return false;
@@ -3398,20 +3397,25 @@ export default function BillingPage() {
     } catch {}
 
     try {
-      const j = await fetch("/api/wms/shipping/list", {
-        method: "POST", headers,
-        body: JSON.stringify({
-          page: 1, limit: 2000,
-          orderType: "B2B", customerCode: customer,
-          startDate: startDash, endDate: endDash,
-          fromDate: startDash,  toDate: endDash,
-          orderDateFrom: startDash, orderDateTo: endDash,
-          startOrderDate: startCompact, endOrderDate: endCompact,
-        }),
-      }).then((r) => r.json());
-      const rawB2B: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
-      // Out date 기준 + FA(Complete) 상태만
-      const list = Array.isArray(rawB2B) ? rawB2B.filter(isShippingComplete) : [];
+      // Load ALL B2B orders for customer (no date filter — WMS filters by orderDate not outDate,
+      // which would miss orders created in a prior month but shipped in the billing period).
+      // isShippingComplete handles outDate filtering client-side.
+      const PAGE_SIZE_B2B = 500;
+      const rawB2B: Record<string, unknown>[] = [];
+      for (let page = 1; page <= 20; page++) {
+        const j = await fetch("/api/wms/shipping/list", {
+          method: "POST", headers,
+          body: JSON.stringify({
+            page, limit: PAGE_SIZE_B2B, pageSize: PAGE_SIZE_B2B,
+            orderType: "B2B", customerCode: customer, warehouseCode: "STOO1",
+          }),
+        }).then((r) => r.json()).catch(() => null);
+        const rows: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
+        if (!Array.isArray(rows) || rows.length === 0) break;
+        rawB2B.push(...rows);
+        if (rows.length < PAGE_SIZE_B2B) break;
+      }
+      const list = rawB2B.filter(isShippingComplete);
       if (list.length > 0) {
         source.b2b = list;
         updates["b2b_order"] = list.length;
@@ -3487,18 +3491,12 @@ export default function BillingPage() {
       const rawB2C: Record<string, unknown>[] = [];
       let totalPages = 1;
       for (let page = 1; page <= totalPages; page++) {
+        // No date filter — WMS filters by orderDate not outDate, which misses orders
+        // created in a prior month but shipped in the billing period.
+        // isShippingComplete handles outDate + FA-status filtering client-side.
         const baseBody = {
           page, pageSize: PAGE_SIZE, limit: PAGE_SIZE,
-          orderType: "B2C", customerCode: customer,
-          // outDate-based filters (billing is by ship date)
-          outDateFrom: startDash, outDateTo: endDash,
-          outDate: startDash, outDateEnd: endDash,
-          shippingDateFrom: startDash, shippingDateTo: endDash,
-          // orderDate as fallback (WMS may not support outDate filter)
-          startDate: startDash, endDate: endDash,
-          fromDate: startDash,  toDate: endDash,
-          orderDateFrom: startDash, orderDateTo: endDash,
-          startOrderDate: startCompact, endOrderDate: endCompact,
+          orderType: "B2C", customerCode: customer, warehouseCode: "STOO1",
         };
         let pageRows: Record<string, unknown>[] = [];
         let totalCount = 0;
