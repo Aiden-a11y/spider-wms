@@ -2690,24 +2690,40 @@ export default function BillingPage() {
     }
     if (headerIdx < 0) throw new Error("Header row not found. File must contain 'Location' and 'occupancyInfo' (or 'Location Type') columns.");
 
-    // Count distinct Location values per storage key, filtered by exact customer code
-    const locSets: Record<string, Set<string>> = {};
-    for (let i = headerIdx + 1; i < rows.length; i++) {
-      const row = rows[i];
-      const locType = String(row[colLocType] ?? "").trim().toLowerCase();
-      const loc     = String(row[colLoc]     ?? "").trim();
-      if (!locType || !loc) continue;
+    // Count distinct Location values per storage key, filtered by customer code.
+    // Match strategy: exact → normalized-contains → fallback (single-customer file).
+    const custNorm = (s: string) => s.toLowerCase().replace(/[\s\-_]/g, "");
+    const custLower = customerCode ? custNorm(customerCode) : "";
 
-      // Exact customer code match (case-insensitive)
-      if (colCustomer >= 0 && customerCode) {
-        const cust = String(row[colCustomer] ?? "").trim().toLowerCase();
-        if (cust && cust !== customerCode.toLowerCase()) continue;
-      }
-
-      const key = resolveStorageKey(locType);
-      if (!key) continue;
-      (locSets[key] ??= new Set()).add(loc);
+    function custMatches(raw: string): boolean {
+      if (!custLower) return true;
+      const v = custNorm(raw);
+      if (!v) return true; // empty column → single-customer file, include all
+      return v === custLower || v.includes(custLower) || custLower.includes(v);
     }
+
+    const parseRows = (useCustomerFilter: boolean): Record<string, Set<string>> => {
+      const sets: Record<string, Set<string>> = {};
+      for (let i = headerIdx + 1; i < rows.length; i++) {
+        const row = rows[i];
+        const locType = String(row[colLocType] ?? "").trim().toLowerCase();
+        const loc     = String(row[colLoc]     ?? "").trim();
+        if (!locType || !loc) continue;
+        if (useCustomerFilter && colCustomer >= 0 && customerCode) {
+          const cust = String(row[colCustomer] ?? "").trim();
+          if (!custMatches(cust)) continue;
+        }
+        const key = resolveStorageKey(locType);
+        if (!key) continue;
+        (sets[key] ??= new Set()).add(loc);
+      }
+      return sets;
+    };
+
+    // Try with customer filter first; fall back to no-filter if 0 rows matched
+    // (handles single-customer files where column has a different name format)
+    let locSets = parseRows(true);
+    if (Object.keys(locSets).length === 0) locSets = parseRows(false);
 
     const result: Record<string, number> = {};
     for (const [k, s] of Object.entries(locSets)) result[k] = s.size;
