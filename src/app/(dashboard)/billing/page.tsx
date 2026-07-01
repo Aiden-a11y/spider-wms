@@ -774,17 +774,44 @@ async function downloadWorkbook(wb: ExcelJS.Workbook, filename: string) {
 // ─── Per-customer WMS detail sheets ──────────────────────────────────────────
 
 /** Detect default billing quantities from a raw WMS inbound order */
+function parseReceivingComment(comment: string): { size: string; pallets: number; cartons: number } | null {
+  if (!comment.includes("RECEIVING INFO")) return null;
+  const sizeM   = comment.match(/Container Size:\s*([^\n\r]+)/i);
+  const putAway = comment.match(/Pallets Put Away:\s*(\d+)\s*PLT\s*\/\s*(\d+)\s*CTN/i);
+  const received= comment.match(/Pallets Received:\s*(\d+)\s*PLT\s*\/\s*(\d+)\s*CTN/i);
+  const m = putAway ?? received;
+  return {
+    size:    sizeM ? sizeM[1].trim() : "",
+    pallets: m ? Number(m[1]) : 0,
+    cartons: m ? Number(m[2]) : 0,
+  };
+}
+
 function getInboundDefs(o: Record<string, unknown>): Record<string, number> {
-  const type = String(o.inboundType ?? o.receiveType ?? "").toLowerCase();
-  const isContainer = /container|cont/i.test(type);
+  const typeRaw = String(o.inboundType ?? o.receiveType ?? "").toLowerCase();
+  const parsed  = parseReceivingComment(String(o.comment ?? ""));
+  const sizeRaw = (parsed?.size ?? typeRaw).toLowerCase();
+
+  // Container detection: 20/40/40HC → container billing; ltl/ground/air/blank → pallet+carton
+  const isContainer = /\b(20|40)\b/.test(sizeRaw) && !/ltl|less.?than|ground|air/i.test(sizeRaw);
+
   if (!isContainer) {
+    // LTL / regular → extract pallets + cartons from comment
+    if (parsed && (parsed.pallets > 0 || parsed.cartons > 0)) {
+      const r: Record<string, number> = {};
+      if (parsed.pallets > 0) r.inbound_pallet  = parsed.pallets;
+      if (parsed.cartons > 0) r.inbound_carton   = parsed.cartons;
+      return r;
+    }
     const v = o.cartonQty ?? o.boxQty ?? o.packageQty ?? o.cartonCount;
     return { inbound_carton: v != null ? Number(v) : 1 };
   }
-  const is40hc  = /40.*hc|hc.*40|40hc/i.test(type);
-  const is40    = /\b40\b/.test(type) && !is40hc;
-  const is20    = /\b20\b/.test(type);
-  const isFloor = /floor/i.test(type);
+
+  // Container → map size to billing key
+  const is40hc  = /40.*hc|hc.*40|40hc/i.test(sizeRaw);
+  const is40    = /\b40\b/.test(sizeRaw) && !is40hc;
+  const is20    = /\b20\b/.test(sizeRaw);
+  const isFloor = /floor/i.test(sizeRaw);
   if (is40hc && isFloor)  return { inbound_40hc_floor: 1 };
   if (is40hc)             return { inbound_40hc_palletized: 1 };
   if (is40 && isFloor)    return { inbound_40ft_floor: 1 };
