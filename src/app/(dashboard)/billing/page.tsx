@@ -2570,6 +2570,8 @@ export default function BillingPage() {
   const [wmsSource, setWmsSource] = useState<WmsSource | null>(null);
   const [sourceTab, setSourceTab] = useState<"receiving" | "b2b" | "b2c" | "returns" | "storage">("receiving");
   const [showSource, setShowSource] = useState(false);
+  const [sourcePage, setSourcePage] = useState(1);
+  const SOURCE_PAGE_SIZE = 20;
   // per-order manual overrides: { orderCode: { billingKey: value } }
   const [orderEdits, setOrderEdits] = useState<Record<string, Record<string, number>>>({});
   // per-customer WMS source map for multi-mode exports
@@ -3328,15 +3330,16 @@ export default function BillingPage() {
       return String(d ?? "").replace(/-/g, "");
     }
 
-    // B2B / B2C shipping: filter by OUT DATE and status must be FA (Complete)
+    // B2B / B2C shipping: FA (Complete) or DA (Packing Complete) within the period.
+    // DA is included because FCOKR B2C orders may stop at DA before WMS auto-advances to FA.
+    const BILLING_STATUSES = new Set(["FA", "DA"]);
     function isShippingComplete(order: Record<string, unknown>): boolean {
       const status = String(order.status ?? order.orderStatus ?? "");
-      if (status !== "FA") return false;
-      // out date field candidates
+      if (!BILLING_STATUSES.has(status)) return false;
       const outRaw = normDate(
         order.outDate ?? order.deliveryDate ?? order.shippingDate ?? order.outboundDate ?? ""
       );
-      if (!outRaw || outRaw.length < 6) return true; // no out date → keep if FA
+      if (!outRaw || outRaw.length < 6) return true; // no date → keep if billing status
       return outRaw.startsWith(yyyymm);
     }
 
@@ -3516,6 +3519,14 @@ export default function BillingPage() {
         }
         if (pageRows.length < PAGE_SIZE) break; // no more data
       }
+      // Build status breakdown for diagnostics (shows what's in WMS regardless of filter)
+      const statusBreakdown: Record<string, number> = {};
+      for (const o of rawB2C) {
+        const s = String(o.status ?? o.orderStatus ?? "unknown");
+        statusBreakdown[s] = (statusBreakdown[s] ?? 0) + 1;
+      }
+      if (Object.keys(statusBreakdown).length > 0) source.b2cStatusBreakdown = statusBreakdown;
+
       const listB2C = Array.isArray(rawB2C) ? rawB2C.filter(isShippingComplete) : [];
       if (listB2C.length > 0) {
         source.b2c = listB2C;
@@ -5165,6 +5176,11 @@ export default function BillingPage() {
                       B2C {wmsSource.b2c.length}
                     </span>
                   )}
+                  {wmsSource.b2c.length === 0 && wmsSource.b2cStatusBreakdown && Object.keys(wmsSource.b2cStatusBreakdown).length > 0 && (
+                    <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium" title="Orders found but filtered out — status breakdown">
+                      B2C 0 ({Object.entries(wmsSource.b2cStatusBreakdown).map(([s,n]) => `${s}:${n}`).join(", ")})
+                    </span>
+                  )}
                   {wmsSource.returns.length > 0 && (
                     <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-medium">
                       Returns {wmsSource.returns.length}
@@ -5191,7 +5207,7 @@ export default function BillingPage() {
                   ).map(({ key, label, count, active }) => (
                     <button
                       key={key}
-                      onClick={() => setSourceTab(key)}
+                      onClick={() => { setSourceTab(key); setSourcePage(1); }}
                       className={`px-4 py-2.5 text-xs font-medium border-b-2 transition-colors -mb-px ${
                         sourceTab === key
                           ? `${active} border-current`
@@ -5202,7 +5218,7 @@ export default function BillingPage() {
                     </button>
                   ))}
                   <button
-                    onClick={() => setSourceTab("storage")}
+                    onClick={() => { setSourceTab("storage"); setSourcePage(1); }}
                     className={`px-4 py-2.5 text-xs font-medium border-b-2 transition-colors -mb-px ${
                       sourceTab === "storage"
                         ? "text-purple-600 border-purple-600 border-current"
@@ -5274,6 +5290,8 @@ export default function BillingPage() {
                         IB_KEYS.forEach(k => { totals[k] += ov[k] ?? defs[k] ?? 0; });
                       });
 
+                      const ibTotalPages = Math.max(1, Math.ceil(wmsSource.receiving.length / SOURCE_PAGE_SIZE));
+                      const ibPageRows = wmsSource.receiving.slice((sourcePage - 1) * SOURCE_PAGE_SIZE, sourcePage * SOURCE_PAGE_SIZE);
                       return (
                         <div className="overflow-x-auto">
                           <table className="w-full text-xs min-w-max">
@@ -5297,7 +5315,8 @@ export default function BillingPage() {
                               </tr>
                             </thead>
                             <tbody>
-                              {wmsSource.receiving.map((o, i) => {
+                              {ibPageRows.map((o, _pi) => {
+                              const i = (sourcePage - 1) * SOURCE_PAGE_SIZE + _pi;
                                 const code       = String(o.receiveOrderCode ?? o.orderCode ?? i);
                                 const ov         = orderEdits[code] ?? {};
                                 const defs       = getInboundDefs(o as Record<string,unknown>);
@@ -5366,6 +5385,16 @@ export default function BillingPage() {
                               </tr>
                             </tbody>
                           </table>
+                          {ibTotalPages > 1 && (
+                            <div className="flex items-center justify-between px-4 py-2 border-t border-slate-100 bg-slate-50 text-xs text-slate-500">
+                              <span>{(sourcePage-1)*SOURCE_PAGE_SIZE+1}–{Math.min(sourcePage*SOURCE_PAGE_SIZE, wmsSource.receiving.length)} / {wmsSource.receiving.length}</span>
+                              <div className="flex gap-1">
+                                <button onClick={() => setSourcePage(p => Math.max(1, p-1))} disabled={sourcePage===1} className="px-2 py-1 rounded border border-slate-200 disabled:opacity-40 hover:bg-white">‹</button>
+                                <span className="px-2 font-semibold text-slate-700">{sourcePage} / {ibTotalPages}</span>
+                                <button onClick={() => setSourcePage(p => Math.min(ibTotalPages, p+1))} disabled={sourcePage===ibTotalPages} className="px-2 py-1 rounded border border-slate-200 disabled:opacity-40 hover:bg-white">›</button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       );
                     })()
@@ -5387,6 +5416,7 @@ export default function BillingPage() {
                             </span>
                           </div>
                         )}
+                        {(() => { const b2bTotalPages = Math.max(1, Math.ceil(wmsSource.b2b.length / SOURCE_PAGE_SIZE)); const b2bPageRows = wmsSource.b2b.slice((sourcePage-1)*SOURCE_PAGE_SIZE, sourcePage*SOURCE_PAGE_SIZE); return (<>
                         <table className="w-full text-xs min-w-max">
                           <thead className="bg-slate-50 sticky top-0">
                             <tr>
@@ -5409,7 +5439,8 @@ export default function BillingPage() {
                             </tr>
                           </thead>
                           <tbody>
-                            {wmsSource.b2b.map((o, i) => {
+                            {b2bPageRows.map((o, _pi) => {
+                              const i = (sourcePage - 1) * SOURCE_PAGE_SIZE + _pi;
                               const code     = String(o.shippingOrderCode ?? o.orderCode ?? i);
                               const tasks    = parseTaskComment(String(o.comment ?? ""));
                               const ov       = orderEdits[code] ?? {};
@@ -5574,6 +5605,17 @@ export default function BillingPage() {
                             })()}
                           </tbody>
                         </table>
+                        {b2bTotalPages > 1 && (
+                          <div className="flex items-center justify-between px-3 py-2 border-t border-slate-100 text-xs text-slate-500">
+                            <span>{sourcePage * SOURCE_PAGE_SIZE - SOURCE_PAGE_SIZE + 1}–{Math.min(sourcePage * SOURCE_PAGE_SIZE, wmsSource.b2b.length)} / {wmsSource.b2b.length}</span>
+                            <div className="flex gap-1">
+                              <button onClick={() => setSourcePage(p => Math.max(1, p-1))} disabled={sourcePage === 1} className="px-2 py-1 rounded border border-slate-200 disabled:opacity-40 hover:bg-slate-50">←</button>
+                              <span className="px-2 py-1">{sourcePage}/{b2bTotalPages}</span>
+                              <button onClick={() => setSourcePage(p => Math.min(b2bTotalPages, p+1))} disabled={sourcePage === b2bTotalPages} className="px-2 py-1 rounded border border-slate-200 disabled:opacity-40 hover:bg-slate-50">→</button>
+                            </div>
+                          </div>
+                        )}
+                        </>); })()}
                       </div>
                     )
                   )}
@@ -5583,6 +5625,8 @@ export default function BillingPage() {
                     wmsSource.b2c.length === 0 ? (
                       <p className="text-center text-sm text-slate-400 py-8">No B2C orders this period</p>
                     ) : (() => {
+                      const b2cTotalPages = Math.max(1, Math.ceil(wmsSource.b2c.length / SOURCE_PAGE_SIZE));
+                      const b2cPageRows = wmsSource.b2c.slice((sourcePage-1)*SOURCE_PAGE_SIZE, sourcePage*SOURCE_PAGE_SIZE);
                       const setOvB2C = (orderCode: string, key: string, val: string) => {
                         const num = val === "" ? undefined : Number(val);
                         setOrderEdits(prev => {
@@ -5656,7 +5700,8 @@ export default function BillingPage() {
                               </tr>
                             </thead>
                             <tbody>
-                              {wmsSource.b2c.map((o, i) => {
+                              {b2cPageRows.map((o, _pi) => {
+                                const i = (sourcePage - 1) * SOURCE_PAGE_SIZE + _pi;
                                 const code = String(o.shippingOrderCode ?? o.orderCode ?? i);
                                 const ov2  = orderEdits[code] ?? {};
                                 const qty  = Number(o.totalQty ?? o.orderQty ?? 0);
@@ -5712,6 +5757,16 @@ export default function BillingPage() {
                               </tr>
                             </tbody>
                           </table>
+                          {b2cTotalPages > 1 && (
+                            <div className="flex items-center justify-between px-3 py-2 border-t border-slate-100 text-xs text-slate-500">
+                              <span>{sourcePage * SOURCE_PAGE_SIZE - SOURCE_PAGE_SIZE + 1}–{Math.min(sourcePage * SOURCE_PAGE_SIZE, wmsSource.b2c.length)} / {wmsSource.b2c.length}</span>
+                              <div className="flex gap-1">
+                                <button onClick={() => setSourcePage(p => Math.max(1, p-1))} disabled={sourcePage === 1} className="px-2 py-1 rounded border border-slate-200 disabled:opacity-40 hover:bg-slate-50">←</button>
+                                <span className="px-2 py-1">{sourcePage}/{b2cTotalPages}</span>
+                                <button onClick={() => setSourcePage(p => Math.min(b2cTotalPages, p+1))} disabled={sourcePage === b2cTotalPages} className="px-2 py-1 rounded border border-slate-200 disabled:opacity-40 hover:bg-slate-50">→</button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       );
                     })()

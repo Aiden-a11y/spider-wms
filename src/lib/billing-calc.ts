@@ -22,6 +22,7 @@ export type WmsSourceData = {
   b2c:       Record<string, unknown>[];
   returns:   Record<string, unknown>[];
   b2bWarnings?: string[];
+  b2cStatusBreakdown?: Record<string, number>; // status → count, for diagnostics
 };
 
 export type BillingInvoice = {
