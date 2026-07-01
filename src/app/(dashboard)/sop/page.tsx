@@ -190,9 +190,9 @@ export default function SopPage() {
                     <span className="text-sm font-extrabold">{m.label}</span>
                   </div>
                   <p className={`text-xs font-medium opacity-80 ${m.text}`}>
-                    {key === "dashboard" && "wms-dashboard — 이 앱 (PC 브라우저)"}
-                    {key === "mobile"    && "wms-mobile — 모바일 앱 (iOS/Android)"}
-                    {key === "wms"       && "외부 WMS 시스템 (별도 접속)"}
+                    {key === "dashboard" && "wms-dashboard — this app (PC browser)"}
+                    {key === "mobile"    && "wms-mobile — mobile app (iOS/Android)"}
+                    {key === "wms"       && "External WMS system (separate login)"}
                   </p>
                 </div>
               ))}
@@ -206,7 +206,7 @@ export default function SopPage() {
             <p className="text-sm font-bold text-slate-700 mb-1">
               First thing upon arrival — check these three numbers before starting any fulfillment work.
             </p>
-            <p className="text-xs text-slate-400 mb-4 flex items-center gap-1"><Tag system="dashboard" /> 에서 확인</p>
+            <p className="text-xs text-slate-400 mb-4 flex items-center gap-1">Check in <Tag system="dashboard" /></p>
             <div className="grid grid-cols-3 gap-3">
               {[
                 { label: "B2C Pending Orders", icon: Package,    color: "bg-blue-50 border-blue-200 text-blue-700",    nav: "/shipping/b2c", sub: "Shipping → B2C Shipping" },
@@ -256,66 +256,66 @@ export default function SopPage() {
             <p className="text-xs text-slate-500 font-bold uppercase tracking-wider mb-5">Step by step</p>
             <div className="space-y-6">
 
-              <Step n={1} title="B2C Shipping 확인" systems={["dashboard"]}>
-                <p><strong>Shipping → B2C Shipping</strong>으로 이동하여 당일 처리할 B2C 주문 수량을 확인한다.</p>
-                <p>주문이 있는 경우 Cluster Pick 진행.</p>
+              <Step n={1} title="Check B2C Shipping" systems={["dashboard"]}>
+                <p>Go to <strong>Shipping → B2C Shipping</strong> and check the number of B2C orders to be processed today.</p>
+                <p>If orders exist, proceed to Cluster Pick.</p>
               </Step>
 
-              <Step n={2} title="Cluster 생성" systems={["dashboard"]}
-                notice="클러스터 생성은 자동이 아님 — 매번 수동으로 Start를 눌러야 한다.">
-                <p><strong>Cluster Pick</strong> 페이지(왼쪽 사이드바)로 이동 → <strong>"Start Cluster Pick"</strong> 클릭.</p>
-                <p>시스템이 B2C 주문을 피킹 위치 근접도 기준으로 그룹화하고, WMS API를 통해 재고를 자동 배정한다.</p>
-                <p>진행 상황은 다이얼로그에서 실시간 확인 가능 (예: [2/25] 주문코드 — checking shelf stock…).</p>
+              <Step n={2} title="Create Cluster" systems={["dashboard"]}
+                notice="Cluster creation is not automatic — you must manually click Start each time.">
+                <p>Go to the <strong>Cluster Pick</strong> page (left sidebar) → click <strong>"Start Cluster Pick"</strong>.</p>
+                <p>The system groups B2C orders by pick location proximity and auto-assigns inventory via the WMS API.</p>
+                <p>Progress is shown in real time in the dialog (e.g., [2/25] order code — checking shelf stock…).</p>
               </Step>
-              <ScreenshotBox label="Cluster Pick 페이지 — Start 버튼 및 생성 진행 다이얼로그" src="/sop/sop_cluster_pick.png" />
+              <ScreenshotBox label="Cluster Pick page — Start button and creation progress dialog" src="/sop/sop_cluster_pick.png" />
 
-              <Step n={3} title="'N' 항목 (재고 부족) 처리" systems={["dashboard"]} important>
-                <p><strong className="text-red-600">"N"</strong> 으로 표시된 SKU는 지정 피킹 위치에 재고가 충분하지 않음을 의미한다.</p>
-                <p>이 항목들은 두 곳에서 확인 가능:</p>
+              <Step n={3} title="Handle 'N' Items (insufficient stock)" systems={["dashboard"]} important>
+                <p>SKUs marked <strong className="text-red-600">"N"</strong> have insufficient stock at the designated pick location.</p>
+                <p>These items can be found in two places:</p>
                 <ul className="list-disc list-inside ml-2 space-y-0.5 text-sm mt-1">
-                  <li>Cluster Pick 페이지 하단</li>
+                  <li>Bottom of the Cluster Pick page</li>
                   <li>
                     <button onClick={() => router.push("/inventory")} className="text-teal-700 underline font-semibold">
-                      Inventory → Replenishment 페이지
+                      Inventory → Replenishment page
                     </button>
                   </li>
                 </ul>
               </Step>
 
-              <Step n={4} title="보충 티켓 출력 → 재고 보충" systems={["dashboard", "wms"]} important
-                warn="'N' 항목 보충이 완료되기 전에 클러스터 피킹을 시작하면 피킹 중간에 재고 없음 오류가 발생하고 주문이 홀드됩니다. 반드시 보충 완료 후 진행하세요.">
-                <p>Replenishment 페이지에서 해당 SKU의 보충 티켓을 출력한다.</p>
-                <p>창고 담당자가 보조 창고/보관 위치에서 피킹 위치로 재고를 이동한다.</p>
-                <p>보충 완료 확인 후 다음 단계 진행.</p>
+              <Step n={4} title="Print replenishment ticket → replenish stock" systems={["dashboard", "wms"]} important
+                warn="Starting cluster picking before all 'N' items are replenished will cause out-of-stock errors mid-pick and put orders on hold. Always complete replenishment first.">
+                <p>Print the replenishment ticket for the affected SKU from the Replenishment page.</p>
+                <p>A warehouse associate moves the stock from bulk storage to the pick location.</p>
+                <p>Confirm replenishment is complete before proceeding.</p>
               </Step>
-              <ScreenshotBox label="'N' 항목 — Replenishment 페이지" src="/sop/sop_replenishment.png" />
+              <ScreenshotBox label="'N' items — Replenishment page" src="/sop/sop_replenishment.png" />
 
-              <Step n={5} title="라벨 출력 요청 (피킹 시작 전)" systems={["wms"]} important
-                warn="피커가 출발하기 전에 Steve 또는 매니저에게 라벨 출력을 요청해야 합니다. 피킹 완료 후 라벨이 없으면 패킹이 지연됩니다. '클러스터 피킹 시작 — 라벨 출력 부탁드립니다.'라고 반드시 알릴 것.">
-                <p>Steve 또는 매니저에게 전달: <span className="font-semibold text-slate-700">"Cluster picking starting — please print labels now."</span></p>
-              </Step>
-
-              <Step n={6} title="모바일 피킹 시작" systems={["mobile"]}
-                notice="모바일 앱은 최적화된 순서로 위치를 안내합니다. 화면의 스캔 안내를 따르세요.">
-                <p>모바일 앱 → <strong>Outbound → Cluster Pick</strong> → 활성 클러스터 선택 → 피킹 시작.</p>
-                <p>각 위치 바코드와 상품 바코드를 스캔하여 피킹을 확인한다.</p>
-                <p>마지막 위치 완료 시 <strong>자동으로 클러스터가 완료 처리</strong>되어 목록에서 사라진다.</p>
-              </Step>
-              <ScreenshotBox label="모바일 Cluster Pick — 클러스터 목록 및 피킹 진행" />
-
-              <Step n={7} title="대시보드에서 완료 처리 (수동 옵션)" systems={["dashboard"]}
-                notice="모바일에서 자동 완료가 되지 않은 경우 대시보드에서 수동으로 완료 처리 가능.">
-                <p>Cluster Pick 페이지에서 해당 클러스터의 <strong>"Complete"</strong> 버튼 클릭.</p>
-                <p>확인 팝업에서 bin 수, 위치 수, CA 처리 안내를 확인 후 <strong>"Complete"</strong> 클릭.</p>
-                <p>완료 후 클러스터는 히스토리로 이동되고 목록에서 사라진다.</p>
+              <Step n={5} title="Request label printing (before picking starts)" systems={["wms"]} important
+                warn="Labels must be requested from Steve or a manager before pickers leave. If labels are not ready when picking finishes, packing will be delayed. Always notify: 'Cluster picking starting — please print labels now.'">
+                <p>Notify Steve or a manager: <span className="font-semibold text-slate-700">"Cluster picking starting — please print labels now."</span></p>
               </Step>
 
-              <Step n={8} title="패킹 → 출고 완료" systems={["dashboard", "wms"]}>
-                <p>피킹된 상품을 패킹 스테이션으로 가져온다.</p>
-                <p>각 주문에 대해 <strong>Packing</strong> 페이지에서 패킹을 완료한다.</p>
-                <p>WMS에서 출고 처리를 확인한다. 워크플로우 완료.</p>
+              <Step n={6} title="Start mobile picking" systems={["mobile"]}
+                notice="The mobile app guides you through locations in an optimized order. Follow the scan instructions on screen.">
+                <p>Mobile app → <strong>Outbound → Cluster Pick</strong> → select the active cluster → start picking.</p>
+                <p>Scan each location barcode and item barcode to confirm each pick.</p>
+                <p>When the last location is completed, the <strong>cluster is automatically marked done</strong> and disappears from the list.</p>
               </Step>
-              <ScreenshotBox label="패킹 페이지 — 각 주문 패킹 완료" />
+              <ScreenshotBox label="Mobile Cluster Pick — cluster list and picking progress" />
+
+              <Step n={7} title="Complete from dashboard (manual option)" systems={["dashboard"]}
+                notice="If auto-completion on mobile did not trigger, you can manually complete the cluster from the dashboard.">
+                <p>On the Cluster Pick page, click the <strong>"Complete"</strong> button for the cluster.</p>
+                <p>Review the confirmation popup (bin count, location count, CA status update) then click <strong>"Complete"</strong>.</p>
+                <p>After completion the cluster moves to history and disappears from the list.</p>
+              </Step>
+
+              <Step n={8} title="Packing → outbound complete" systems={["dashboard", "wms"]}>
+                <p>Bring the picked items to the packing station.</p>
+                <p>Complete packing for each order on the <strong>Packing</strong> page.</p>
+                <p>Confirm outbound in WMS. Workflow complete.</p>
+              </Step>
+              <ScreenshotBox label="Packing page — packing complete for each order" />
 
             </div>
           </Card>
@@ -325,23 +325,23 @@ export default function SopPage() {
         <Section id="b2b" number="04" title="B2B Processing" color="bg-orange-50 text-orange-800" icon={Package}>
           <Card>
             <Notice type="info">
-              B2B는 B2C Cluster Pick <strong>이후</strong> 처리하거나, 충분한 인원이 있는 경우 동시에 진행합니다. 팀 배정은 항상 매니저와 협의하세요.
+              B2B is processed <strong>after</strong> B2C Cluster Pick, or simultaneously when staffing allows. Always coordinate team assignments with your manager.
             </Notice>
             <div className="mt-5 space-y-6">
 
-              <Step n={1} title="B2B Shipping 확인" systems={["dashboard"]}>
-                <p><strong>Shipping → B2B Shipping</strong>으로 이동하여 당일 출고 주문을 필터링한다.</p>
+              <Step n={1} title="Check B2B Shipping" systems={["dashboard"]}>
+                <p>Go to <strong>Shipping → B2B Shipping</strong> and filter for today's outbound orders.</p>
               </Step>
 
-              <Step n={2} title="피킹 위치 배정 (Auto Assign)" systems={["dashboard"]}
-                notice="B2B 주문은 라인당 수량이 많습니다. 배정 전 가용 재고를 꼼꼼히 확인하세요.">
-                <p>각 주문을 열어 <strong>"Auto Assign"</strong>을 클릭하거나 SKU 라인별로 위치를 수동 선택한다.</p>
-                <p>Auto Assign은 FEFO (유효기간 빠른 순) + GOOD 상태 재고 우선으로 자동 배정된다.</p>
-                <p>미배정 라인이 있을 경우 <strong>"Assign"</strong> 버튼으로 수동 배정 가능.</p>
+              <Step n={2} title="Assign pick locations (Auto Assign)" systems={["dashboard"]}
+                notice="B2B orders typically have high quantities per line. Verify available stock carefully before assigning.">
+                <p>Open each order and click <strong>"Auto Assign"</strong>, or manually select a location per SKU line.</p>
+                <p>Auto Assign prioritizes FEFO (earliest expiry first) and GOOD-condition stock automatically.</p>
+                <p>If any lines remain unassigned, use the <strong>"Assign"</strong> button to pick a location manually.</p>
               </Step>
 
-              <Step n={3} title="피킹 → 패킹 → 출고" systems={["wms", "dashboard"]}>
-                <p>위치 배정 완료 후: 지정 위치에서 상품 피킹 → 패킹 스테이션으로 이동 → 패킹 완료 → WMS에서 출고 확인.</p>
+              <Step n={3} title="Pick → Pack → Ship" systems={["wms", "dashboard"]}>
+                <p>Once locations are assigned: pick items from designated locations → bring to packing station → complete packing → confirm outbound in WMS.</p>
               </Step>
 
             </div>
@@ -354,24 +354,24 @@ export default function SopPage() {
           <div className="space-y-2">
             {[
               {
-                q: "'N' 항목이 있는데 클러스터 피킹을 먼저 시작해도 되나요?",
-                a: "안 됩니다. 모든 'N' 항목은 피킹 전에 보충 완료 및 확인이 되어야 합니다. 재고 없이 피킹을 시작하면 피킹 중간에 재고 부족 오류가 발생하고 주문이 홀드됩니다."
+                q: "Can I start cluster picking even if there are 'N' items?",
+                a: "No. All 'N' items must be replenished and confirmed before picking begins. Starting without sufficient stock will cause out-of-stock errors mid-pick and put orders on hold."
               },
               {
-                q: "모바일에서 자동 완료가 안 되는 경우는 어떻게 하나요?",
-                a: "대시보드 Cluster Pick 페이지에서 해당 클러스터의 'Complete' 버튼을 클릭하면 수동으로 완료 처리할 수 있습니다. 확인 팝업에서 내용을 확인하고 'Complete'를 누르세요."
+                q: "What if the cluster doesn't auto-complete on mobile?",
+                a: "Click the 'Complete' button for that cluster on the dashboard's Cluster Pick page. Review the confirmation popup and click 'Complete' to manually close it."
               },
               {
-                q: "클러스터를 완료했는데 대시보드에서 히스토리로 안 빠지는 경우는?",
-                a: "완료 처리 시 /api/cluster/close를 통해 Redis 상태가 'completed'로 변경되고 WMS에 CA 상태 변경이 전송됩니다. 목록 페이지에서 새로고침 버튼(↻)을 눌러 최신 상태를 불러오세요."
+                q: "I completed a cluster but it's still showing in the list — what do I do?",
+                a: "On completion, the system calls /api/cluster/close to update the Redis status to 'completed' and sends a CA status change to the WMS. Press the refresh button (↻) on the list page to reload the latest state."
               },
               {
-                q: "클러스터 피킹 라벨은 언제 요청해야 하나요?",
-                a: "피킹 시작 전 — 피킹 중이나 완료 후가 아닙니다. 피커들이 피킹을 마치고 패킹 스테이션에 돌아왔을 때 라벨이 준비되어 있어야 합니다. 클러스터 시작이 확정되면 바로 Steve 또는 매니저에게 알리세요."
+                q: "When should I request label printing for cluster picking?",
+                a: "Before picking starts — not during or after. Labels must be ready when pickers return to the packing station. As soon as the cluster is confirmed, notify Steve or a manager right away."
               },
               {
-                q: "B2B Auto Assign이 일부 라인을 배정하지 못하면 어떻게 하나요?",
-                a: "피킹 테이블에서 '(미배정)' 행에 'Assign' 버튼이 표시됩니다. 클릭하면 해당 SKU의 가용 재고 목록이 FEFO 순으로 나타납니다. 적절한 위치를 선택하고 수량을 입력하여 수동 배정하세요. 재고가 부족한 경우 매니저에게 보고하세요."
+                q: "What if B2B Auto Assign can't fill some lines?",
+                a: "An 'Assign' button appears on the unassigned rows in the picking table. Click it to see available stock for that SKU sorted by FEFO. Select a location, enter the quantity, and confirm the assignment. If stock is truly insufficient, report to your manager."
               },
             ].map(({ q, a }, i) => (
               <div key={i} className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
