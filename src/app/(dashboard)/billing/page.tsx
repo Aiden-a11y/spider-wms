@@ -3208,13 +3208,16 @@ export default function BillingPage() {
         ...(editing && wmsSource ? { [editing.customer]: wmsSource } : {}),
       };
       for (const inv of group) {
+        // wmsSource is not persisted — raw WMS order arrays can be MB-scale (e.g. 3000+ B2C orders)
+        // and exceed Supabase row limits. orderEdits captures all user overrides.
+        const { wmsSource: _ws, ...invRest } = inv;
+        void _ws;
         const payload: BillingInvoice = {
-          ...inv,
+          ...invRest,
           status,
           updatedAt: now,
           orderEdits: flushedEditsMap[inv.customer] ?? {},
           omSettings: omSnap,
-          wmsSource: flushedSourceMap[inv.customer] ?? inv.wmsSource, // persist WMS raw order data
         };
         const res = await fetch("/api/billing/invoices", {
           method: "POST",
@@ -3868,7 +3871,7 @@ export default function BillingPage() {
           wcGrossRate: omWcGrossRate, wcDiscount: omWcDiscount,
           glRate: omGlRate, dental: omDentalFixed, medical: omMedicalFixed,
         },
-        wmsSource: wmsSource ?? editing.wmsSource, // persist WMS raw order data
+        // wmsSource excluded — raw order arrays can be MB-scale and exceed Supabase limits
       };
       const res = await fetch("/api/billing/invoices", {
         method: "POST",
@@ -5288,7 +5291,6 @@ export default function BillingPage() {
                         IB_KEYS.forEach(k => { totals[k] += ov[k] ?? defs[k] ?? 0; });
                       });
 
-                      if (wmsSource.receiving.length > 0) console.log("[IB raw fields]", Object.keys(wmsSource.receiving[0]), wmsSource.receiving[0]);
                       const ibTotalPages = Math.max(1, Math.ceil(wmsSource.receiving.length / SOURCE_PAGE_SIZE));
                       const ibPageRows = wmsSource.receiving.slice((sourcePage - 1) * SOURCE_PAGE_SIZE, sourcePage * SOURCE_PAGE_SIZE);
                       return (
