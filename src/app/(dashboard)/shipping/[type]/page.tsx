@@ -221,7 +221,7 @@ export default function ShippingTypePage() {
 
   /* ── Pagination ── */
   const [tablePage,        setTablePage]        = useState(1);
-  const TABLE_PAGE_SIZE = 100;
+  const [tablePageSize,    setTablePageSize]    = useState(100);
 
   /* ── Manual Assign modal state ── */
   const [assignModalItem,  setAssignModalItem]  = useState<Order | null>(null);
@@ -1584,8 +1584,8 @@ ${labels}
     return list;
   }, [orders, customerCode, colFilters, search]);
 
-  const totalPages  = Math.max(1, Math.ceil(filtered.length / TABLE_PAGE_SIZE));
-  const pageOrders  = filtered.slice((tablePage - 1) * TABLE_PAGE_SIZE, tablePage * TABLE_PAGE_SIZE);
+  const totalPages  = Math.max(1, Math.ceil(filtered.length / tablePageSize));
+  const pageOrders  = filtered.slice((tablePage - 1) * tablePageSize, tablePage * tablePageSize);
 
   const statusSummary = useMemo(() => {
     const map: Record<string, number> = {};
@@ -1937,11 +1937,20 @@ ${labels}
             </table>
           </div>
           {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between px-4 py-2.5 border-t border-slate-100 bg-slate-50 text-xs text-slate-500">
-              <span>
-                {((tablePage - 1) * TABLE_PAGE_SIZE + 1).toLocaleString()}–{Math.min(tablePage * TABLE_PAGE_SIZE, filtered.length).toLocaleString()} / {filtered.length.toLocaleString()}
-              </span>
+          <div className="flex items-center justify-between px-4 py-2.5 border-t border-slate-100 bg-slate-50 text-xs text-slate-500">
+            <span>
+              {filtered.length === 0 ? "0건" : (
+                <>{((tablePage - 1) * tablePageSize + 1).toLocaleString()}–{Math.min(tablePage * tablePageSize, filtered.length).toLocaleString()} / {filtered.length.toLocaleString()}건</>
+              )}
+            </span>
+            <div className="flex items-center gap-2">
+              <select
+                value={tablePageSize}
+                onChange={(e) => { setTablePageSize(Number(e.target.value)); setTablePage(1); }}
+                className="px-2 py-1 rounded border border-slate-200 bg-white text-slate-600 font-medium cursor-pointer"
+              >
+                {[50, 100, 500].map((n) => <option key={n} value={n}>{n}개씩</option>)}
+              </select>
               <div className="flex items-center gap-1">
                 <button onClick={() => setTablePage(1)} disabled={tablePage === 1}
                   className="px-2 py-1 rounded border border-slate-200 disabled:opacity-40 hover:bg-white transition-colors">«</button>
@@ -1954,7 +1963,7 @@ ${labels}
                   className="px-2 py-1 rounded border border-slate-200 disabled:opacity-40 hover:bg-white transition-colors">»</button>
               </div>
             </div>
-          )}
+          </div>
         </div>
       )}
 
