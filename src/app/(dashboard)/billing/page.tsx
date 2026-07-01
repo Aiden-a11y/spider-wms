@@ -3187,6 +3187,32 @@ export default function BillingPage() {
     }
   }
 
+  // ── slim wmsSource before saving: keep only fields used in the source panel ──
+  function slimSource(src: WmsSource): WmsSource {
+    const pick = (o: Record<string, unknown>, keys: string[]) => {
+      const r: Record<string, unknown> = {};
+      for (const k of keys) if (o[k] !== undefined) r[k] = o[k];
+      return r;
+    };
+    const IB_KEYS = ["receiveOrderCode","orderCode","inboundOrderNo","receiveOrderNo","orderNo",
+      "poNo","poNumber","referenceNo","inDate","receiveDate","orderDate","status","orderStatus",
+      "inboundType","receiveType","totalQty","itemCount","cartonQty","boxQty","packageQty","cartonCount","comment"];
+    const B2B_KEYS = ["shippingOrderCode","orderCode","shippingOrderNo",
+      "outDate","deliveryDate","shippingDate","outboundDate","status","orderStatus","comment"];
+    const B2C_KEYS = ["shippingOrderCode","orderCode","shippingOrderNo",
+      "outDate","deliveryDate","shippingDate","totalQty","orderQty",
+      "skuQty","skuCount","productCount","productQty","itemCount","status","orderStatus","comment"];
+    const RTN_KEYS = ["returnOrderCode","orderCode","returnDate","inDate","orderDate","totalQty","qty","status","orderStatus"];
+    return {
+      receiving: src.receiving.map(o => pick(o, IB_KEYS)),
+      b2b:       src.b2b.map(o => pick(o, B2B_KEYS)),
+      b2c:       src.b2c.map(o => pick(o, B2C_KEYS)),
+      returns:   src.returns.map(o => pick(o, RTN_KEYS)),
+      b2bWarnings:        src.b2bWarnings,
+      b2cStatusBreakdown: src.b2cStatusBreakdown,
+    };
+  }
+
   // ── save all invoices in combined group ──
   async function saveAllMulti(status: "draft" | "final") {
     if (!editing) return;
@@ -3208,16 +3234,14 @@ export default function BillingPage() {
         ...(editing && wmsSource ? { [editing.customer]: wmsSource } : {}),
       };
       for (const inv of group) {
-        // wmsSource is not persisted — raw WMS order arrays can be MB-scale (e.g. 3000+ B2C orders)
-        // and exceed Supabase row limits. orderEdits captures all user overrides.
-        const { wmsSource: _ws, ...invRest } = inv;
-        void _ws;
+        const srcToSave = flushedSourceMap[inv.customer] ?? inv.wmsSource;
         const payload: BillingInvoice = {
-          ...invRest,
+          ...inv,
           status,
           updatedAt: now,
           orderEdits: flushedEditsMap[inv.customer] ?? {},
           omSettings: omSnap,
+          wmsSource: srcToSave ? slimSource(srcToSave) : undefined,
         };
         const res = await fetch("/api/billing/invoices", {
           method: "POST",
@@ -3871,7 +3895,7 @@ export default function BillingPage() {
           wcGrossRate: omWcGrossRate, wcDiscount: omWcDiscount,
           glRate: omGlRate, dental: omDentalFixed, medical: omMedicalFixed,
         },
-        // wmsSource excluded — raw order arrays can be MB-scale and exceed Supabase limits
+        wmsSource: (wmsSource ?? editing.wmsSource) ? slimSource(wmsSource ?? editing.wmsSource!) : undefined,
       };
       const res = await fetch("/api/billing/invoices", {
         method: "POST",
