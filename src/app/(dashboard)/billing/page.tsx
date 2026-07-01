@@ -2497,9 +2497,15 @@ function resolveStorageKey(rawType: string): string | undefined {
   const t = rawType.trim().toLowerCase();
   // 1. Exact match
   if (STORAGE_LABEL_MAP[t]) return STORAGE_LABEL_MAP[t];
-  // 2. Strip "re", "rtrn", "ret", "rtn", "return" prefix (with optional space/dash)
-  const stripped = t.replace(/^(re(turn)?|rtrn|ret|rtn)[-\s]*/i, "").trim();
-  if (stripped && STORAGE_LABEL_MAP[stripped]) return STORAGE_LABEL_MAP[stripped];
+  // 2. Strip return/re prefix: "Re Bin", "Return Shelf", etc.
+  const stripped1 = t.replace(/^(re(turn)?|rtrn|ret|rtn)[-\s]*/i, "").trim();
+  if (stripped1 && STORAGE_LABEL_MAP[stripped1]) return STORAGE_LABEL_MAP[stripped1];
+  // 3. Strip WMS occupancyInfo-style prefix: "Picking Bin", "Storage Pallet Regular", etc.
+  const stripped2 = t.replace(/^(picking|storage|reserve|pick|stow|stowing)[-\s]*/i, "").trim();
+  if (stripped2 && STORAGE_LABEL_MAP[stripped2]) return STORAGE_LABEL_MAP[stripped2];
+  // 4. Also strip both layers: "Re Picking Bin" → "bin"
+  const stripped3 = stripped1.replace(/^(picking|storage|reserve|pick|stow|stowing)[-\s]*/i, "").trim();
+  if (stripped3 && STORAGE_LABEL_MAP[stripped3]) return STORAGE_LABEL_MAP[stripped3];
   return undefined;
 }
 
