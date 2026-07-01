@@ -774,44 +774,35 @@ async function downloadWorkbook(wb: ExcelJS.Workbook, filename: string) {
 // ─── Per-customer WMS detail sheets ──────────────────────────────────────────
 
 /** Detect default billing quantities from a raw WMS inbound order */
-function parseReceivingComment(comment: string): { size: string; pallets: number; cartons: number } | null {
+function parseReceivingComment(comment: string): { pallets: number; cartons: number } | null {
   if (!comment.includes("RECEIVING INFO")) return null;
-  const sizeM   = comment.match(/Container Size:\s*([^\n\r]+)/i);
-  const putAway = comment.match(/Pallets Put Away:\s*(\d+)\s*PLT\s*\/\s*(\d+)\s*CTN/i);
-  const received= comment.match(/Pallets Received:\s*(\d+)\s*PLT\s*\/\s*(\d+)\s*CTN/i);
+  const putAway  = comment.match(/Pallets Put Away:\s*(\d+)\s*PLT\s*\/\s*(\d+)\s*CTN/i);
+  const received = comment.match(/Pallets Received:\s*(\d+)\s*PLT\s*\/\s*(\d+)\s*CTN/i);
   const m = putAway ?? received;
-  return {
-    size:    sizeM ? sizeM[1].trim() : "",
-    pallets: m ? Number(m[1]) : 0,
-    cartons: m ? Number(m[2]) : 0,
-  };
+  if (!m) return null;
+  return { pallets: Number(m[1]), cartons: Number(m[2]) };
 }
 
 function getInboundDefs(o: Record<string, unknown>): Record<string, number> {
-  const typeRaw = String(o.inboundType ?? o.receiveType ?? "").toLowerCase();
-  const parsed  = parseReceivingComment(String(o.comment ?? ""));
-  const sizeRaw = (parsed?.size ?? typeRaw).toLowerCase();
-
-  // Container detection: 20/40/40HC → container billing; ltl/ground/air/blank → pallet+carton
-  const isContainer = /\b(20|40)\b/.test(sizeRaw) && !/ltl|less.?than|ground|air/i.test(sizeRaw);
-
+  // COMMENT has actual pallet/carton counts → use directly (no type detection from comment)
+  const parsed = parseReceivingComment(String(o.comment ?? ""));
+  if (parsed && (parsed.pallets > 0 || parsed.cartons > 0)) {
+    const r: Record<string, number> = {};
+    if (parsed.pallets > 0) r.inbound_pallet = parsed.pallets;
+    if (parsed.cartons > 0) r.inbound_carton = parsed.cartons;
+    return r;
+  }
+  // Fallback: detect container type from inboundType/receiveType field
+  const type = String(o.inboundType ?? o.receiveType ?? "").toLowerCase();
+  const isContainer = /container|cont/i.test(type);
   if (!isContainer) {
-    // LTL / regular → extract pallets + cartons from comment
-    if (parsed && (parsed.pallets > 0 || parsed.cartons > 0)) {
-      const r: Record<string, number> = {};
-      if (parsed.pallets > 0) r.inbound_pallet  = parsed.pallets;
-      if (parsed.cartons > 0) r.inbound_carton   = parsed.cartons;
-      return r;
-    }
     const v = o.cartonQty ?? o.boxQty ?? o.packageQty ?? o.cartonCount;
     return { inbound_carton: v != null ? Number(v) : 1 };
   }
-
-  // Container → map size to billing key
-  const is40hc  = /40.*hc|hc.*40|40hc/i.test(sizeRaw);
-  const is40    = /\b40\b/.test(sizeRaw) && !is40hc;
-  const is20    = /\b20\b/.test(sizeRaw);
-  const isFloor = /floor/i.test(sizeRaw);
+  const is40hc  = /40.*hc|hc.*40|40hc/i.test(type);
+  const is40    = /\b40\b/.test(type) && !is40hc;
+  const is20    = /\b20\b/.test(type);
+  const isFloor = /floor/i.test(type);
   if (is40hc && isFloor)  return { inbound_40hc_floor: 1 };
   if (is40hc)             return { inbound_40hc_palletized: 1 };
   if (is40 && isFloor)    return { inbound_40ft_floor: 1 };
@@ -835,22 +826,25 @@ function addCombinedB2BSheet(
     { width: 18 }, // B: Order Code
     { width: 22 }, // C: Shipping Order No
     { width: 12 }, // D: Date
-    { width: 11 }, // E: Pick/Piece
-    { width: 12 }, // F: Pick/Carton
-    { width: 12 }, // G: Pick/Pallet
-    { width: 11 }, // H: Out/Carton
-    { width: 11 }, // I: Out/Pallet
-    { width: 11 }, // J: Supplies
-    { width: 11 }, // K: Packing
-    { width: 11 }, // L: Palletize
-    { width: 11 }, // M: Labels
-    { width: 11 }, // N: Inserts
-    { width: 11 }, // O: Labor Hrs
-    { width: 11 }, // P: Labor OT
-    { width: 12 }, // Q: Labor Wknd
+    { width: 9  }, // E: SKU Cnt
+    { width: 10 }, // F: Total Qty
+    { width: 11 }, // G: Pick/Piece
+    { width: 12 }, // H: Pick/Carton
+    { width: 12 }, // I: Pick/Pallet
+    { width: 11 }, // J: Out/Carton
+    { width: 11 }, // K: Out/Pallet
+    { width: 11 }, // L: Supplies
+    { width: 11 }, // M: Packing
+    { width: 11 }, // N: Palletize
+    { width: 11 }, // O: Labels
+    { width: 11 }, // P: Inserts
+    { width: 11 }, // Q: Labor Hrs
+    { width: 11 }, // R: Labor OT
+    { width: 12 }, // S: Labor Wknd
   ];
   const headers = [
-    "Customer","Order Code","Shipping Order No","Date","Pick/Piece","Pick/Carton","Pick/Pallet",
+    "Customer","Order Code","Shipping Order No","Date","SKU Cnt","Total Qty",
+    "Pick/Piece","Pick/Carton","Pick/Pallet",
     "Out/Carton","Out/Pallet","Supplies","Packing✓","Palletize✓",
     "Labels","Inserts","Labor Hrs","Labor OT","Labor Wknd",
   ];
@@ -871,6 +865,8 @@ function addCombinedB2BSheet(
       const date    = String(order.outDate ?? order.deliveryDate ?? order.shippingDate ?? order.outboundDate ?? "");
       const tasks   = parseTaskComment(String(order.comment ?? ""));
       const ov      = orderEdits[code] ?? {};
+      const skuCnt  = order.skuCount ?? order.itemCount ?? order.productCount ?? "";
+      const totQty  = order.totalQty ?? order.orderQty ?? order.productQty ?? "";
 
       const pp       = ov["b2b_pick_piece"]    ?? tasks["Picking per Piece"]    ?? 0;
       const pc       = ov["b2b_pick_carton"]   ?? tasks["Picking per Carton"]   ?? 0;
@@ -887,7 +883,7 @@ function addCombinedB2BSheet(
       const laborWknd = ov["labor_ot_weekend"]  ?? (tasks["Labor Hours (Weekend/Holiday)"] ?? 0);
 
       const r = ws.addRow([
-        custCode, code, shipNo, date, pp, pc, ppl, oc, op, supplies, packing, palletize,
+        custCode, code, shipNo, date, skuCnt, totQty, pp, pc, ppl, oc, op, supplies, packing, palletize,
         labels, inserts, laborReg, laborOT, laborWknd,
       ]);
       r.height = 15;
@@ -905,17 +901,17 @@ function addCombinedB2BSheet(
   const lastDataRow = ws.rowCount;
   if (lastDataRow >= 2) {
     const totRow = ws.addRow([
-      "TOTAL", "", "", "",
-      ...["E","F","G","H","I","J","K","L","M","N","O","P","Q"].map(col => ({
+      "TOTAL", "", "", "", "", "",
+      ...["G","H","I","J","K","L","M","N","O","P","Q","R","S"].map(col => ({
         formula: `=SUM(${col}2:${col}${lastDataRow})`, result: 0,
       })),
     ]);
     totRow.height = 16;
-    ws.mergeCells(totRow.number, 1, totRow.number, 4);
+    ws.mergeCells(totRow.number, 1, totRow.number, 6);
     totRow.eachCell({ includeEmpty: true }, (cell, col) => {
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.subtotalBg } };
-      cell.font = { bold: true, size: 10, color: { argb: col >= 5 ? "FF1E40AF" : "FF374151" } };
-      cell.alignment = { vertical: "middle", horizontal: col <= 4 ? "center" : "right" };
+      cell.font = { bold: true, size: 10, color: { argb: col >= 7 ? "FF1E40AF" : "FF374151" } };
+      cell.alignment = { vertical: "middle", horizontal: col <= 6 ? "center" : "right" };
       applyBorder(cell, "medium");
     });
   }
@@ -1142,22 +1138,24 @@ function addB2BDetailSheet(
   ws.columns = [
     { width: 18 }, // A: Order Code
     { width: 12 }, // B: Date
-    { width: 11 }, // C: Pick/Piece
-    { width: 12 }, // D: Pick/Carton
-    { width: 12 }, // E: Pick/Pallet
-    { width: 11 }, // F: Out/Carton (ref)
-    { width: 11 }, // G: Out/Pallet (ref)
-    { width: 11 }, // H: Supplies (ref)
-    { width: 11 }, // I: Packing
-    { width: 11 }, // J: Palletize
-    { width: 11 }, // K: Labels
-    { width: 11 }, // L: Inserts
-    { width: 11 }, // M: Labor Hrs
-    { width: 11 }, // N: Labor OT
-    { width: 12 }, // O: Labor Wknd
+    { width: 9  }, // C: SKU Cnt
+    { width: 10 }, // D: Total Qty
+    { width: 11 }, // E: Pick/Piece
+    { width: 12 }, // F: Pick/Carton
+    { width: 12 }, // G: Pick/Pallet
+    { width: 11 }, // H: Out/Carton (ref)
+    { width: 11 }, // I: Out/Pallet (ref)
+    { width: 11 }, // J: Supplies (ref)
+    { width: 11 }, // K: Packing
+    { width: 11 }, // L: Palletize
+    { width: 11 }, // M: Labels
+    { width: 11 }, // N: Inserts
+    { width: 11 }, // O: Labor Hrs
+    { width: 11 }, // P: Labor OT
+    { width: 12 }, // Q: Labor Wknd
   ];
   const headers = [
-    "Order Code","Date","Pick/Piece","Pick/Carton","Pick/Pallet",
+    "Order Code","Date","SKU Cnt","Total Qty","Pick/Piece","Pick/Carton","Pick/Pallet",
     "Out/Carton","Out/Pallet","Supplies","Packing✓","Palletize✓",
     "Labels","Inserts","Labor Hrs","Labor OT","Labor Wknd",
   ];
@@ -1172,10 +1170,12 @@ function addB2BDetailSheet(
 
   let rowIdx = 0;
   for (const order of orders) {
-    const code  = String(order.shippingOrderCode ?? order.orderCode ?? "");
-    const date  = String(order.outDate ?? order.deliveryDate ?? order.shippingDate ?? order.outboundDate ?? "");
-    const tasks = parseTaskComment(String(order.comment ?? ""));
-    const ov    = orderEdits[code] ?? {};
+    const code   = String(order.shippingOrderCode ?? order.orderCode ?? "");
+    const date   = String(order.outDate ?? order.deliveryDate ?? order.shippingDate ?? order.outboundDate ?? "");
+    const tasks  = parseTaskComment(String(order.comment ?? ""));
+    const ov     = orderEdits[code] ?? {};
+    const skuCnt = order.skuCount ?? order.itemCount ?? order.productCount ?? "";
+    const totQty = order.totalQty ?? order.orderQty ?? order.productQty ?? "";
 
     const pp       = ov["b2b_pick_piece"]    ?? tasks["Picking per Piece"]    ?? 0;
     const pc       = ov["b2b_pick_carton"]   ?? tasks["Picking per Carton"]   ?? 0;
@@ -1195,7 +1195,7 @@ function addB2BDetailSheet(
     const laborWknd = ov["labor_ot_weekend"]  ?? (tasks["Labor Hours (Weekend/Holiday)"] ?? 0);
 
     const r = ws.addRow([
-      code, date, pp, pc, ppl, oc, op, supplies, packing, palletize,
+      code, date, skuCnt, totQty, pp, pc, ppl, oc, op, supplies, packing, palletize,
       labels, inserts, laborReg, laborOT, laborWknd,
     ]);
     r.height = 15;
@@ -1713,20 +1713,20 @@ function getQtyFormula(
 
   if (cust) {
     // ── Combined sheets: customer in col A, data shifted +1 ──
-    // B2B combined: A=Customer B=OrderCode C=ShippingOrderNo D=Date E=Pick/Piece F=Pick/Carton G=Pick/Pallet
-    //               H=Out/Carton I=Out/Pallet J=Supplies K=Packing L=Palletize M=Labels N=Inserts
-    //               O=Labor Hrs P=Labor OT Q=Labor Wknd
+    // B2B combined: A=Customer B=OrderCode C=ShippingOrderNo D=Date E=SKU Cnt F=Total Qty
+    //               G=Pick/Piece H=Pick/Carton I=Pick/Pallet J=Out/Carton K=Out/Pallet L=Supplies
+    //               M=Packing N=Palletize O=Labels P=Inserts Q=Labor Hrs R=Labor OT S=Labor Wknd
     const b2bCombinedColMap: Record<string, string> = {
-      b2b_pick_piece:    "E",
-      b2b_pick_carton:   "F",
-      b2b_pick_pallet:   "G",
-      b2b_carton_packing:"K",
-      b2b_palletizing:   "L",
-      b2b_label:         "M",
-      b2b_insert:        "N",
-      labor_regular:     "O",
-      labor_ot_weekday:  "P",
-      labor_ot_weekend:  "Q",
+      b2b_pick_piece:    "G",
+      b2b_pick_carton:   "H",
+      b2b_pick_pallet:   "I",
+      b2b_carton_packing:"M",
+      b2b_palletizing:   "N",
+      b2b_label:         "O",
+      b2b_insert:        "P",
+      labor_regular:     "Q",
+      labor_ot_weekday:  "R",
+      labor_ot_weekend:  "S",
     };
     if (b2bCombinedColMap[itemId] && b) {
       const col = b2bCombinedColMap[itemId];
@@ -1767,19 +1767,20 @@ function getQtyFormula(
     if (itemId === "fulfillment_insert" && c) return { formula: `=SUMIF('${c}'!A:A,"${cust}",'${c}'!J:J)`, result: fallbackQty };
   } else if (refs.allCustomers) {
     // ── Combined sheets: SUM entire column across ALL customers (no filter) ──
-    // B2B combined layout: A=Customer B=OrderCode C=ShippingOrderNo D=Date E=Pick/Piece F=Pick/Carton G=Pick/Pallet
-    //   H=Out/Carton I=Out/Pallet J=Supplies K=Packing L=Palletize M=Labels N=Inserts O=Labor P=OT Q=Wknd
+    // B2B combined layout: A=Customer B=OrderCode C=ShippingOrderNo D=Date E=SKU Cnt F=Total Qty
+    //   G=Pick/Piece H=Pick/Carton I=Pick/Pallet J=Out/Carton K=Out/Pallet L=Supplies
+    //   M=Packing N=Palletize O=Labels P=Inserts Q=Labor R=OT S=Wknd
     const b2bCombinedColMap: Record<string, string> = {
-      b2b_pick_piece:    "E",
-      b2b_pick_carton:   "F",
-      b2b_pick_pallet:   "G",
-      b2b_carton_packing:"K",
-      b2b_palletizing:   "L",
-      b2b_label:         "M",
-      b2b_insert:        "N",
-      labor_regular:     "O",
-      labor_ot_weekday:  "P",
-      labor_ot_weekend:  "Q",
+      b2b_pick_piece:    "G",
+      b2b_pick_carton:   "H",
+      b2b_pick_pallet:   "I",
+      b2b_carton_packing:"M",
+      b2b_palletizing:   "N",
+      b2b_label:         "O",
+      b2b_insert:        "P",
+      labor_regular:     "Q",
+      labor_ot_weekday:  "R",
+      labor_ot_weekend:  "S",
     };
     if (b2bCombinedColMap[itemId] && b) {
       const col = b2bCombinedColMap[itemId];
@@ -1820,19 +1821,19 @@ function getQtyFormula(
     if (itemId === "fulfillment_insert" && c) return { formula: `=SUM('${c}'!J2:J9999)`, result: fallbackQty };
   } else {
     // ── Single-customer sheets (no filterCustomer) ──
-    // B2B columns (original layout): A=OrderCode B=Date C=Pick/Piece D=Pick/Carton E=Pick/Pallet
-    //   F=Out/Carton G=Out/Pallet H=Supplies I=Packing J=Palletize K=Labels L=Inserts M=Labor N=OT O=Wknd
+    // B2B columns (per-customer): A=OrderCode B=Date C=SKU Cnt D=Total Qty E=Pick/Piece F=Pick/Carton G=Pick/Pallet
+    //   H=Out/Carton I=Out/Pallet J=Supplies K=Packing L=Palletize M=Labels N=Inserts O=Labor P=OT Q=Wknd
     const b2bColMap: Record<string, string> = {
-      b2b_pick_piece:    "C",
-      b2b_pick_carton:   "D",
-      b2b_pick_pallet:   "E",
-      b2b_carton_packing:"I",
-      b2b_palletizing:   "J",
-      b2b_label:         "K",
-      b2b_insert:        "L",
-      labor_regular:     "M",
-      labor_ot_weekday:  "N",
-      labor_ot_weekend:  "O",
+      b2b_pick_piece:    "E",
+      b2b_pick_carton:   "F",
+      b2b_pick_pallet:   "G",
+      b2b_carton_packing:"K",
+      b2b_palletizing:   "L",
+      b2b_label:         "M",
+      b2b_insert:        "N",
+      labor_regular:     "O",
+      labor_ot_weekday:  "P",
+      labor_ot_weekend:  "Q",
     };
     if (b2bColMap[itemId] && b) {
       return { formula: `=SUM('${b}'!${b2bColMap[itemId]}2:${b2bColMap[itemId]}9999)`, result: fallbackQty };
@@ -3228,7 +3229,8 @@ export default function BillingPage() {
       "poNo","poNumber","referenceNo","inDate","receiveDate","orderDate","status","orderStatus",
       "inboundType","receiveType","totalQty","itemCount","cartonQty","boxQty","packageQty","cartonCount","comment"];
     const B2B_KEYS = ["shippingOrderCode","orderCode","shippingOrderNo",
-      "outDate","deliveryDate","shippingDate","outboundDate","status","orderStatus","comment"];
+      "outDate","deliveryDate","shippingDate","outboundDate","status","orderStatus",
+      "totalQty","orderQty","skuQty","skuCount","itemCount","productCount","productQty","comment"];
     const B2C_KEYS = ["shippingOrderCode","orderCode","shippingOrderNo",
       "outDate","deliveryDate","shippingDate","totalQty","orderQty",
       "skuQty","skuCount","productCount","productQty","itemCount","status","orderStatus","comment"];
@@ -5480,6 +5482,8 @@ export default function BillingPage() {
                               <th className="px-3 py-2 text-left text-slate-500 font-semibold">Order Code</th>
                               <th className="px-3 py-2 text-left text-slate-500 font-semibold">Shipping Order No</th>
                               <th className="px-3 py-2 text-left text-slate-500 font-semibold">Date</th>
+                              <th className="px-3 py-2 text-right text-slate-500 font-semibold">SKU Cnt</th>
+                              <th className="px-3 py-2 text-right text-slate-500 font-semibold">Total Qty</th>
                               <th className="px-3 py-2 text-right text-slate-500 font-semibold">Pick/Piece</th>
                               <th className="px-3 py-2 text-right text-slate-500 font-semibold">Pick/Carton</th>
                               <th className="px-3 py-2 text-right text-slate-500 font-semibold">Pick/Pallet</th>
@@ -5600,6 +5604,8 @@ export default function BillingPage() {
                                   <td className={`px-3 py-1 whitespace-nowrap font-semibold ${missingOutDate ? "text-yellow-600" : "text-slate-500"}`}>
                                     {missingOutDate ? "⚠ No date" : outDateVal}
                                   </td>
+                                  <td className="px-3 py-1 text-right text-slate-500 text-xs">{String(o.skuCount ?? o.itemCount ?? o.productCount ?? "—")}</td>
+                                  <td className="px-3 py-1 text-right text-slate-500 text-xs">{String(o.totalQty ?? o.orderQty ?? o.productQty ?? "—")}</td>
                                   <td className="px-1 py-1 text-right"><input type="number" min={0} value={pp || ""} placeholder="—" onChange={e => setOv("b2b_pick_piece", e.target.value)} className={inputCls(undefined, "b2b_pick_piece" in ov)} /></td>
                                   <td className="px-1 py-1 text-right"><input type="number" min={0} value={pc || ""} placeholder="—" onChange={e => setOv("b2b_pick_carton", e.target.value)} className={inputCls(undefined, "b2b_pick_carton" in ov)} /></td>
                                   <td className="px-1 py-1 text-right"><input type="number" min={0} value={ppl || ""} placeholder="—" onChange={e => setOv("b2b_pick_pallet", e.target.value)} className={inputCls(undefined, "b2b_pick_pallet" in ov)} /></td>
@@ -5641,7 +5647,7 @@ export default function BillingPage() {
                               );
                               return (
                                 <tr className="bg-emerald-50 border-t-2 border-emerald-200">
-                                  <td colSpan={3} className="px-3 py-1.5 text-emerald-700 text-xs font-bold">
+                                  <td colSpan={5} className="px-3 py-1.5 text-emerald-700 text-xs font-bold">
                                     Total ({wmsSource.b2b.length} orders)
                                   </td>
                                   {tdTot(totPP)}
