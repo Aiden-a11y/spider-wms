@@ -906,23 +906,24 @@ function addCombinedInboundSheet(
   ws.columns = [
     { width: 14 }, // A: Customer
     { width: 22 }, // B: Order Code
-    { width: 14 }, // C: PO / Ref
-    { width: 12 }, // D: In Date
-    { width: 8  }, // E: Status
-    { width: 20 }, // F: Type
-    { width: 10 }, // G: Item Qty
-    { width: 9  }, // H: Carton
-    { width: 8  }, // I: Pallet
-    { width: 8  }, // J: 20'Pal
-    { width: 8  }, // K: 40'Pal
-    { width: 9  }, // L: 40HC'Pal
-    { width: 8  }, // M: 20'Flr
-    { width: 8  }, // N: 40'Flr
-    { width: 9  }, // O: 40HC'Flr
-    { width: 9  }, // P: Labor Hrs
+    { width: 24 }, // C: Order No
+    { width: 14 }, // D: PO / Ref
+    { width: 12 }, // E: In Date
+    { width: 8  }, // F: Status
+    { width: 20 }, // G: Type
+    { width: 10 }, // H: Item Qty
+    { width: 9  }, // I: Carton
+    { width: 8  }, // J: Pallet
+    { width: 8  }, // K: 20'Pal
+    { width: 8  }, // L: 40'Pal
+    { width: 9  }, // M: 40HC'Pal
+    { width: 8  }, // N: 20'Flr
+    { width: 8  }, // O: 40'Flr
+    { width: 9  }, // P: 40HC'Flr
+    { width: 9  }, // Q: Labor Hrs
   ];
   const headers = [
-    "Customer","Order Code","PO / Ref","In Date","Status","Type","Item Qty",
+    "Customer","Order Code","Order No","PO / Ref","In Date","Status","Type","Item Qty",
     "Carton","Pallet","20'Pal","40'Pal","40HC'Pal","20'Flr","40'Flr","40HC'Flr","Labor Hrs",
   ];
   const hdr = ws.addRow(headers);
@@ -946,6 +947,7 @@ function addCombinedInboundSheet(
   for (const { custCode, orders, orderEdits } of allData) {
     for (const order of orders) {
       const code    = String(order.receiveOrderCode ?? order.orderCode ?? "");
+      const orderNo = String(order.inboundOrderNo ?? order.receiveOrderNo ?? order.orderNo ?? "");
       const poRef   = String(order.poNo ?? order.poNumber ?? order.referenceNo ?? "");
       const inDate  = String(order.inDate ?? order.receiveDate ?? order.orderDate ?? "");
       const status  = String(order.status ?? order.orderStatus ?? "");
@@ -956,7 +958,7 @@ function addCombinedInboundSheet(
       const val     = (key: string) => ov[key] ?? defs[key] ?? 0;
 
       const r = ws.addRow([
-        custCode, code, poRef, inDate, status, type,
+        custCode, code, orderNo, poRef, inDate, status, type,
         itemQty || null,
         val("inbound_carton")          || null,
         val("inbound_pallet")          || null,
@@ -977,19 +979,19 @@ function addCombinedInboundSheet(
       r.eachCell({ includeEmpty: true }, (cell, col) => {
         cell.font = { size: 10 };
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: isContainer ? containerBg : rowBg } };
-        if (col <= 7) {
-          cell.alignment = { vertical: "middle", horizontal: col === 7 ? "right" : "left" };
+        if (col <= 8) {
+          cell.alignment = { vertical: "middle", horizontal: col === 8 ? "right" : "left" };
           cell.font = { size: 10, color: { argb: col === 2 ? "FF2563EB" : "FF374151" } };
         } else {
           cell.alignment = { vertical: "middle", horizontal: "right" };
-          const key = IB_KEYS[col - 8];
+          const key = IB_KEYS[col - 9];
           const isOverridden = key && key in ov;
-          const isBlue = col <= 9; // Carton (H) and Pallet (I)
+          const isBlue = col <= 10; // Carton (I) and Pallet (J)
           if (isOverridden) {
             cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEF9C3" } };
             cell.font = { size: 10, bold: true, color: { argb: isBlue ? "FF1D4ED8" : "FF92400E" } };
           } else if (cell.value != null && cell.value !== 0) {
-            cell.font = { size: 10, color: { argb: isBlue ? "FF2563EB" : col === 16 ? "FFC2410C" : "FF374151" } };
+            cell.font = { size: 10, color: { argb: isBlue ? "FF2563EB" : col === 17 ? "FFC2410C" : "FF374151" } };
           } else {
             cell.font = { size: 10, color: { argb: "FFCBD5E1" } };
           }
@@ -1004,17 +1006,17 @@ function addCombinedInboundSheet(
   const lastDataRow = ws.rowCount;
   if (lastDataRow >= 2) {
     const totRow = ws.addRow([
-      "TOTAL (billed)", "", "", "", "", "", "",
-      ...["H","I","J","K","L","M","N","O","P"].map(col => ({
+      "TOTAL (billed)", "", "", "", "", "", "", "",
+      ...["I","J","K","L","M","N","O","P","Q"].map(col => ({
         formula: `=SUM(${col}2:${col}${lastDataRow})`, result: 0,
       })),
     ]);
     totRow.height = 16;
-    ws.mergeCells(totRow.number, 1, totRow.number, 7);
+    ws.mergeCells(totRow.number, 1, totRow.number, 8);
     totRow.eachCell({ includeEmpty: true }, (cell, col) => {
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDBEAFE" } };
-      cell.font = { bold: true, size: 10, color: { argb: col >= 8 ? "FF1E40AF" : "FF374151" } };
-      cell.alignment = { vertical: "middle", horizontal: col <= 7 ? (col === 1 ? "right" : "left") : "right" };
+      cell.font = { bold: true, size: 10, color: { argb: col >= 9 ? "FF1E40AF" : "FF374151" } };
+      cell.alignment = { vertical: "middle", horizontal: col <= 8 ? (col === 1 ? "right" : "left") : "right" };
       applyBorder(cell, "medium");
     });
   }
@@ -1198,37 +1200,38 @@ function addInboundDetailSheet(
   const sheetName = (sheetNameOverride ?? `${custCode}_Inbound`).slice(0, 31);
   const ws = wb.addWorksheet(sheetName);
 
-  // Column widths: A–F info, G–O billing quantities
+  // Column widths: A–G info, H–P billing quantities
   ws.columns = [
     { width: 22 }, // A: Order Code
-    { width: 14 }, // B: PO / Ref
-    { width: 12 }, // C: In Date
-    { width: 8  }, // D: Status
-    { width: 20 }, // E: Type
-    { width: 10 }, // F: Item Qty
-    { width: 9  }, // G: Carton
-    { width: 8  }, // H: Pallet
-    { width: 8  }, // I: 20'Pal
-    { width: 8  }, // J: 40'Pal
-    { width: 9  }, // K: 40HC'Pal
-    { width: 8  }, // L: 20'Flr
-    { width: 8  }, // M: 40'Flr
-    { width: 9  }, // N: 40HC'Flr
-    { width: 9  }, // O: Labor Hrs
+    { width: 24 }, // B: Order No
+    { width: 14 }, // C: PO / Ref
+    { width: 12 }, // D: In Date
+    { width: 8  }, // E: Status
+    { width: 20 }, // F: Type
+    { width: 10 }, // G: Item Qty
+    { width: 9  }, // H: Carton
+    { width: 8  }, // I: Pallet
+    { width: 8  }, // J: 20'Pal
+    { width: 8  }, // K: 40'Pal
+    { width: 9  }, // L: 40HC'Pal
+    { width: 8  }, // M: 20'Flr
+    { width: 8  }, // N: 40'Flr
+    { width: 9  }, // O: 40HC'Flr
+    { width: 9  }, // P: Labor Hrs
   ];
 
   // ── Header row ──
   const headers = [
-    "Order Code","PO / Ref","In Date","Status","Type","Item Qty",
+    "Order Code","Order No","PO / Ref","In Date","Status","Type","Item Qty",
     "Carton","Pallet","20'Pal","40'Pal","40HC'Pal","20'Flr","40'Flr","40HC'Flr","Labor Hrs",
   ];
   const hdr = ws.addRow(headers);
   hdr.height = 17;
   hdr.eachCell((cell, col) => {
-    const isBilling = col >= 7;
+    const isBilling = col >= 8;
     cell.font = { bold: true, color: { argb: C.white }, size: 10 };
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: isBilling ? C.blue : "FF374151" } };
-    cell.alignment = { vertical: "middle", horizontal: col <= 6 ? "left" : "center" };
+    cell.alignment = { vertical: "middle", horizontal: col <= 7 ? "left" : "center" };
     applyBorder(cell, "medium");
   });
 
@@ -1243,6 +1246,7 @@ function addInboundDetailSheet(
   let rowIdx = 0;
   for (const order of orders) {
     const code    = String(order.receiveOrderCode ?? order.orderCode ?? "");
+    const orderNo = String(order.inboundOrderNo ?? order.receiveOrderNo ?? order.orderNo ?? "");
     const poRef   = String(order.poNo ?? order.poNumber ?? order.referenceNo ?? "");
     const inDate  = String(order.inDate ?? order.receiveDate ?? order.orderDate ?? "");
     const status  = String(order.status ?? order.orderStatus ?? "");
@@ -1254,7 +1258,7 @@ function addInboundDetailSheet(
     const val  = (key: string) => ov[key] ?? defs[key] ?? 0;
 
     const r = ws.addRow([
-      code, poRef, inDate, status, type,
+      code, orderNo, poRef, inDate, status, type,
       itemQty || null,
       val("inbound_carton")          || null,
       val("inbound_pallet")          || null,
@@ -1275,22 +1279,21 @@ function addInboundDetailSheet(
     r.eachCell({ includeEmpty: true }, (cell, col) => {
       cell.font = { size: 10 };
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: isContainer ? containerBg : rowBg } };
-      if (col <= 6) {
-        cell.alignment = { vertical: "middle", horizontal: col === 6 ? "right" : "left" };
+      if (col <= 7) {
+        cell.alignment = { vertical: "middle", horizontal: col === 7 ? "right" : "left" };
         cell.font = { size: 10, color: { argb: col === 1 ? "FF2563EB" : "FF374151" } };
       } else {
         cell.alignment = { vertical: "middle", horizontal: "right" };
-        // Highlight user-overridden cells yellow, blue for carton/pallet
-        const key = IB_KEYS[col - 7];
+        const key = IB_KEYS[col - 8];
         const isOverridden = key && key in ov;
-        const isBlue = col <= 8; // Carton (G) and Pallet (H)
+        const isBlue = col <= 9; // Carton (H) and Pallet (I)
         if (isOverridden) {
-          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEF9C3" } }; // yellow
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEF9C3" } };
           cell.font = { size: 10, bold: true, color: { argb: isBlue ? "FF1D4ED8" : "FF92400E" } };
         } else if (cell.value != null && cell.value !== 0) {
-          cell.font = { size: 10, color: { argb: isBlue ? "FF2563EB" : col === 15 ? "FFC2410C" : "FF374151" } };
+          cell.font = { size: 10, color: { argb: isBlue ? "FF2563EB" : col === 16 ? "FFC2410C" : "FF374151" } };
         } else {
-          cell.font = { size: 10, color: { argb: "FFCBD5E1" } }; // dim zero/null
+          cell.font = { size: 10, color: { argb: "FFCBD5E1" } };
         }
       }
       applyBorder(cell);
@@ -1301,21 +1304,21 @@ function addInboundDetailSheet(
   // ── Total row ──
   const lastDataRow = 1 + orders.length; // header is row 1
   const totalRow = ws.addRow([
-    "TOTAL (billed)", "", "", "", "", "",
+    "TOTAL (billed)", "", "", "", "", "", "",
     ...IB_KEYS.map((_, i) => ({
-      formula: `=SUM(${String.fromCharCode(71 + i)}2:${String.fromCharCode(71 + i)}${lastDataRow})`,
+      formula: `=SUM(${String.fromCharCode(72 + i)}2:${String.fromCharCode(72 + i)}${lastDataRow})`,
       result: 0,
     })),
   ]);
   totalRow.height = 16;
   totalRow.eachCell({ includeEmpty: true }, (cell, col) => {
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDBEAFE" } };
-    cell.font = { bold: true, size: 10, color: { argb: col >= 7 ? "FF1E40AF" : "FF374151" } };
-    cell.alignment = { vertical: "middle", horizontal: col <= 6 ? (col === 1 ? "right" : "left") : "right" };
+    cell.font = { bold: true, size: 10, color: { argb: col >= 8 ? "FF1E40AF" : "FF374151" } };
+    cell.alignment = { vertical: "middle", horizontal: col <= 7 ? (col === 1 ? "right" : "left") : "right" };
     applyBorder(cell, "medium");
   });
-  // Merge label cells A–F in total row
-  ws.mergeCells(totalRow.number, 1, totalRow.number, 6);
+  // Merge label cells A–G in total row
+  ws.mergeCells(totalRow.number, 1, totalRow.number, 7);
 
   // lastDataRow = row number of the last data row (= header row 1 + N data rows)
   // Used by getQtyFormula so SUM stops before the TOTAL row
