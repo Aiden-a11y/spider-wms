@@ -348,14 +348,29 @@ export default function DashboardPage() {
     return 0;
   };
 
+  // Normalize location code: strip all separators and lowercase
   const normLc = (s: string) => s.toLowerCase().replace(/[\s\-_/]+/g, "");
 
-  // Location codes that have inventory — for cross-referencing occupancy
+  // Build a normalized location key from an object — handles both location-list fields (zoneNm)
+  // and inventory fields (zoneName / locationCode)
+  const locKey = (obj: Row): string => {
+    const direct = String(obj.locationCode ?? obj.location ?? "");
+    if (direct) return normLc(direct);
+    // location/list bulk response uses zoneNm, aisleNm, bayNm, levelNm, positionNm
+    const z = String(obj.zoneNm  ?? obj.zoneName  ?? obj.zone  ?? "");
+    const a = String(obj.aisleNm ?? obj.aisleName ?? obj.aisle ?? "");
+    const b = String(obj.bayNm   ?? obj.bayName   ?? obj.bay   ?? "");
+    const l = String(obj.levelNm ?? obj.levelName ?? obj.level ?? "");
+    const p = String(obj.positionNm ?? obj.positionName ?? obj.position ?? "");
+    return normLc([z, a, b, l, p].filter(Boolean).join(""));
+  };
+
+  // Location codes that have inventory (cross-reference for occupancy)
   const occupiedLocCodes = useMemo(() => {
     const s = new Set<string>();
     for (const inv of inventory) {
-      const lc = normLc(String(inv.locationCode ?? inv.location ?? ""));
-      if (lc) s.add(lc);
+      const k = locKey(inv);
+      if (k) s.add(k);
     }
     return s;
   }, [inventory]); // eslint-disable-line
@@ -366,9 +381,10 @@ export default function DashboardPage() {
       const t = String(loc.occupancyInfo ?? "Other");
       if (!map[t]) map[t] = { total: 0, occupied: 0 };
       map[t].total++;
-      const qty = Number(loc.currentQty ?? loc.locQty ?? loc.qty ?? loc.inventoryQty ?? 0);
-      const lc = normLc(String(loc.locationCode ?? loc.location ?? ""));
-      if (qty > 0 || (lc && occupiedLocCodes.has(lc))) map[t].occupied++;
+      // Check qty fields first (available when searching individual location)
+      const qty = Number(loc.currentQty ?? loc.locQty ?? loc.stockQty ?? loc.onHandQty ?? loc.inventoryQty ?? loc.qty ?? -1);
+      const k = locKey(loc);
+      if (qty > 0 || (k && occupiedLocCodes.has(k))) map[t].occupied++;
     }
     return Object.entries(map)
       .map(([type, { total, occupied }]) => ({ type, total, occupied }))
@@ -381,9 +397,9 @@ export default function DashboardPage() {
       const z = String(loc.zoneNm ?? "?");
       if (!map[z]) map[z] = { total: 0, occupied: 0 };
       map[z].total++;
-      const qty = Number(loc.currentQty ?? loc.locQty ?? loc.qty ?? loc.inventoryQty ?? 0);
-      const lc = normLc(String(loc.locationCode ?? loc.location ?? ""));
-      if (qty > 0 || (lc && occupiedLocCodes.has(lc))) map[z].occupied++;
+      const qty = Number(loc.currentQty ?? loc.locQty ?? loc.stockQty ?? loc.onHandQty ?? loc.inventoryQty ?? loc.qty ?? -1);
+      const k = locKey(loc);
+      if (qty > 0 || (k && occupiedLocCodes.has(k))) map[z].occupied++;
     }
     return Object.entries(map)
       .map(([zone, { total, occupied }]) => ({ zone, total, occupied }))
