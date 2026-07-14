@@ -27,43 +27,38 @@ const LOC_COLORS: Record<string, { bar: string; dot: string; grad: string; hex: 
 };
 const FALLBACK_COLORS = ["#94a3b8","#64748b","#475569","#334155"];
 
-/* ── Donut Chart ── */
+/* ── Donut Chart — occupancy mode ── */
 function DonutChart({
   data, visible,
 }: {
-  data: [string, number][];
+  data: { type: string; total: number; occupied: number }[];
   visible: boolean;
 }) {
   const [hovered, setHovered] = useState<string | null>(null);
-  const total = data.reduce((s, [, c]) => s + c, 0);
-  if (total === 0) return <p className="text-xs text-slate-400 text-center py-8">No data</p>;
+  const totalOcc = data.reduce((s, d) => s + d.occupied, 0);
+  const totalAll = data.reduce((s, d) => s + d.total, 0);
+  if (totalAll === 0) return <p className="text-xs text-slate-400 text-center py-8">No data</p>;
 
-  const R = 54; const r = 34; const cx = 70; const cy = 70;
+  const R = 54; const cx = 70; const cy = 70;
   const circumference = 2 * Math.PI * R;
 
-  // build segments
-  let offset = -0.25 * circumference; // start at top
-  const segments = data.map(([type, count], i) => {
-    const pct = count / total;
+  let offset = -0.25 * circumference;
+  const segments = data.map((d, i) => {
+    const pct = totalOcc > 0 ? d.occupied / totalOcc : 0;
     const len = pct * circumference;
-    const seg = { type, count, pct, offset, len, color: LOC_COLORS[type]?.hex ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length] };
+    const seg = { ...d, pct, offset, len, color: LOC_COLORS[d.type]?.hex ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length] };
     offset += len;
     return seg;
   });
 
   const hovSeg = segments.find((s) => s.type === hovered);
-  const centerLabel = hovSeg
-    ? { top: hovSeg.type.split(" ")[0], count: hovSeg.count, pct: Math.round(hovSeg.pct * 100) }
-    : { top: "Total", count: total, pct: 100 };
+  const overallRate = totalAll > 0 ? Math.round((totalOcc / totalAll) * 100) : 0;
 
   return (
     <div className="flex flex-col items-center gap-4">
-      {/* ring */}
       <div className="relative">
         <svg width={140} height={140} viewBox="0 0 140 140">
-          {/* track */}
           <circle cx={cx} cy={cy} r={R} fill="none" stroke="#f1f5f9" strokeWidth={20} />
-          {/* segments */}
           {segments.map((seg) => {
             const isHov = hovered === seg.type;
             return (
@@ -89,36 +84,46 @@ function DonutChart({
               />
             );
           })}
-          {/* center text */}
-          <text x={cx} y={cy - 8} textAnchor="middle" className="text-slate-400" fontSize={9} fill="#94a3b8">{centerLabel.top}</text>
-          <text x={cx} y={cy + 8} textAnchor="middle" fontWeight="800" fontSize={18} fill={hovSeg ? hovSeg.color : "#1e293b"}>
-            {hovSeg ? `${centerLabel.pct}%` : centerLabel.count.toLocaleString()}
-          </text>
-          {hovSeg && (
-            <text x={cx} y={cy + 22} textAnchor="middle" fontSize={9} fill="#94a3b8">{hovSeg.count.toLocaleString()}</text>
+          {hovSeg ? (
+            <>
+              <text x={cx} y={cy - 10} textAnchor="middle" fontSize={9} fill="#94a3b8">{hovSeg.type.split(" ")[0]}</text>
+              <text x={cx} y={cy + 7} textAnchor="middle" fontWeight="800" fontSize={18} fill={hovSeg.color}>
+                {hovSeg.total > 0 ? Math.round((hovSeg.occupied / hovSeg.total) * 100) : 0}%
+              </text>
+              <text x={cx} y={cy + 21} textAnchor="middle" fontSize={9} fill="#94a3b8">
+                {hovSeg.occupied}/{hovSeg.total}
+              </text>
+            </>
+          ) : (
+            <>
+              <text x={cx} y={cy - 10} textAnchor="middle" fontSize={9} fill="#94a3b8">Occupancy</text>
+              <text x={cx} y={cy + 7} textAnchor="middle" fontWeight="800" fontSize={18} fill="#1e293b">
+                {overallRate}%
+              </text>
+              <text x={cx} y={cy + 21} textAnchor="middle" fontSize={9} fill="#94a3b8">
+                {totalOcc}/{totalAll}
+              </text>
+            </>
           )}
         </svg>
       </div>
 
-      {/* legend */}
       <div className="w-full space-y-1.5">
         {segments.map((seg) => {
           const isHov = hovered === seg.type;
+          const rate = seg.total > 0 ? Math.round((seg.occupied / seg.total) * 100) : 0;
           return (
             <div
               key={seg.type}
               onMouseEnter={() => setHovered(seg.type)}
               onMouseLeave={() => setHovered(null)}
-              className={`flex items-center gap-2 px-2 py-1 rounded-lg cursor-default transition-all duration-150
-                ${isHov ? "bg-slate-50 scale-[1.02]" : ""}`}
+              className={`flex items-center gap-2 px-2 py-1 rounded-lg cursor-default transition-all duration-150 ${isHov ? "bg-slate-50 scale-[1.02]" : ""}`}
             >
               <span className="w-2.5 h-2.5 rounded-full flex-shrink-0 transition-transform duration-150"
                 style={{ background: seg.color, transform: isHov ? "scale(1.4)" : "scale(1)" }} />
               <span className="text-xs text-slate-600 flex-1 truncate">{seg.type}</span>
-              <span className="text-xs font-bold tabular-nums" style={{ color: isHov ? seg.color : "#334155" }}>
-                {seg.count.toLocaleString()}
-              </span>
-              <span className="text-xs text-slate-400 w-8 text-right tabular-nums">{Math.round(seg.pct * 100)}%</span>
+              <span className="text-xs text-slate-400 tabular-nums">{seg.occupied}/{seg.total}</span>
+              <span className="text-xs font-bold tabular-nums w-8 text-right" style={{ color: isHov ? seg.color : "#334155" }}>{rate}%</span>
             </div>
           );
         })}
@@ -343,23 +348,47 @@ export default function DashboardPage() {
     return 0;
   };
 
+  const normLc = (s: string) => s.toLowerCase().replace(/[\s\-_/]+/g, "");
+
+  // Location codes that have inventory — for cross-referencing occupancy
+  const occupiedLocCodes = useMemo(() => {
+    const s = new Set<string>();
+    for (const inv of inventory) {
+      const lc = normLc(String(inv.locationCode ?? inv.location ?? ""));
+      if (lc) s.add(lc);
+    }
+    return s;
+  }, [inventory]); // eslint-disable-line
+
   const locByType = useMemo(() => {
-    const map: Record<string, number> = {};
+    const map: Record<string, { total: number; occupied: number }> = {};
     for (const loc of locations) {
       const t = String(loc.occupancyInfo ?? "Other");
-      map[t] = (map[t] ?? 0) + 1;
+      if (!map[t]) map[t] = { total: 0, occupied: 0 };
+      map[t].total++;
+      const qty = Number(loc.currentQty ?? loc.locQty ?? loc.qty ?? loc.inventoryQty ?? 0);
+      const lc = normLc(String(loc.locationCode ?? loc.location ?? ""));
+      if (qty > 0 || (lc && occupiedLocCodes.has(lc))) map[t].occupied++;
     }
-    return Object.entries(map).sort((a, b) => b[1] - a[1]);
-  }, [locations]);
+    return Object.entries(map)
+      .map(([type, { total, occupied }]) => ({ type, total, occupied }))
+      .sort((a, b) => b.occupied - a.occupied);
+  }, [locations, occupiedLocCodes]); // eslint-disable-line
 
   const locByZone = useMemo(() => {
-    const map: Record<string, number> = {};
+    const map: Record<string, { total: number; occupied: number }> = {};
     for (const loc of locations) {
       const z = String(loc.zoneNm ?? "?");
-      map[z] = (map[z] ?? 0) + 1;
+      if (!map[z]) map[z] = { total: 0, occupied: 0 };
+      map[z].total++;
+      const qty = Number(loc.currentQty ?? loc.locQty ?? loc.qty ?? loc.inventoryQty ?? 0);
+      const lc = normLc(String(loc.locationCode ?? loc.location ?? ""));
+      if (qty > 0 || (lc && occupiedLocCodes.has(lc))) map[z].occupied++;
     }
-    return Object.entries(map).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [locations]);
+    return Object.entries(map)
+      .map(([zone, { total, occupied }]) => ({ zone, total, occupied }))
+      .sort((a, b) => a.zone.localeCompare(b.zone));
+  }, [locations, occupiedLocCodes]); // eslint-disable-line
 
   const rcvByStatus = useMemo(() => {
     const map: Record<string, number> = { AA: 0, CA: 0, DA: 0, EA: 0 };
@@ -370,7 +399,7 @@ export default function DashboardPage() {
     return map;
   }, [receiving]);
 
-  const maxZoneCount = Math.max(...locByZone.map(([, c]) => c), 1);
+  const maxZoneOccupied = Math.max(...locByZone.map((z) => z.occupied), 1);
 
   const recentOrders = useMemo(() => {
     const list = selectedStatus
@@ -539,7 +568,9 @@ export default function DashboardPage() {
             <div className="flex items-center gap-2 mb-4">
               <MapPin className="w-4 h-4 text-slate-400" />
               <h2 className="text-sm font-semibold text-slate-700">Locations</h2>
-              <span className="ml-auto text-xs text-slate-400">{locations.length.toLocaleString()} total</span>
+              <span className="ml-auto text-xs text-slate-400">
+                {locByType.reduce((s, d) => s + d.occupied, 0)}/{locations.length.toLocaleString()} occupied
+              </span>
             </div>
 
             {/* Tab switcher */}
@@ -564,19 +595,22 @@ export default function DashboardPage() {
 
             {locTab === "zone" && (
               <div className="space-y-2">
-                {locByZone.slice(0, 8).map(([zone, count], i) => {
-                  const pct = Math.round((count / maxZoneCount) * 100);
+                {locByZone.slice(0, 8).map(({ zone, total, occupied }, i) => {
+                  const rate = total > 0 ? Math.round((occupied / total) * 100) : 0;
+                  const barPct = Math.round((occupied / maxZoneOccupied) * 100);
                   return (
                     <div key={zone}>
                       <div className="flex items-center justify-between mb-1">
                         <span className="text-xs font-semibold text-slate-600">Zone {zone}</span>
-                        <span className="text-xs font-bold text-slate-700 tabular-nums">{count.toLocaleString()}</span>
+                        <span className="text-xs tabular-nums text-slate-500">
+                          {occupied}/{total} <span className="font-bold text-slate-700">{rate}%</span>
+                        </span>
                       </div>
                       <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
                         <div
                           className="h-2.5 rounded-full"
                           style={{
-                            width: barsVisible ? `${pct}%` : "0%",
+                            width: barsVisible ? `${barPct}%` : "0%",
                             background: "linear-gradient(90deg,#3b82f6,#6366f1)",
                             transition: `width 0.8s cubic-bezier(0.34,1.56,0.64,1) ${i * 60}ms`,
                           }}
