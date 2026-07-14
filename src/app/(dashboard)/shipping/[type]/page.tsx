@@ -384,12 +384,12 @@ export default function ShippingTypePage() {
   }
 
   /* ── 4. Fetch order detail on row click ── */
-  async function openDetail(order: Order) {
+  async function openDetail(order: Order, keepTab = false) {
     setSelected(order);
     setDetail(null);
     setItemsRaw([]);
     setShippingItemsRaw([]);
-    setActiveTab("info");
+    if (!keepTab) setActiveTab("info");
     setDetailLoading(true);
     setOccupancyMap(new Map());
     setPickingSaved(false);
@@ -722,7 +722,7 @@ export default function ShippingTypePage() {
     setItemsRaw([]);
     setShippingItemsRaw([]);
     setPickingSaved(false);
-    await openDetail(selected);
+    await openDetail(selected, true);
   }
 
   /* ── Bulk Auto-Assign (B2C multi-select) ── */
@@ -878,7 +878,7 @@ export default function ShippingTypePage() {
       setItemsRaw([]);
       setShippingItemsRaw([]);
       setPickingSaved(false);
-      await openDetail(selected);
+      await openDetail(selected, true);
     } catch (e) {
       setAssignModalError(e instanceof Error ? e.message : "Assign failed");
     }
