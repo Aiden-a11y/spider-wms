@@ -441,6 +441,53 @@ export default function ReceivingPage() {
     );
   }
 
+  async function exportListToExcel() {
+    const ExcelJS = (await import("exceljs")).default;
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Receiving");
+
+    ws.columns = [
+      { header: "Order Code",    key: "orderCode",    width: 24 },
+      { header: "Order No",      key: "orderNo",      width: 28 },
+      { header: "Warehouse",     key: "warehouse",    width: 10 },
+      { header: "Customer",      key: "customer",     width: 12 },
+      { header: "Customer Name", key: "customerName", width: 24 },
+      { header: "Order Date",    key: "orderDate",    width: 12 },
+      { header: "Status",        key: "status",       width: 8  },
+      { header: "Status Name",   key: "statusName",   width: 14 },
+      { header: "Recv Info",     key: "recvInfo",     width: 12 },
+    ];
+    ws.getRow(1).font = { bold: true };
+    ws.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2E8F0" } };
+
+    for (const row of filtered) {
+      const code = String(row.receiveOrderCode ?? row.orderCode ?? "");
+      const info = recvInfoMap[code];
+      const status = String(row.status ?? "");
+      const recvInfoLabel = hasRecvInfo(info) ? "Done" : status === "DA" ? "Missing" : "-";
+      ws.addRow({
+        orderCode:    code,
+        orderNo:      String(row.receiveOrderNo ?? row.orderNo ?? ""),
+        warehouse:    String(row.warehouseCode ?? ""),
+        customer:     String(row.customerCode ?? ""),
+        customerName: String(row.customerName ?? ""),
+        orderDate:    String(row.orderDate ?? ""),
+        status:       status,
+        statusName:   String(row.statusName ?? ""),
+        recvInfo:     recvInfoLabel,
+      });
+    }
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Receiving_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   async function exportItemsToExcel() {
     const ExcelJS = (await import("exceljs")).default;
     const wb = new ExcelJS.Workbook();
@@ -506,6 +553,11 @@ export default function ReceivingPage() {
           className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors">
           <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
           Refresh
+        </button>
+        <button onClick={exportListToExcel} disabled={filtered.length === 0}
+          className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors disabled:opacity-40">
+          <Download className="w-4 h-4" />
+          Excel
         </button>
       </div>
 
