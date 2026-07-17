@@ -3,200 +3,203 @@
 import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import QRCode from "qrcode";
-import type { B2CCluster, B2CClusterBin } from "@/lib/b2c-cluster";
-import { binColor } from "@/lib/b2c-cluster";
+import type { B2CCluster, B2CClusterBin, B2CClusterItem } from "@/lib/b2c-cluster";
 
 /* ── helpers ── */
 function str(v: unknown): string { return String(v ?? "").trim(); }
-function strOr(...vals: unknown[]): string {
-  for (const v of vals) { const s = str(v); if (s) return s; }
-  return "";
-}
 
 function buildAddress(bin: B2CClusterBin): string[] {
   const lines: string[] = [];
-  const street = strOr(bin.consigneeAddress1);
-  const street2 = strOr(bin.consigneeAddress2);
-  const city = strOr(bin.consigneeCity);
-  const state = strOr(bin.consigneeState);
-  const zip = strOr(bin.consigneeZipCode);
-  const country = strOr(bin.consigneeNationalCode);
-
+  const street = str(bin.consigneeAddress1);
+  const street2 = str(bin.consigneeAddress2);
+  const city = str(bin.consigneeCity);
+  const state = str(bin.consigneeState);
+  const zip = str(bin.consigneeZipCode);
   if (street) lines.push(street);
   if (street2) lines.push(street2);
-
   const cityLine = [city, state].filter(Boolean).join(", ");
-  const cityZipLine = [cityLine, zip].filter(Boolean).join(" ");
-  if (cityZipLine) lines.push(cityZipLine);
-  if (country) lines.push(country);
+  const cityZip = [cityLine, zip].filter(Boolean).join(" ");
+  if (cityZip) lines.push(cityZip);
   return lines;
 }
 
-/* ── QR hook ── */
+function fmtDate(s: string | undefined): string {
+  if (!s) return "";
+  const d = s.replace(/\D/g, "");
+  if (d.length === 8) return `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`;
+  return s.slice(0, 10);
+}
+
 function useQR(text: string): string {
   const [url, setUrl] = useState("");
   useEffect(() => {
     if (!text) return;
-    QRCode.toDataURL(text, { width: 96, margin: 1, color: { dark: "#000", light: "#fff" } })
+    QRCode.toDataURL(text, { width: 120, margin: 1, color: { dark: "#000", light: "#fff" } })
       .then(setUrl).catch(() => {});
   }, [text]);
   return url;
 }
 
-/* ── Print styles ── */
-const CSS = `
-  @media print {
-    @page { size: 4in 6in; margin: 0.12in; }
-    .no-print { display: none !important; }
-    .ticket { page-break-after: always; }
-    .ticket:last-child { page-break-after: avoid; }
-    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; font-family: Arial, Helvetica, sans-serif; background: #e2e8f0; }
-  .ticket {
-    width: 3.76in; height: 5.76in; overflow: hidden; background: #fff;
-    padding: 0.13in 0.15in; margin: 0.1in auto;
-    border: 1px solid #ccc; display: flex; flex-direction: column; gap: 0;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
-  }
-  .bin-badge {
-    display: flex; align-items: center; justify-content: center;
-    border-radius: 10px; width: 100%; height: 0.6in;
-    font-size: 26pt; font-weight: 900; letter-spacing: 3px;
-    color: white; margin-bottom: 0.07in;
-  }
-  .meta-row {
-    display: flex; align-items: center; justify-content: space-between;
-    margin-bottom: 0.06in; gap: 6px;
-  }
-  .order-block { flex: 1; min-width: 0; }
-  .order-no {
-    font-size: 9pt; font-weight: 800; color: #111;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .order-code-small { font-size: 7pt; color: #888; margin-top: 1px; word-break: break-all; }
-  .cluster-small { font-size: 6.5pt; color: #aaa; margin-top: 1px; }
-  .qr-box { width: 0.75in; height: 0.75in; flex-shrink: 0; }
-  .qr-box img { width: 100%; height: 100%; display: block; }
-  .qr-placeholder { width: 100%; height: 100%; background: #f5f5f5; border: 1px solid #ddd; border-radius: 4px; }
-  .divider { border: none; border-top: 1px solid #e5e7eb; margin: 0.06in 0; }
-  .section-label {
-    font-size: 7pt; font-weight: 700; color: #6b7280;
-    text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 0.04in;
-  }
-  .ship-name { font-size: 8.5pt; font-weight: 700; color: #111; margin-bottom: 2px; }
-  .ship-addr { font-size: 7.5pt; color: #374151; line-height: 1.5; }
-  .ship-tel { font-size: 7pt; color: #6b7280; margin-top: 2px; }
-  .items-wrapper { flex: 1; min-height: 0; overflow: hidden; }
-  .items-table { width: 100%; border-collapse: collapse; font-size: 8pt; margin-top: 0.04in; }
-  .items-table th {
-    background: #f3f4f6; font-weight: 700; text-align: left;
-    padding: 3px 4px; border: 1px solid #d1d5db; color: #374151;
-  }
-  .items-table td { padding: 3px 4px; border: 1px solid #e5e7eb; vertical-align: top; }
-  .items-table .col-qty { text-align: right; font-weight: 700; font-size: 9pt; }
-  .items-table .col-loc { font-family: 'Courier New', monospace; font-weight: 700; font-size: 7.5pt; }
-  .items-table .col-sku { font-family: 'Courier New', monospace; font-size: 7.5pt; }
-  .replen-badge {
-    display: inline-block; background: #fef3c7; color: #92400e;
-    font-size: 6pt; font-weight: 700; padding: 1px 4px; border-radius: 3px;
-    border: 1px solid #fcd34d; margin-left: 3px; vertical-align: middle;
-  }
-  .no-items { text-align: center; color: #9ca3af; padding: 8px; font-size: 7.5pt; }
-  .checklist {
-    margin-top: auto; padding-top: 0.07in;
-    border-top: 1px dashed #d1d5db;
-    display: flex; gap: 0.14in; font-size: 7pt; color: #6b7280;
-    flex-shrink: 0;
-  }
-  .checklist span { display: flex; align-items: center; gap: 3px; }
-`;
-
 /* ── Single ticket ── */
-function BinTicket({ bin, cluster }: { bin: B2CClusterBin; cluster: B2CCluster }) {
-  const qrText = strOr(bin.orderCode, bin.orderNo);
-  const qrUrl = useQR(qrText);
-  const color = binColor(bin.binNo);
+function BinTicket({ bin, cluster, totalBins }: { bin: B2CClusterBin; cluster: B2CCluster; totalBins: number }) {
+  const qrUrl = useQR(str(bin.orderCode));
   const addrLines = buildAddress(bin);
 
-  const hasItems = bin.items.length > 0;
+  const items: B2CClusterItem[] = [...bin.items].sort((a, b) =>
+    (a.locationCode ?? "").localeCompare(b.locationCode ?? "")
+  );
+  const totalQty = items.reduce((s, i) => s + i.qty, 0);
+  const totalSku = new Set(items.map((i) => i.sku)).size;
+
+  const F = "Arial, Helvetica, sans-serif";
+  const B = "1px solid #000";
+  const B2 = "2px solid #000";
+  const generatedAt = new Date().toLocaleString("en-US", {
+    month: "short", day: "numeric", year: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
 
   return (
-    <div className="ticket">
-      {/* Bin badge */}
-      <div className="bin-badge" style={{ backgroundColor: color }}>
-        BIN {bin.binNo}
-      </div>
+    <div className="ticket" style={{
+      fontFamily: F, width: "4in", minHeight: "6in",
+      padding: "4mm", boxSizing: "border-box",
+      background: "#fff", border: B2,
+      display: "flex", flexDirection: "column", gap: 0,
+    }}>
 
-      {/* Order info + QR */}
-      <div className="meta-row">
-        <div className="order-block">
-          {bin.orderNo && <div className="order-no">#{bin.orderNo}</div>}
-          <div className="order-code-small">{bin.orderCode}</div>
-          <div className="cluster-small">
-            Cluster: {cluster.id.replace("cluster_", "")} · {new Date(cluster.createdAt).toLocaleDateString()}
+      {/* ── Header: client/totals + BIN badge + QR ── */}
+      <div style={{ borderBottom: B2, paddingBottom: "2mm", marginBottom: "2mm", display: "flex", alignItems: "flex-start", gap: "3mm" }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: "6.5pt", fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "#000", marginBottom: "1mm" }}>
+            ▌ B2C CLUSTER PICK
+          </div>
+          <div style={{ fontSize: "7.5pt", color: "#000", lineHeight: 1.7 }}>
+            <span style={{ fontWeight: 700 }}>Client: </span><span style={{ fontWeight: 900 }}>{bin.customerCode || "ALL"}</span><br />
+            <span style={{ fontWeight: 700 }}>Total SKU: </span><span style={{ fontWeight: 900 }}>{totalSku}</span>
+            <span style={{ fontWeight: 700, marginLeft: "4mm" }}>Total Qty: </span><span style={{ fontWeight: 900 }}>{totalQty}</span><br />
+            <span style={{ fontSize: "6.5pt", color: "#555" }}>☐ Sorted by Location</span>
           </div>
         </div>
-        <div className="qr-box">
+
+        {/* BIN badge */}
+        <div style={{
+          flexShrink: 0, width: "14mm", height: "14mm",
+          background: "#000", color: "#fff",
+          borderRadius: "3mm", display: "flex", flexDirection: "column",
+          alignItems: "center", justifyContent: "center",
+        }}>
+          <div style={{ fontSize: "5pt", fontWeight: 700, letterSpacing: "0.1em" }}>BIN</div>
+          <div style={{ fontSize: "14pt", fontWeight: 900, lineHeight: 1 }}>{bin.binNo}</div>
+        </div>
+
+        {/* QR */}
+        <div style={{ flexShrink: 0, width: "18mm", height: "18mm" }}>
           {qrUrl
-            ? <img src={qrUrl} alt={qrText} />
-            : <div className="qr-placeholder" />}
+            ? <img src={qrUrl} alt={bin.orderCode} style={{ width: "100%", height: "100%", display: "block", imageRendering: "pixelated" }} />
+            : <div style={{ width: "100%", height: "100%", background: "#f5f5f5", border: B }} />}
         </div>
       </div>
 
-      <hr className="divider" />
+      {/* ── Order info ── */}
+      <div style={{ borderBottom: B, paddingBottom: "2mm", marginBottom: "2mm", fontSize: "7pt", color: "#000", display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: "6pt", textTransform: "uppercase", letterSpacing: "0.08em", color: "#555", marginBottom: "0.5mm" }}>Order No.</div>
+          <div style={{ fontFamily: "'Courier New', monospace", fontWeight: 900, fontSize: "7.5pt" }}>{bin.orderCode}</div>
+          {bin.orderNo && (
+            <div style={{ marginTop: "1mm" }}>
+              <span style={{ fontWeight: 700 }}>Ship: </span>
+              <span style={{ fontFamily: "'Courier New', monospace", fontWeight: 700 }}>{bin.orderNo}</span>
+            </div>
+          )}
+        </div>
+        <div style={{ fontWeight: 900, fontSize: "9pt", color: "#000", textAlign: "right" }}>
+          {bin.binNo}/{totalBins}
+        </div>
+      </div>
 
-      {/* Ship To */}
-      <div className="section-label">Ship To</div>
-      <div className="ship-name">{bin.consigneeName || "—"}</div>
-      {addrLines.length > 0
-        ? <div className="ship-addr">{addrLines.map((l, i) => <div key={i}>{l}</div>)}</div>
-        : <div className="ship-addr" style={{ color: "#9ca3af" }}>No address on file</div>}
-      {bin.consigneeTelLNo && (
-        <div className="ship-tel">Tel: {bin.consigneeTelLNo}</div>
+      {/* ── Ship To ── */}
+      {(bin.consigneeName || addrLines.length > 0) && (
+        <div style={{ borderBottom: B, paddingBottom: "2mm", marginBottom: "2mm" }}>
+          <div style={{ fontSize: "6pt", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "#555", marginBottom: "1mm" }}>Ship To</div>
+          <div style={{ borderLeft: "3px solid #000", paddingLeft: "2mm" }}>
+            {bin.consigneeName && (
+              <div style={{ fontSize: "8pt", fontWeight: 900, color: "#000", marginBottom: "0.5mm" }}>{bin.consigneeName}</div>
+            )}
+            {addrLines.map((l, i) => (
+              <div key={i} style={{ fontSize: "7pt", color: "#000", lineHeight: 1.5 }}>{l}</div>
+            ))}
+            {bin.consigneeTelLNo && (
+              <div style={{ fontSize: "6.5pt", color: "#555", marginTop: "0.5mm" }}>Tel: {bin.consigneeTelLNo}</div>
+            )}
+          </div>
+        </div>
       )}
 
-      <hr className="divider" />
-
-      {/* Items */}
-      <div className="section-label">Items</div>
-      <div className="items-wrapper">
-        <table className="items-table">
+      {/* ── Items table ── */}
+      <div style={{ flex: 1 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: F }}>
           <thead>
             <tr>
-              <th className="col-loc">Location</th>
-              <th className="col-sku">SKU</th>
-              <th>Product</th>
-              <th className="col-qty">Qty</th>
+              <th style={{ width: "8%", textAlign: "center", padding: "1.5mm 1mm", fontSize: "6pt", fontWeight: 900, border: B2, textTransform: "uppercase", letterSpacing: "0.08em" }}>No.</th>
+              <th style={{ textAlign: "left", padding: "1.5mm 2mm", fontSize: "6pt", fontWeight: 900, border: B2, textTransform: "uppercase", letterSpacing: "0.08em" }}>Item</th>
+              <th style={{ width: "14%", textAlign: "center", padding: "1.5mm 1mm", fontSize: "6pt", fontWeight: 900, border: B2, textTransform: "uppercase", letterSpacing: "0.08em" }}>Qty</th>
             </tr>
           </thead>
           <tbody>
-            {hasItems
-              ? bin.items.map((item, i) => (
-                  <tr key={i} style={{ background: i % 2 === 0 ? "#fff" : "#f9fafb" }}>
-                    <td className="col-loc">{item.locationCode || "—"}</td>
-                    <td className="col-sku">{item.sku}</td>
-                    <td style={{ fontSize: "7pt" }}>{item.name || "—"}</td>
-                    <td className="col-qty">{item.qty}</td>
-                  </tr>
-                ))
-              : (
-                  <tr>
-                    <td colSpan={4} className="no-items">
-                      {bin.needsReplenishment ? "Awaiting replenishment" : "No items assigned"}
-                    </td>
-                  </tr>
-                )}
+            {items.length > 0 ? items.map((item, i) => (
+              <tr key={i} style={{ verticalAlign: "top", background: i % 2 === 0 ? "#fff" : "#fafafa" }}>
+                <td style={{ textAlign: "center", padding: "2mm 1mm", fontSize: "8pt", fontWeight: 900, border: B, verticalAlign: "middle" }}>{i + 1}</td>
+                <td style={{ padding: "1.5mm 2mm", border: B }}>
+                  <div style={{ fontSize: "7pt", color: "#000", lineHeight: 1.8 }}>
+                    <span style={{ fontWeight: 700 }}>Location: </span>
+                    <span style={{ fontFamily: "'Courier New', monospace", fontWeight: 700 }}>{item.locationCode || "—"}</span>
+                  </div>
+                  <div style={{ fontSize: "7pt", color: "#000", lineHeight: 1.8 }}>
+                    <span style={{ fontWeight: 700 }}>SKU: </span>
+                    <span style={{ fontFamily: "'Courier New', monospace" }}>{item.sku}</span>
+                  </div>
+                  {(item.lotNo || item.expireDate) && (
+                    <div style={{ fontSize: "6.5pt", color: "#000", lineHeight: 1.8 }}>
+                      {item.lotNo && <><span style={{ fontWeight: 700 }}>Lot: </span><span style={{ fontFamily: "'Courier New', monospace" }}>{item.lotNo}</span></>}
+                      {item.lotNo && item.expireDate && <span style={{ margin: "0 2mm" }} />}
+                      {item.expireDate && <><span style={{ fontWeight: 700 }}>Exp: </span><span style={{ fontFamily: "'Courier New', monospace" }}>{fmtDate(item.expireDate)}</span></>}
+                    </div>
+                  )}
+                </td>
+                <td style={{ textAlign: "center", padding: "2mm 1mm", fontSize: "9pt", fontWeight: 900, border: B, verticalAlign: "middle", whiteSpace: "nowrap" }}>
+                  {item.qty} EA
+                </td>
+              </tr>
+            )) : (
+              <tr>
+                <td colSpan={3} style={{ textAlign: "center", padding: "4mm", fontSize: "7pt", color: "#9ca3af", border: B }}>
+                  No items assigned
+                </td>
+              </tr>
+            )}
           </tbody>
+          <tfoot>
+            <tr>
+              <td colSpan={2} style={{ padding: "2mm 2mm", fontSize: "8pt", fontWeight: 900, textAlign: "right", border: B2, borderTop: B2, letterSpacing: "0.08em" }}>TOTAL</td>
+              <td style={{ textAlign: "center", padding: "2mm 1mm", fontSize: "10pt", fontWeight: 900, border: B2, borderTop: B2, whiteSpace: "nowrap" }}>{totalQty} EA</td>
+            </tr>
+          </tfoot>
         </table>
       </div>
 
-      {/* Checklist */}
-      <div className="checklist">
-        <span>□ Picked</span>
-        <span>□ Packed</span>
-        <span>□ Shipped</span>
+      {/* ── Footer ── */}
+      <div style={{ borderTop: B2, paddingTop: "2.5mm", marginTop: "3mm" }}>
+        <div style={{ display: "flex", gap: "3mm", marginBottom: "1.5mm" }}>
+          {["Picker", "Checked", "Date/Time"].map((label) => (
+            <div key={label} style={{ flex: 1 }}>
+              <div style={{ fontSize: "6pt", fontWeight: 700, color: "#000", marginBottom: "1.5mm", textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</div>
+              <div style={{ borderBottom: B2, height: "5mm" }} />
+            </div>
+          ))}
+        </div>
+        <div style={{ textAlign: "right", fontSize: "5pt", color: "#000", marginTop: "1mm" }}>
+          Generated: {generatedAt}
+        </div>
       </div>
     </div>
   );
@@ -227,9 +230,22 @@ function PrintContent() {
   if (loading) return <div style={{ padding: 32, fontFamily: "sans-serif" }}>Loading…</div>;
   if (error || !cluster) return <div style={{ padding: 32, fontFamily: "sans-serif", color: "red" }}>{error || "Not found"}</div>;
 
+  const totalBins = cluster.bins.length;
+
   return (
     <>
-      <style>{CSS}</style>
+      <style>{`
+        @media print {
+          @page { size: 4in 6in; margin: 0.12in; }
+          .no-print { display: none !important; }
+          .ticket { page-break-after: always; }
+          .ticket:last-child { page-break-after: avoid; }
+          body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: Arial, Helvetica, sans-serif; background: #e2e8f0; }
+        .ticket { margin: 0.1in auto; box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+      `}</style>
 
       {/* Screen-only toolbar */}
       <div className="no-print" style={{
@@ -238,7 +254,9 @@ function PrintContent() {
         position: "sticky", top: 0, zIndex: 10,
       }}>
         <span style={{ color: "white", fontFamily: "sans-serif", fontSize: 14, fontWeight: 600 }}>
-          Cluster Pick Tickets — {cluster.bins.length} bins
+          Cluster Pick Tickets
+          {cluster.clusterNo != null && ` — #${String(cluster.clusterNo).padStart(4, "0")}`}
+          {" · "}{cluster.bins.length} bins
         </span>
         <button onClick={() => window.print()} style={{
           background: "#3b82f6", color: "white", border: "none",
@@ -252,7 +270,7 @@ function PrintContent() {
 
       <div style={{ padding: "0.1in 0" }}>
         {cluster.bins.map((bin) => (
-          <BinTicket key={bin.binNo} bin={bin} cluster={cluster} />
+          <BinTicket key={bin.binNo} bin={bin} cluster={cluster} totalBins={totalBins} />
         ))}
       </div>
     </>
