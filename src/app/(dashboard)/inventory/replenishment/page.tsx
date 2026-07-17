@@ -26,7 +26,7 @@ interface ReplenItem {
 type SortKey = keyof ReplenItem;
 type SortDir = "asc" | "desc";
 
-const MIN_STOCK = 7;
+const MIN_STOCK = 10;
 
 export default function ReplenishmentPage() {
   const { user } = useAuth();
@@ -138,7 +138,6 @@ export default function ReplenishmentPage() {
 
           for (const row of list) {
             totalScanned++;
-            if (!isShelf(row)) continue;
             const inv = normalizeInventory({ data: { list: [row] } })[0];
             if (!inv) continue;
             const availQty = inv.availableQty ?? inv.qty;
