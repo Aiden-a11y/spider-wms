@@ -98,6 +98,7 @@ export default function BatchTestPage() {
   const [batches, setBatches] = useState<WmsBatch[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [selectedBatchCodes, setSelectedBatchCodes] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [filterDate, setFilterDate] = useState(today);
   const [warehouseCode, setWarehouseCode] = useState("STOO1");
@@ -473,8 +474,31 @@ export default function BatchTestPage() {
         {/* Summary bar */}
         {!loading && batches.length > 0 && (
           <div className="flex items-center gap-3 mb-3 text-sm text-slate-500">
+            <input
+              type="checkbox"
+              className="w-4 h-4 rounded accent-blue-600 cursor-pointer"
+              checked={filtered.length > 0 && filtered.every((b) => selectedBatchCodes.has(b.batchCode))}
+              onChange={(e) => setSelectedBatchCodes(e.target.checked ? new Set(filtered.map((b) => b.batchCode)) : new Set())}
+            />
             <span>Showing <span className="font-semibold text-slate-900">{filtered.length}</span>{filtered.length !== batches.length && <> of {batches.length} total</>} batch{filtered.length !== 1 ? "es" : ""}</span>
             {filterDate && <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-full px-2 py-0.5">{filterDate === today ? "Today" : filterDate}</span>}
+            {selectedBatchCodes.size > 0 && (
+              <button
+                onClick={() => {
+                  const codes = Array.from(selectedBatchCodes);
+                  const base = filtered.find((b) => selectedBatchCodes.has(b.batchCode));
+                  const params = new URLSearchParams({
+                    batchCodes: codes.join(","),
+                    warehouseCode: base?.warehouseCode ?? warehouseCode,
+                    customerCode: base?.customerCode ?? customerCode,
+                  });
+                  window.open(`/wms-batch-print?${params.toString()}`, "_blank");
+                }}
+                className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+              >
+                <Printer className="w-3.5 h-3.5" /> Print Selected ({selectedBatchCodes.size})
+              </button>
+            )}
             {availableDates.length > 1 && (
               <div className="flex items-center gap-1 ml-auto text-xs text-slate-400">
                 {availableDates.slice(0, 7).map((d) => (
@@ -508,6 +532,16 @@ export default function BatchTestPage() {
 
                   {/* Header row */}
                   <div className={`px-5 py-4 flex items-center gap-3 ${isAssignOpen ? "bg-violet-50/40" : ""}`}>
+                    <input
+                      type="checkbox"
+                      className="w-4 h-4 rounded accent-blue-600 cursor-pointer flex-shrink-0"
+                      checked={selectedBatchCodes.has(batch.batchCode)}
+                      onChange={(e) => setSelectedBatchCodes((prev) => {
+                        const next = new Set(prev);
+                        e.target.checked ? next.add(batch.batchCode) : next.delete(batch.batchCode);
+                        return next;
+                      })}
+                    />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
                         <span className="font-bold text-slate-900">{batch.batchName}</span>

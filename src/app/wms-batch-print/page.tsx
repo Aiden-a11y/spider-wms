@@ -8,91 +8,116 @@ import QRCode from "qrcode";
 
 type SkuRow = { sku: string; name: string; qtyPerOrder: number; totalQty: number };
 
+type BatchTicketData = {
+  batchCode: string; batchName: string; dateDisplay: string;
+  whCode: string; custCode: string; orderCount: number;
+  skus: SkuRow[]; totalQty: number; qrDataUrl: string;
+};
+
 function PrintInner() {
   const searchParams = useSearchParams();
-  const batchCode  = searchParams.get("batchCode")  ?? "";
-  const batchName  = searchParams.get("batchName")  ?? batchCode;
-  const batchDate  = searchParams.get("batchDate")  ?? "";
-  const whCode     = searchParams.get("warehouseCode") ?? "";
-  const custCode   = searchParams.get("customerCode")  ?? "";
-  const orderCount = Number(searchParams.get("orderCount") ?? 0);
-
   const { user } = useAuth();
   const headers = useMemo(
     () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
     [user]
   );
 
-  const [skus, setSkus] = useState<SkuRow[]>([]);
-  const [qrDataUrl, setQrDataUrl] = useState("");
+  // Support both single batchCode and multiple batchCodes (comma-separated)
+  const batchCodesParam = searchParams.get("batchCodes") ?? "";
+  const singleCode      = searchParams.get("batchCode")  ?? "";
+  const allCodes = batchCodesParam
+    ? batchCodesParam.split(",").map((s) => s.trim()).filter(Boolean)
+    : singleCode ? [singleCode] : [];
+
+  const [tickets, setTickets] = useState<BatchTicketData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  const generatedAt = useMemo(() =>
+    new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+    + ", " + new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
+  , []);
+
   useEffect(() => {
-    if (!batchCode) { setError("No batch code"); setLoading(false); return; }
+    if (allCodes.length === 0) { setError("No batch code"); setLoading(false); return; }
+
+    // For single-batch from individual print button, batchName/date/etc come from query params
+    const singleName  = searchParams.get("batchName")  ?? singleCode;
+    const singleDate  = searchParams.get("batchDate")  ?? "";
+    const singleWh    = searchParams.get("warehouseCode") ?? "";
+    const singleCust  = searchParams.get("customerCode")  ?? "";
+    const singleCount = Number(searchParams.get("orderCount") ?? 0);
+
     (async () => {
       try {
-        // QR code
-        const qr = await QRCode.toDataURL(batchCode, { width: 200, margin: 1, color: { dark: "#000", light: "#fff" } }).catch(() => "");
-        setQrDataUrl(qr);
+        const results = await Promise.all(allCodes.map(async (code, idx) => {
+          const isFirst = allCodes.length === 1;
+          const batchName   = isFirst ? singleName  : code;
+          const batchDate   = isFirst ? singleDate  : "";
+          const whCode      = isFirst ? singleWh    : searchParams.get("warehouseCode") ?? "";
+          const custCode    = isFirst ? singleCust  : searchParams.get("customerCode")  ?? "";
+          let   orderCount  = isFirst ? singleCount : 0;
 
-        // Orders → first order → items
-        const ordRes = await fetch("/api/wms/batch/orders", {
-          method: "POST", headers, body: JSON.stringify([batchCode]),
-        });
-        const ordJson = await ordRes.json();
-        const orders: { shippingOrderCode: string }[] = Array.isArray(ordJson?.data) ? ordJson.data : [];
-        if (!orders.length) { setSkus([]); setLoading(false); return; }
+          const [qrDataUrl, ordJson] = await Promise.all([
+            QRCode.toDataURL(code, { width: 200, margin: 1, color: { dark: "#000", light: "#fff" } }).catch(() => ""),
+            fetch("/api/wms/batch/orders", { method: "POST", headers, body: JSON.stringify([code]) }).then((r) => r.json()).catch(() => ({})),
+          ]);
 
-        const firstCode = orders[0].shippingOrderCode;
-        const itemRes = await fetch(`/api/wms/shipping/items/${encodeURIComponent(firstCode)}`, { headers });
-        const itemJson = await itemRes.json();
-        const items: Record<string, unknown>[] = Array.isArray(itemJson?.data?.items) ? itemJson.data.items : [];
+          const orders: { shippingOrderCode: string }[] = Array.isArray(ordJson?.data) ? ordJson.data : [];
+          if (!orderCount) orderCount = orders.length;
 
-        setSkus(items
-          .map((it) => ({
-            sku: String(it.productSku ?? ""),
-            name: String(it.productName ?? ""),
-            qtyPerOrder: Number(it.qty ?? 0),
-            totalQty: Number(it.qty ?? 0) * orderCount,
-          }))
-          .filter((s) => s.sku)
-        );
+          let skus: SkuRow[] = [];
+          if (orders.length > 0) {
+            const itemRes = await fetch(`/api/wms/shipping/items/${encodeURIComponent(orders[0].shippingOrderCode)}`, { headers });
+            const itemJson = await itemRes.json().catch(() => ({}));
+            const items: Record<string, unknown>[] = Array.isArray(itemJson?.data?.items) ? itemJson.data.items : [];
+            skus = items
+              .map((it) => ({
+                sku: String(it.productSku ?? ""),
+                name: String(it.productName ?? ""),
+                qtyPerOrder: Number(it.qty ?? 0),
+                totalQty: Number(it.qty ?? 0) * orderCount,
+              }))
+              .filter((s) => s.sku);
+          }
+
+          const dateDisplay = batchDate.length === 8
+            ? `${batchDate.slice(0,4)}-${batchDate.slice(4,6)}-${batchDate.slice(6,8)}`
+            : batchDate;
+
+          return { batchCode: code, batchName, dateDisplay, whCode, custCode, orderCount, skus, totalQty: skus.reduce((s, r) => s + r.totalQty, 0), qrDataUrl } satisfies BatchTicketData;
+        }));
+        setTickets(results);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load");
       } finally { setLoading(false); }
     })();
-  }, [batchCode]); // eslint-disable-line
+  }, []); // eslint-disable-line
 
-  const dateDisplay = batchDate.length === 8
-    ? `${batchDate.slice(0, 4)}-${batchDate.slice(4, 6)}-${batchDate.slice(6, 8)}`
-    : batchDate;
-
-  const generatedAt = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
-    + ", " + new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
-
-  const totalQty = skus.reduce((s, r) => s + r.totalQty, 0);
+  useEffect(() => {
+    if (tickets.length > 0) setTimeout(() => window.print(), 600);
+  }, [tickets]);
 
   if (loading) return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", gap: 10, background: "#fff", fontFamily: "Arial, sans-serif" }}>
       <Loader2 className="w-5 h-5 animate-spin" style={{ color: "#94a3b8" }} />
-      <span style={{ color: "#64748b", fontSize: 13 }}>Loading…</span>
+      <span style={{ color: "#64748b", fontSize: 13 }}>Loading {allCodes.length} batch{allCodes.length !== 1 ? "es" : ""}…</span>
     </div>
   );
 
-  if (error) return (
+  if (error || tickets.length === 0) return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", color: "#ef4444", fontFamily: "Arial, sans-serif" }}>
-      {error}
+      {error || "No data"}
     </div>
   );
 
-  const ticket = (
-    <Ticket
-      batchName={batchName} batchCode={batchCode} dateDisplay={dateDisplay}
-      whCode={whCode} custCode={custCode} orderCount={orderCount}
-      skus={skus} totalQty={totalQty} qrDataUrl={qrDataUrl} generatedAt={generatedAt}
+  const ticketEls = tickets.map((t) => (
+    <Ticket key={t.batchCode}
+      batchName={t.batchName} batchCode={t.batchCode} dateDisplay={t.dateDisplay}
+      whCode={t.whCode} custCode={t.custCode} orderCount={t.orderCount}
+      skus={t.skus} totalQty={t.totalQty} qrDataUrl={t.qrDataUrl} generatedAt={generatedAt}
     />
-  );
+  ));
 
   return (
     <>
@@ -104,9 +129,11 @@ function PrintInner() {
         boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
       }}>
         <div style={{ fontSize: 13 }}>
-          <span style={{ fontWeight: 700 }}>{batchName}</span>
+          <span style={{ fontWeight: 700 }}>
+            {tickets.length === 1 ? tickets[0].batchName : `${tickets.length} batches`}
+          </span>
           <span style={{ color: "#94a3b8", marginLeft: 10 }}>
-            {orderCount} orders · {skus.length} SKU{skus.length !== 1 ? "s" : ""} · Total {totalQty} pcs · 4×6
+            {tickets.reduce((s, t) => s + t.orderCount, 0)} orders total · 4×6
           </span>
         </div>
         <button onClick={() => window.print()} style={{
@@ -114,7 +141,7 @@ function PrintInner() {
           background: "white", color: "#0f172a", border: "none", borderRadius: 8,
           fontSize: 13, fontWeight: 700, cursor: "pointer",
         }}>
-          <Printer size={15} /> Print
+          <Printer size={15} /> Print All ({tickets.length})
         </button>
       </div>
 
@@ -123,11 +150,11 @@ function PrintInner() {
         background: "#94a3b8", minHeight: "100vh", paddingTop: 68, paddingBottom: 40,
         display: "flex", flexDirection: "column", alignItems: "center", gap: 24,
       }}>
-        {ticket}
+        {ticketEls}
       </div>
 
       {/* Print-only */}
-      <div className="print-only">{ticket}</div>
+      <div className="print-only">{ticketEls}</div>
 
       <style>{`
         @media screen { .print-only { display: none !important; } }
@@ -140,7 +167,9 @@ function PrintInner() {
             width: 100% !important; height: auto !important; min-height: 0 !important;
             padding: 0 !important; box-sizing: border-box !important;
             border: none !important; box-shadow: none !important;
+            page-break-after: always;
           }
+          .label:last-child { page-break-after: avoid; }
         }
       `}</style>
     </>
