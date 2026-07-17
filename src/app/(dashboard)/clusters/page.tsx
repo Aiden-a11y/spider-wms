@@ -67,6 +67,7 @@ export default function ClustersPage() {
   const [loadingClusters, setLoadingClusters] = useState(false);
   const [expandedCluster, setExpandedCluster] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [selectedPrintIds, setSelectedPrintIds] = useState<Set<string>>(new Set());
 
   // ── Occupancy map (all pages) ─────────────────────────────────────────────
   const [occupancyMap, setOccupancyMap] = useState<Map<string, string>>(new Map());
@@ -1185,14 +1186,52 @@ export default function ClustersPage() {
       {/* ── Existing clusters ── */}
       {clusters.filter((c) => c.status !== "completed").length > 0 && (
         <div className="space-y-3">
-          <h2 className="text-sm font-bold text-slate-500 uppercase tracking-wide">Active Clusters</h2>
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                className="w-4 h-4 rounded accent-blue-600 cursor-pointer"
+                checked={clusters.filter((c) => c.status !== "completed").length > 0 &&
+                  clusters.filter((c) => c.status !== "completed").every((c) => selectedPrintIds.has(c.id))}
+                onChange={(e) => {
+                  const active = clusters.filter((c) => c.status !== "completed");
+                  setSelectedPrintIds(e.target.checked ? new Set(active.map((c) => c.id)) : new Set());
+                }}
+              />
+              <h2 className="text-sm font-bold text-slate-500 uppercase tracking-wide">Active Clusters</h2>
+            </div>
+            {selectedPrintIds.size > 0 && (
+              <button
+                onClick={() => {
+                  const ids = Array.from(selectedPrintIds).join(",");
+                  window.open(`/clusters-print?ids=${encodeURIComponent(ids)}`, "_blank");
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+              >
+                <Printer className="w-3.5 h-3.5" /> Print Selected ({selectedPrintIds.size})
+              </button>
+            )}
+          </div>
           {clusters.filter((c) => c.status !== "completed").map((cluster) => {
             const isExpanded = expandedCluster === cluster.id;
             const isDeleting = deletingId === cluster.id;
+            const isPrintSelected = selectedPrintIds.has(cluster.id);
             return (
               <div key={cluster.id} className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
                 {/* Card header */}
                 <div className="px-5 py-4 flex items-start gap-4">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 rounded accent-blue-600 cursor-pointer mt-1 flex-shrink-0"
+                    checked={isPrintSelected}
+                    onChange={(e) => {
+                      setSelectedPrintIds((prev) => {
+                        const next = new Set(prev);
+                        e.target.checked ? next.add(cluster.id) : next.delete(cluster.id);
+                        return next;
+                      });
+                    }}
+                  />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap mb-1">
                       {cluster.clusterNo != null && (

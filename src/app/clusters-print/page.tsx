@@ -209,28 +209,39 @@ function BinTicket({ bin, cluster, totalBins }: { bin: B2CClusterBin; cluster: B
 function PrintContent() {
   const params = useSearchParams();
   const id = params.get("id") ?? "";
+  const idsParam = params.get("ids") ?? "";
 
-  const [cluster, setCluster] = useState<B2CCluster | null>(null);
+  const [clusters, setClusters] = useState<B2CCluster[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!id) { setError("No cluster ID"); setLoading(false); return; }
-    fetch(`/api/cluster?id=${encodeURIComponent(id)}`)
-      .then((r) => r.json())
-      .then((data) => { if (!data) setError("Cluster not found"); else setCluster(data as B2CCluster); })
-      .catch(() => setError("Failed to load cluster"))
-      .finally(() => setLoading(false));
-  }, [id]);
+    const ids = idsParam ? idsParam.split(",").map((s) => s.trim()).filter(Boolean)
+                         : id ? [id] : [];
+    if (ids.length === 0) { setError("No cluster ID"); setLoading(false); return; }
+
+    Promise.all(
+      ids.map((cid) =>
+        fetch(`/api/cluster?id=${encodeURIComponent(cid)}`)
+          .then((r) => r.json())
+          .then((data) => data as B2CCluster | null)
+          .catch(() => null)
+      )
+    ).then((results) => {
+      const valid = results.filter(Boolean) as B2CCluster[];
+      if (valid.length === 0) setError("No clusters found");
+      else setClusters(valid);
+    }).finally(() => setLoading(false));
+  }, [id, idsParam]);
 
   useEffect(() => {
-    if (cluster) setTimeout(() => window.print(), 800);
-  }, [cluster]);
+    if (clusters.length > 0) setTimeout(() => window.print(), 800);
+  }, [clusters]);
 
   if (loading) return <div style={{ padding: 32, fontFamily: "sans-serif" }}>Loading…</div>;
-  if (error || !cluster) return <div style={{ padding: 32, fontFamily: "sans-serif", color: "red" }}>{error || "Not found"}</div>;
+  if (error || clusters.length === 0) return <div style={{ padding: 32, fontFamily: "sans-serif", color: "red" }}>{error || "Not found"}</div>;
 
-  const totalBins = cluster.bins.length;
+  const totalBins = clusters.reduce((s, c) => s + c.bins.length, 0);
 
   return (
     <>
@@ -256,8 +267,9 @@ function PrintContent() {
       }}>
         <span style={{ color: "white", fontFamily: "sans-serif", fontSize: 14, fontWeight: 600 }}>
           Cluster Pick Tickets
-          {cluster.clusterNo != null && ` — #${String(cluster.clusterNo).padStart(4, "0")}`}
-          {" · "}{cluster.bins.length} bins
+          {clusters.length === 1 && clusters[0].clusterNo != null && ` — #${String(clusters[0].clusterNo).padStart(4, "0")}`}
+          {clusters.length > 1 && ` — ${clusters.length} clusters`}
+          {" · "}{totalBins} bins total
         </span>
         <button onClick={() => window.print()} style={{
           background: "#3b82f6", color: "white", border: "none",
@@ -270,9 +282,11 @@ function PrintContent() {
       </div>
 
       <div style={{ padding: "0.1in 0" }}>
-        {cluster.bins.map((bin) => (
-          <BinTicket key={bin.binNo} bin={bin} cluster={cluster} totalBins={totalBins} />
-        ))}
+        {clusters.map((cluster) =>
+          cluster.bins.map((bin) => (
+            <BinTicket key={`${cluster.id}-${bin.binNo}`} bin={bin} cluster={cluster} totalBins={cluster.bins.length} />
+          ))
+        )}
       </div>
     </>
   );
