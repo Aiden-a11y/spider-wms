@@ -241,6 +241,7 @@ function PrintContent() {
           .ticket { page-break-after: always; }
           .ticket:last-child { page-break-after: avoid; }
           body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          tr { page-break-inside: avoid; }
         }
         * { box-sizing: border-box; }
         body { margin: 0; font-family: Arial, Helvetica, sans-serif; background: #e2e8f0; }
