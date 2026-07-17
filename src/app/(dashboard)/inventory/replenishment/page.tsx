@@ -41,6 +41,7 @@ export default function ReplenishmentPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [lastLoaded, setLastLoaded] = useState<Date | null>(null);
+  const [scanStats, setScanStats] = useState<{ total: number; passed: number } | null>(null);
 
   // Column filters
   const [fSku, setFSku] = useState("");
@@ -97,9 +98,11 @@ export default function ReplenishmentPage() {
         // 2) occupancyMap lookup
         const mapped = getLocationOccupancyInfo(occupancyMap, row);
         if (mapped) return classifyOccupancy(mapped) === "shelf";
-        // 3) zone name fallback (any case, any "shelf" substring)
+        // 3) zone name fallback
         const zone = String(row.zoneName ?? row.zoneNm ?? row.zone ?? row.zoneCode ?? "").toLowerCase();
-        return zone.includes("shelf");
+        if (zone) return zone.includes("shelf") || zone.includes("pick");
+        // 4) unknown → include (don't silently drop)
+        return true;
       };
 
       // ── 2. Below min stock: scan all inventory ───────────────────────
@@ -114,6 +117,8 @@ export default function ReplenishmentPage() {
       if (customers.length === 0) customers.push({ code: "" });
 
       const seenBelowMin = new Set<string>();
+      let totalScanned = 0;
+      let totalPassed = 0;
       for (const cust of customers) {
         let page = 1;
         while (true) {
@@ -132,11 +137,13 @@ export default function ReplenishmentPage() {
           if (list.length === 0) break;
 
           for (const row of list) {
+            totalScanned++;
             if (!isShelf(row)) continue;
             const inv = normalizeInventory({ data: { list: [row] } })[0];
             if (!inv) continue;
             const availQty = inv.availableQty ?? inv.qty;
             if (availQty > MIN_STOCK) continue;
+            totalPassed++;
             const id = `below__${inv.sku}__${inv.locationCode}`;
             if (seenBelowMin.has(id)) continue;
             seenBelowMin.add(id);
@@ -155,6 +162,7 @@ export default function ReplenishmentPage() {
           page++;
         }
       }
+      setScanStats({ total: totalScanned, passed: totalPassed });
 
       // ── 3. Required for today's orders: from cluster-check cache ─────
       const cacheRes = await fetch(
@@ -232,6 +240,11 @@ export default function ReplenishmentPage() {
             <h1 className="text-xl font-bold text-slate-800">Replenishment</h1>
             <p className="text-xs text-slate-400">
               {lastLoaded ? `Updated ${lastLoaded.toLocaleTimeString()}` : "Loading…"}
+              {scanStats && !loading && (
+                <span className="ml-2 text-slate-300">
+                  · {scanStats.total.toLocaleString()} rows scanned · {scanStats.passed} ≤ {MIN_STOCK}
+                </span>
+              )}
             </p>
           </div>
         </div>
