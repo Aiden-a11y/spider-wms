@@ -162,14 +162,15 @@ function PrintInner() {
           .no-print { display: none !important; }
           .print-only { display: block !important; }
           body, html { margin: 0 !important; padding: 0 !important; background: white !important; }
-          @page { size: 4in auto; margin: 4mm; }
+          @page { size: 4in 6in; margin: 3mm; }
           .label {
-            width: 100% !important; height: auto !important; min-height: 0 !important;
-            padding: 0 !important; box-sizing: border-box !important;
+            width: 100% !important; min-height: 0 !important; height: auto !important;
+            box-sizing: border-box !important;
             border: none !important; box-shadow: none !important;
-            page-break-after: always;
+            page-break-after: always; break-after: page;
           }
-          .label:last-child { page-break-after: avoid; }
+          .label:last-child { page-break-after: avoid; break-after: avoid; }
+          tr { page-break-inside: avoid; break-inside: avoid; }
         }
       `}</style>
     </>
