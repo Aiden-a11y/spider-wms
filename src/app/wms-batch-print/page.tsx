@@ -164,13 +164,14 @@ function PrintInner() {
           body, html { margin: 0 !important; padding: 0 !important; background: white !important; }
           @page { size: 4in 6in; margin: 3mm; }
           .label {
-            width: 100% !important; min-height: 0 !important; height: auto !important;
-            box-sizing: border-box !important;
+            display: block !important;
+            width: 100% !important; height: auto !important; min-height: 0 !important;
+            overflow: visible !important;
             border: none !important; box-shadow: none !important;
-            page-break-after: always; break-after: page;
+            page-break-after: always;
           }
-          .label:last-child { page-break-after: avoid; break-after: avoid; }
-          tr { page-break-inside: avoid; break-inside: avoid; }
+          .label:last-child { page-break-after: avoid; }
+          tr { page-break-inside: avoid; }
         }
       `}</style>
     </>

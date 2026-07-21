@@ -5,7 +5,7 @@ import { useAuth } from "@/contexts/auth-context";
 import { useRouter } from "next/navigation";
 import {
   RefreshCw, MapPin, PackageCheck, Truck, RotateCcw, Boxes, TrendingUp,
-  AlertCircle, ChevronRight, LayoutGrid,
+  AlertCircle, ChevronRight, LayoutGrid, BarChart2,
 } from "lucide-react";
 
 type Row = Record<string, unknown>;
@@ -26,6 +26,166 @@ const LOC_COLORS: Record<string, { bar: string; dot: string; grad: string; hex: 
   "Shelf(Large)":   { bar: "bg-teal-500",   dot: "bg-teal-500",   grad: "from-teal-400 to-teal-600",     hex: "#14b8a6" },
 };
 const FALLBACK_COLORS = ["#94a3b8","#64748b","#475569","#334155"];
+
+/* ── Inventory Trend Chart ── */
+type TrendPoint = { date: string; total_qty: number; sku_count: number; location_count: number };
+type TrendMetric = "total_qty" | "sku_count" | "location_count";
+
+const TREND_META: Record<TrendMetric, { label: string; color: string; unit: string }> = {
+  total_qty:      { label: "Total Qty",   color: "#3b82f6", unit: " EA" },
+  sku_count:      { label: "SKUs",        color: "#a855f7", unit: " SKUs" },
+  location_count: { label: "Locations",   color: "#14b8a6", unit: " locs" },
+};
+
+function InventoryTrendChart({ data }: { data: TrendPoint[] }) {
+  const [metric, setMetric] = useState<TrendMetric>("total_qty");
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+
+  if (data.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-48 gap-2">
+        <BarChart2 className="w-8 h-8 text-slate-200" />
+        <p className="text-xs text-slate-400">No snapshot data yet</p>
+        <p className="text-xs text-slate-300">Run a snapshot from the History page</p>
+      </div>
+    );
+  }
+
+  const meta = TREND_META[metric];
+  const values = data.map((d) => d[metric]);
+  const maxVal = Math.max(...values, 1);
+  const minVal = Math.min(...values, 0);
+  const range = maxVal - minVal || 1;
+
+  const W = 560; const H = 180;
+  const padL = 52; const padR = 16; const padT = 12; const padB = 36;
+  const cW = W - padL - padR;
+  const cH = H - padT - padB;
+  const n = data.length;
+
+  const xOf = (i: number) => padL + (n > 1 ? (i / (n - 1)) * cW : cW / 2);
+  const yOf = (v: number) => padT + (1 - (v - minVal) / range) * cH;
+
+  const pts = data.map((d, i) => ({ x: xOf(i), y: yOf(d[metric]), ...d }));
+  const linePath = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  const areaPath = `${linePath} L${pts[n - 1].x.toFixed(1)},${(padT + cH).toFixed(1)} L${pts[0].x.toFixed(1)},${(padT + cH).toFixed(1)}Z`;
+
+  const yTicks = 4;
+  const xStep = Math.ceil(n / 7);
+  const hov = hoverIdx !== null ? pts[hoverIdx] : null;
+
+  const fmtVal = (v: number) =>
+    metric === "total_qty" && v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v.toLocaleString();
+
+  return (
+    <div>
+      {/* Metric tabs */}
+      <div className="flex gap-1 mb-3">
+        {(Object.keys(TREND_META) as TrendMetric[]).map((m) => (
+          <button
+            key={m}
+            onClick={() => setMetric(m)}
+            className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all duration-200 ${
+              metric === m
+                ? "text-white shadow-sm"
+                : "text-slate-400 hover:text-slate-600 bg-slate-100 hover:bg-slate-200"
+            }`}
+            style={metric === m ? { background: TREND_META[m].color } : {}}
+          >
+            {TREND_META[m].label}
+          </button>
+        ))}
+        <span className="ml-auto text-xs text-slate-400 self-center">
+          Last {data.length} snapshots
+        </span>
+      </div>
+
+      {/* Chart */}
+      <div className="relative">
+        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
+          <defs>
+            <linearGradient id={`trendGrad-${metric}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={meta.color} stopOpacity="0.25" />
+              <stop offset="100%" stopColor={meta.color} stopOpacity="0.02" />
+            </linearGradient>
+          </defs>
+
+          {/* Gridlines + Y labels */}
+          {Array.from({ length: yTicks }).map((_, i) => {
+            const vy = padT + (i / (yTicks - 1)) * cH;
+            const vv = maxVal - (i / (yTicks - 1)) * range;
+            return (
+              <g key={i}>
+                <line x1={padL} x2={W - padR} y1={vy} y2={vy}
+                  stroke="#f1f5f9" strokeWidth={1} strokeDasharray={i === yTicks - 1 ? "" : "4,3"} />
+                <text x={padL - 6} y={vy + 4} textAnchor="end" fontSize={9} fill="#94a3b8">{fmtVal(vv)}</text>
+              </g>
+            );
+          })}
+
+          {/* Area fill */}
+          <path d={areaPath} fill={`url(#trendGrad-${metric})`} />
+
+          {/* Line */}
+          <path d={linePath} fill="none" stroke={meta.color} strokeWidth={2}
+            strokeLinejoin="round" strokeLinecap="round" />
+
+          {/* Hover dot */}
+          {hov && (
+            <circle cx={hov.x} cy={hov.y} r={4} fill={meta.color} stroke="white" strokeWidth={2} />
+          )}
+
+          {/* X axis labels */}
+          {data.map((d, i) => {
+            if (i % xStep !== 0 && i !== n - 1) return null;
+            return (
+              <text key={d.date} x={xOf(i)} y={H - 6} textAnchor="middle" fontSize={9} fill="#94a3b8">
+                {d.date.slice(5)}
+              </text>
+            );
+          })}
+
+          {/* Hover hit areas */}
+          {pts.map((p, i) => {
+            const x0 = i === 0 ? padL : (pts[i - 1].x + p.x) / 2;
+            const x1 = i === n - 1 ? W - padR : (p.x + pts[i + 1].x) / 2;
+            return (
+              <rect
+                key={i}
+                x={x0} y={padT} width={x1 - x0} height={cH}
+                fill="transparent"
+                onMouseEnter={() => setHoverIdx(i)}
+                onMouseLeave={() => setHoverIdx(null)}
+                style={{ cursor: "crosshair" }}
+              />
+            );
+          })}
+        </svg>
+
+        {/* Tooltip */}
+        {hov && (
+          <div
+            className="absolute pointer-events-none z-10 bg-slate-900 text-white rounded-xl px-3 py-2 shadow-xl"
+            style={{
+              left: `${(hov.x / W) * 100}%`,
+              top: `${(hov.y / H) * 100}%`,
+              transform: hov.x > W * 0.7 ? "translate(-110%, -50%)" : "translate(10%, -50%)",
+              fontSize: 11, whiteSpace: "nowrap",
+            }}
+          >
+            <div style={{ fontWeight: 700, color: meta.color }}>{hov[metric].toLocaleString()}{meta.unit}</div>
+            <div style={{ color: "#94a3b8", fontSize: 10 }}>{hov.date}</div>
+            {metric === "total_qty" && (
+              <div style={{ color: "#64748b", fontSize: 10 }}>
+                {hov.sku_count} SKUs · {hov.location_count} locs
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 /* ── Donut Chart — occupancy mode ── */
 function DonutChart({
@@ -261,6 +421,8 @@ export default function DashboardPage() {
   const [locations, setLocations] = useState<Row[]>([]);
   const [receiving, setReceiving] = useState<Row[]>([]);
   const [inventory, setInventory] = useState<Row[]>([]);
+  const [inventoryTrend, setInventoryTrend] = useState<TrendPoint[]>([]);
+  const [snapshotOccupied, setSnapshotOccupied] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
@@ -294,7 +456,7 @@ export default function DashboardPage() {
     setAnimated(false);
     setBarsVisible(false);
     try {
-      const [r1, , r3, r4, r5] = await Promise.all([
+      const [r1, , r3, r4, r5, rTrend] = await Promise.all([
         fetch("/api/wms/dashboard", { headers }),
         fetch("/api/wms/dashboard/sidebar-summary", { headers }),
         fetch("/api/wms/warehouse/location/list", {
@@ -305,17 +467,21 @@ export default function DashboardPage() {
           method: "POST", headers,
           body: JSON.stringify({ page: 1, limit: 9999 }),
         }),
-        // inventory/detail — 전체 재고 (warehouseCode 없이 = 전 창고)
         fetch("/api/wms/inventory/detail", {
           method: "POST", headers,
           body: JSON.stringify({ pageSize: 9999 }),
         }),
+        fetch("/api/inventory-trend"),
       ]);
-      const [d1, d3, d4, d5] = await Promise.all([r1.json(), r3.json(), r4.json(), r5.json()]);
+      const [d1, d3, d4, d5, dTrend] = await Promise.all([r1.json(), r3.json(), r4.json(), r5.json(), rTrend.json()]);
       setSummary((d1?.data ?? d1) as Row);
       setLocations(parseList(d3, ["data", "list"], ["data"], []));
       setReceiving(parseList(d4, ["data", "list"], ["data"], ["list"], []));
       setInventory(parseList(d5, ["data"], ["data", "list"], ["list"], []));
+      setInventoryTrend((dTrend?.trend ?? []) as TrendPoint[]);
+      // Build occupied location set from snapshot (normalized: strip dashes+lowercase)
+      const occLocs = (dTrend?.occupied_locations ?? []) as string[];
+      setSnapshotOccupied(new Set(occLocs.map((l: string) => l.toLowerCase().replace(/[\s\-_/]+/g, ""))));
       setLastUpdated(new Date());
       setTimeout(() => setAnimated(true), 80);
       setTimeout(() => setBarsVisible(true), 300);
@@ -365,15 +531,19 @@ export default function DashboardPage() {
     return normLc([z, a, b, l, p].filter(Boolean).join(""));
   };
 
-  // Location codes that have inventory (cross-reference for occupancy)
+  // Location codes that have inventory — merged from live API + Supabase snapshot
   const occupiedLocCodes = useMemo(() => {
     const s = new Set<string>();
+    // From live inventory API response (field-based)
     for (const inv of inventory) {
       const k = locKey(inv);
       if (k) s.add(k);
     }
+    // From Supabase snapshot: location stored as "zone-aisle-bay-level-position"
+    // normLc strips all separators → matches locKey output
+    for (const k of snapshotOccupied) s.add(k);
     return s;
-  }, [inventory]); // eslint-disable-line
+  }, [inventory, snapshotOccupied]); // eslint-disable-line
 
   const locByType = useMemo(() => {
     const map: Record<string, { total: number; occupied: number }> = {};
@@ -750,6 +920,27 @@ export default function DashboardPage() {
               ))}
             </div>
           </div>
+        </div>
+
+        {/* ── Inventory Trend Chart ── */}
+        <div
+          className={`bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-6 transition-all duration-500 ${animated ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}
+          style={{ transitionDelay: "560ms" }}
+        >
+          <div className="flex items-center gap-2 mb-4">
+            <BarChart2 className="w-4 h-4 text-slate-400" />
+            <h2 className="text-sm font-semibold text-slate-700">Inventory Trend</h2>
+            {inventoryTrend.length > 0 && (
+              <span className="text-xs text-slate-400">
+                · Latest{" "}
+                <span className="font-semibold text-slate-600">
+                  {inventoryTrend[inventoryTrend.length - 1]?.total_qty.toLocaleString()} EA
+                </span>
+                {" "}({inventoryTrend[inventoryTrend.length - 1]?.date})
+              </span>
+            )}
+          </div>
+          <InventoryTrendChart data={inventoryTrend} />
         </div>
 
         {/* ── Recent Receiving Orders ── */}

@@ -249,15 +249,16 @@ function PrintContent() {
         @media print {
           @page { size: 4in 6in; margin: 3mm; }
           .no-print { display: none !important; }
-          .ticket {
-            width: 100% !important; min-height: 0 !important; height: auto !important;
-            box-sizing: border-box !important;
-            border: none !important; box-shadow: none !important;
-            page-break-after: always; break-after: page;
-          }
-          .ticket:last-child { page-break-after: avoid; break-after: avoid; }
           body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-          tr { page-break-inside: avoid; break-inside: avoid; }
+          .ticket {
+            display: block !important;
+            width: 100% !important; height: auto !important; min-height: 0 !important;
+            overflow: visible !important;
+            border: none !important; box-shadow: none !important;
+            page-break-after: always;
+          }
+          .ticket:last-child { page-break-after: avoid; }
+          tr { page-break-inside: avoid; }
         }
         * { box-sizing: border-box; }
         body { margin: 0; font-family: Arial, Helvetica, sans-serif; background: #e2e8f0; }
