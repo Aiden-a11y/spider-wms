@@ -48,8 +48,9 @@ function InventoryTrendChart({
 }) {
   const [metric, setMetric] = useState<TrendMetric>("total_qty");
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  // animKey changes whenever we want to replay the draw animation
+  const [animKey, setAnimKey] = useState(0);
 
-  // Apply warehouse filter client-side
   const pts_data = useMemo(() => {
     if (!filterWh) return data;
     return data.map((d) => {
@@ -57,6 +58,9 @@ function InventoryTrendChart({
       return { ...d, total_qty: wh.total_qty, sku_count: wh.sku_count, location_count: wh.location_count };
     });
   }, [data, filterWh]);
+
+  // Re-trigger draw animation on metric / filter / data change
+  useEffect(() => { setAnimKey((k) => k + 1); }, [metric, filterWh, pts_data.length]);
 
   const latest = pts_data[pts_data.length - 1];
 
@@ -77,7 +81,7 @@ function InventoryTrendChart({
   const range = maxVal - minVal || 1;
 
   const W = 560; const H = 150;
-  const padL = 48; const padR = 12; const padT = 8; const padB = 28;
+  const padL = 46; const padR = 14; const padT = 14; const padB = 24;
   const cW = W - padL - padR;
   const cH = H - padT - padB;
   const n = pts_data.length;
@@ -89,17 +93,27 @@ function InventoryTrendChart({
   const linePath = svgPts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
   const areaPath = `${linePath} L${svgPts[n-1].x.toFixed(1)},${(padT+cH).toFixed(1)} L${svgPts[0].x.toFixed(1)},${(padT+cH).toFixed(1)}Z`;
 
-  const yTicks = 3;
-  const xStep = Math.ceil(n / 7);
-  const hov = hoverIdx !== null ? svgPts[hoverIdx] : null;
+  // Min / max indices
+  const maxIdx = values.reduce((mi, v, i) => v > values[mi] ? i : mi, 0);
+  const minIdx = values.reduce((mi, v, i) => v < values[mi] ? i : mi, 0);
+  const showMinMax = maxIdx !== minIdx && range > 0;
 
+  // X-axis: show at most 6 evenly spaced labels, never overlap
+  const xLabels: number[] = [];
+  const maxLabels = Math.min(6, n);
+  for (let i = 0; i < maxLabels; i++) {
+    xLabels.push(Math.round((i / (maxLabels - 1)) * (n - 1)));
+  }
+
+  const yTicks = 3;
+  const hov = hoverIdx !== null ? svgPts[hoverIdx] : null;
   const fmtVal = (v: number) =>
     v >= 10000 ? `${(v / 1000).toFixed(0)}k` : v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v.toLocaleString();
 
   return (
     <div>
-      {/* Header row: metric tabs + warehouse filter */}
-      <div className="flex items-center gap-2 mb-3 flex-wrap">
+      {/* Header row */}
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
         <div className="flex gap-1">
           {(Object.keys(TREND_META) as TrendMetric[]).map((m) => (
             <button key={m} onClick={() => setMetric(m)}
@@ -113,39 +127,38 @@ function InventoryTrendChart({
           ))}
         </div>
 
-        {/* Warehouse filter */}
         {warehouses.length > 1 && (
-          <select
-            value={filterWh}
-            onChange={(e) => onFilterWh(e.target.value)}
-            className="ml-auto text-xs border border-slate-200 rounded-lg px-2 py-1 text-slate-600 bg-white focus:outline-none focus:ring-1 focus:ring-blue-300"
+          <select value={filterWh} onChange={(e) => onFilterWh(e.target.value)}
+            className="text-[11px] border border-slate-200 rounded-lg px-2 py-1 text-slate-600 bg-white focus:outline-none focus:ring-1 focus:ring-blue-300"
           >
             <option value="">All Warehouses</option>
             {warehouses.map((wh) => <option key={wh} value={wh}>{wh}</option>)}
           </select>
         )}
 
-        {/* Latest stat */}
         {latest && (
-          <span className="text-xs text-slate-400 ml-auto">
-            Latest <span className="font-semibold text-slate-700">{fmtVal(latest[metric])}</span>
-            {meta.unit}
-            <span className="text-slate-300 mx-1">·</span>
-            {latest.date}
+          <span className="text-[11px] text-slate-400 ml-auto">
+            Latest <span className="font-semibold text-slate-700">{fmtVal(latest[metric])}</span>{meta.unit}
+            <span className="text-slate-300 mx-1">·</span>{latest.date}
           </span>
         )}
       </div>
 
-      {/* Chart */}
+      {/* SVG Chart */}
       <div className="relative">
-        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
+        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block", overflow: "visible" }}>
           <defs>
             <linearGradient id={`tg-${metric}`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={meta.color} stopOpacity="0.2" />
+              <stop offset="0%" stopColor={meta.color} stopOpacity="0.18" />
               <stop offset="100%" stopColor={meta.color} stopOpacity="0.01" />
             </linearGradient>
+            {/* Clip path so line draw animation stays within chart */}
+            <clipPath id="chartClip">
+              <rect x={padL} y={0} width={cW} height={H} />
+            </clipPath>
           </defs>
 
+          {/* Y gridlines + labels */}
           {Array.from({ length: yTicks }).map((_, i) => {
             const vy = padT + (i / (yTicks - 1)) * cH;
             const vv = maxVal - (i / (yTicks - 1)) * range;
@@ -153,26 +166,77 @@ function InventoryTrendChart({
               <g key={i}>
                 <line x1={padL} x2={W - padR} y1={vy} y2={vy}
                   stroke="#f1f5f9" strokeWidth={1} strokeDasharray={i === 0 ? "" : "3,3"} />
-                <text x={padL - 5} y={vy + 3.5} textAnchor="end" fontSize={8.5} fill="#94a3b8">{fmtVal(vv)}</text>
+                <text x={padL - 4} y={vy + 3.5} textAnchor="end" fontSize={7.5} fill="#b0b9c8">
+                  {fmtVal(vv)}
+                </text>
               </g>
             );
           })}
 
-          <path d={areaPath} fill={`url(#tg-${metric})`} />
-          <path d={linePath} fill="none" stroke={meta.color} strokeWidth={1.8}
-            strokeLinejoin="round" strokeLinecap="round" />
+          {/* Area — fades in after line draw */}
+          <path key={`area-${animKey}`} d={areaPath} fill={`url(#tg-${metric})`}
+            style={{ animation: "areaFadeIn 0.4s ease 1.2s both" }} />
 
+          {/* Line — draw left to right */}
+          <path
+            key={`line-${animKey}`}
+            d={linePath}
+            fill="none"
+            stroke={meta.color}
+            strokeWidth={1.8}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+            pathLength="1"
+            style={{
+              strokeDasharray: 1,
+              strokeDashoffset: 1,
+              animation: "lineDrawLTR 1.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards",
+            }}
+          />
+
+          {/* Min / Max markers */}
+          {showMinMax && !hov && (
+            <>
+              {/* Max */}
+              <circle cx={svgPts[maxIdx].x} cy={svgPts[maxIdx].y} r={3}
+                fill={meta.color} stroke="white" strokeWidth={1.5} />
+              <text
+                x={svgPts[maxIdx].x}
+                y={svgPts[maxIdx].y - 6}
+                textAnchor={maxIdx === 0 ? "start" : maxIdx === n - 1 ? "end" : "middle"}
+                fontSize={7} fontWeight={700} fill={meta.color}
+              >
+                ▲ {fmtVal(values[maxIdx])}
+              </text>
+              {/* Min */}
+              <circle cx={svgPts[minIdx].x} cy={svgPts[minIdx].y} r={3}
+                fill="#94a3b8" stroke="white" strokeWidth={1.5} />
+              <text
+                x={svgPts[minIdx].x}
+                y={svgPts[minIdx].y + 11}
+                textAnchor={minIdx === 0 ? "start" : minIdx === n - 1 ? "end" : "middle"}
+                fontSize={7} fontWeight={600} fill="#94a3b8"
+              >
+                ▼ {fmtVal(values[minIdx])}
+              </text>
+            </>
+          )}
+
+          {/* Hover dot */}
           {hov && <circle cx={hov.x} cy={hov.y} r={3.5} fill={meta.color} stroke="white" strokeWidth={1.5} />}
 
-          {pts_data.map((d, i) => {
-            if (i % xStep !== 0 && i !== n - 1) return null;
+          {/* X-axis labels — max 6, no overlap */}
+          {xLabels.map((idx) => {
+            const x = xOf(idx);
+            const anchor = idx === 0 ? "start" : idx === n - 1 ? "end" : "middle";
             return (
-              <text key={d.date} x={xOf(i)} y={H - 4} textAnchor="middle" fontSize={8.5} fill="#94a3b8">
-                {d.date.slice(5)}
+              <text key={idx} x={x} y={H - 2} textAnchor={anchor} fontSize={7} fill="#b0b9c8">
+                {pts_data[idx].date.slice(5)}
               </text>
             );
           })}
 
+          {/* Invisible hover hit zones */}
           {svgPts.map((p, i) => {
             const x0 = i === 0 ? padL : (svgPts[i-1].x + p.x) / 2;
             const x1 = i === n-1 ? W - padR : (p.x + svgPts[i+1].x) / 2;
@@ -187,6 +251,7 @@ function InventoryTrendChart({
           })}
         </svg>
 
+        {/* Tooltip */}
         {hov && (
           <div className="absolute pointer-events-none z-10 bg-slate-900 text-white rounded-xl px-3 py-2 shadow-xl"
             style={{
@@ -703,6 +768,12 @@ export default function DashboardPage() {
           0%   { box-shadow: 0 0 0 0 rgba(239,68,68,0.4); }
           70%  { box-shadow: 0 0 0 8px rgba(239,68,68,0); }
           100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); }
+        }
+        @keyframes lineDrawLTR {
+          to { stroke-dashoffset: 0; }
+        }
+        @keyframes areaFadeIn {
+          to { opacity: 1; }
         }
       `}</style>
 
