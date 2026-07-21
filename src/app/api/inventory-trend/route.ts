@@ -67,7 +67,7 @@ export async function GET() {
 
   // Most recent snapshot's occupied locations (for dashboard occupancy widget)
   const latestEntry = trend.length > 0 ? byDate[trend[trend.length - 1].date] : null;
-  const occupied_locations: string[] = latestEntry ? [...latestEntry.locs] : [];
+  const occupied_locations: string[] = latestEntry ? Array.from(latestEntry.locs) : [];
 
   return NextResponse.json({ trend, occupied_locations });
 }

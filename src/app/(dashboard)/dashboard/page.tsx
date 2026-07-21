@@ -541,7 +541,7 @@ export default function DashboardPage() {
     }
     // From Supabase snapshot: location stored as "zone-aisle-bay-level-position"
     // normLc strips all separators → matches locKey output
-    for (const k of snapshotOccupied) s.add(k);
+    snapshotOccupied.forEach((k) => s.add(k));
     return s;
   }, [inventory, snapshotOccupied]); // eslint-disable-line
 
