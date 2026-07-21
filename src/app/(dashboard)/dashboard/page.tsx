@@ -28,131 +28,156 @@ const LOC_COLORS: Record<string, { bar: string; dot: string; grad: string; hex: 
 const FALLBACK_COLORS = ["#94a3b8","#64748b","#475569","#334155"];
 
 /* ── Inventory Trend Chart ── */
-type TrendPoint = { date: string; total_qty: number; sku_count: number; location_count: number };
+type ByWarehouse = Record<string, { total_qty: number; sku_count: number; location_count: number }>;
+type TrendPoint = { date: string; total_qty: number; sku_count: number; location_count: number; by_warehouse: ByWarehouse };
 type TrendMetric = "total_qty" | "sku_count" | "location_count";
 
 const TREND_META: Record<TrendMetric, { label: string; color: string; unit: string }> = {
-  total_qty:      { label: "Total Qty",   color: "#3b82f6", unit: " EA" },
-  sku_count:      { label: "SKUs",        color: "#a855f7", unit: " SKUs" },
-  location_count: { label: "Locations",   color: "#14b8a6", unit: " locs" },
+  total_qty:      { label: "Total Qty", color: "#3b82f6", unit: " EA"   },
+  sku_count:      { label: "SKUs",      color: "#a855f7", unit: " SKUs" },
+  location_count: { label: "Locations", color: "#14b8a6", unit: " locs" },
 };
 
-function InventoryTrendChart({ data }: { data: TrendPoint[] }) {
+function InventoryTrendChart({
+  data, warehouses, filterWh, onFilterWh,
+}: {
+  data: TrendPoint[];
+  warehouses: string[];
+  filterWh: string;
+  onFilterWh: (wh: string) => void;
+}) {
   const [metric, setMetric] = useState<TrendMetric>("total_qty");
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
 
-  if (data.length === 0) {
+  // Apply warehouse filter client-side
+  const pts_data = useMemo(() => {
+    if (!filterWh) return data;
+    return data.map((d) => {
+      const wh = d.by_warehouse[filterWh] ?? { total_qty: 0, sku_count: 0, location_count: 0 };
+      return { ...d, total_qty: wh.total_qty, sku_count: wh.sku_count, location_count: wh.location_count };
+    });
+  }, [data, filterWh]);
+
+  const latest = pts_data[pts_data.length - 1];
+
+  if (pts_data.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-48 gap-2">
-        <BarChart2 className="w-8 h-8 text-slate-200" />
+      <div className="flex flex-col items-center justify-center h-32 gap-1.5">
+        <BarChart2 className="w-7 h-7 text-slate-200" />
         <p className="text-xs text-slate-400">No snapshot data yet</p>
-        <p className="text-xs text-slate-300">Run a snapshot from the History page</p>
+        <p className="text-[11px] text-slate-300">Run a snapshot from the History page</p>
       </div>
     );
   }
 
   const meta = TREND_META[metric];
-  const values = data.map((d) => d[metric]);
+  const values = pts_data.map((d) => d[metric]);
   const maxVal = Math.max(...values, 1);
   const minVal = Math.min(...values, 0);
   const range = maxVal - minVal || 1;
 
-  const W = 560; const H = 180;
-  const padL = 52; const padR = 16; const padT = 12; const padB = 36;
+  const W = 560; const H = 150;
+  const padL = 48; const padR = 12; const padT = 8; const padB = 28;
   const cW = W - padL - padR;
   const cH = H - padT - padB;
-  const n = data.length;
+  const n = pts_data.length;
 
   const xOf = (i: number) => padL + (n > 1 ? (i / (n - 1)) * cW : cW / 2);
   const yOf = (v: number) => padT + (1 - (v - minVal) / range) * cH;
 
-  const pts = data.map((d, i) => ({ x: xOf(i), y: yOf(d[metric]), ...d }));
-  const linePath = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-  const areaPath = `${linePath} L${pts[n - 1].x.toFixed(1)},${(padT + cH).toFixed(1)} L${pts[0].x.toFixed(1)},${(padT + cH).toFixed(1)}Z`;
+  const svgPts = pts_data.map((d, i) => ({ x: xOf(i), y: yOf(d[metric]), ...d }));
+  const linePath = svgPts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  const areaPath = `${linePath} L${svgPts[n-1].x.toFixed(1)},${(padT+cH).toFixed(1)} L${svgPts[0].x.toFixed(1)},${(padT+cH).toFixed(1)}Z`;
 
-  const yTicks = 4;
+  const yTicks = 3;
   const xStep = Math.ceil(n / 7);
-  const hov = hoverIdx !== null ? pts[hoverIdx] : null;
+  const hov = hoverIdx !== null ? svgPts[hoverIdx] : null;
 
   const fmtVal = (v: number) =>
-    metric === "total_qty" && v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v.toLocaleString();
+    v >= 10000 ? `${(v / 1000).toFixed(0)}k` : v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v.toLocaleString();
 
   return (
     <div>
-      {/* Metric tabs */}
-      <div className="flex gap-1 mb-3">
-        {(Object.keys(TREND_META) as TrendMetric[]).map((m) => (
-          <button
-            key={m}
-            onClick={() => setMetric(m)}
-            className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all duration-200 ${
-              metric === m
-                ? "text-white shadow-sm"
-                : "text-slate-400 hover:text-slate-600 bg-slate-100 hover:bg-slate-200"
-            }`}
-            style={metric === m ? { background: TREND_META[m].color } : {}}
+      {/* Header row: metric tabs + warehouse filter */}
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <div className="flex gap-1">
+          {(Object.keys(TREND_META) as TrendMetric[]).map((m) => (
+            <button key={m} onClick={() => setMetric(m)}
+              className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all duration-150 ${
+                metric === m ? "text-white shadow-sm" : "text-slate-400 bg-slate-100 hover:bg-slate-200"
+              }`}
+              style={metric === m ? { background: TREND_META[m].color } : {}}
+            >
+              {TREND_META[m].label}
+            </button>
+          ))}
+        </div>
+
+        {/* Warehouse filter */}
+        {warehouses.length > 1 && (
+          <select
+            value={filterWh}
+            onChange={(e) => onFilterWh(e.target.value)}
+            className="ml-auto text-xs border border-slate-200 rounded-lg px-2 py-1 text-slate-600 bg-white focus:outline-none focus:ring-1 focus:ring-blue-300"
           >
-            {TREND_META[m].label}
-          </button>
-        ))}
-        <span className="ml-auto text-xs text-slate-400 self-center">
-          Last {data.length} snapshots
-        </span>
+            <option value="">All Warehouses</option>
+            {warehouses.map((wh) => <option key={wh} value={wh}>{wh}</option>)}
+          </select>
+        )}
+
+        {/* Latest stat */}
+        {latest && (
+          <span className="text-xs text-slate-400 ml-auto">
+            Latest <span className="font-semibold text-slate-700">{fmtVal(latest[metric])}</span>
+            {meta.unit}
+            <span className="text-slate-300 mx-1">·</span>
+            {latest.date}
+          </span>
+        )}
       </div>
 
       {/* Chart */}
       <div className="relative">
         <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
           <defs>
-            <linearGradient id={`trendGrad-${metric}`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={meta.color} stopOpacity="0.25" />
-              <stop offset="100%" stopColor={meta.color} stopOpacity="0.02" />
+            <linearGradient id={`tg-${metric}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={meta.color} stopOpacity="0.2" />
+              <stop offset="100%" stopColor={meta.color} stopOpacity="0.01" />
             </linearGradient>
           </defs>
 
-          {/* Gridlines + Y labels */}
           {Array.from({ length: yTicks }).map((_, i) => {
             const vy = padT + (i / (yTicks - 1)) * cH;
             const vv = maxVal - (i / (yTicks - 1)) * range;
             return (
               <g key={i}>
                 <line x1={padL} x2={W - padR} y1={vy} y2={vy}
-                  stroke="#f1f5f9" strokeWidth={1} strokeDasharray={i === yTicks - 1 ? "" : "4,3"} />
-                <text x={padL - 6} y={vy + 4} textAnchor="end" fontSize={9} fill="#94a3b8">{fmtVal(vv)}</text>
+                  stroke="#f1f5f9" strokeWidth={1} strokeDasharray={i === 0 ? "" : "3,3"} />
+                <text x={padL - 5} y={vy + 3.5} textAnchor="end" fontSize={8.5} fill="#94a3b8">{fmtVal(vv)}</text>
               </g>
             );
           })}
 
-          {/* Area fill */}
-          <path d={areaPath} fill={`url(#trendGrad-${metric})`} />
-
-          {/* Line */}
-          <path d={linePath} fill="none" stroke={meta.color} strokeWidth={2}
+          <path d={areaPath} fill={`url(#tg-${metric})`} />
+          <path d={linePath} fill="none" stroke={meta.color} strokeWidth={1.8}
             strokeLinejoin="round" strokeLinecap="round" />
 
-          {/* Hover dot */}
-          {hov && (
-            <circle cx={hov.x} cy={hov.y} r={4} fill={meta.color} stroke="white" strokeWidth={2} />
-          )}
+          {hov && <circle cx={hov.x} cy={hov.y} r={3.5} fill={meta.color} stroke="white" strokeWidth={1.5} />}
 
-          {/* X axis labels */}
-          {data.map((d, i) => {
+          {pts_data.map((d, i) => {
             if (i % xStep !== 0 && i !== n - 1) return null;
             return (
-              <text key={d.date} x={xOf(i)} y={H - 6} textAnchor="middle" fontSize={9} fill="#94a3b8">
+              <text key={d.date} x={xOf(i)} y={H - 4} textAnchor="middle" fontSize={8.5} fill="#94a3b8">
                 {d.date.slice(5)}
               </text>
             );
           })}
 
-          {/* Hover hit areas */}
-          {pts.map((p, i) => {
-            const x0 = i === 0 ? padL : (pts[i - 1].x + p.x) / 2;
-            const x1 = i === n - 1 ? W - padR : (p.x + pts[i + 1].x) / 2;
+          {svgPts.map((p, i) => {
+            const x0 = i === 0 ? padL : (svgPts[i-1].x + p.x) / 2;
+            const x1 = i === n-1 ? W - padR : (p.x + svgPts[i+1].x) / 2;
             return (
-              <rect
-                key={i}
-                x={x0} y={padT} width={x1 - x0} height={cH}
+              <rect key={i} x={x0} y={padT} width={x1 - x0} height={cH}
                 fill="transparent"
                 onMouseEnter={() => setHoverIdx(i)}
                 onMouseLeave={() => setHoverIdx(null)}
@@ -162,23 +187,19 @@ function InventoryTrendChart({ data }: { data: TrendPoint[] }) {
           })}
         </svg>
 
-        {/* Tooltip */}
         {hov && (
-          <div
-            className="absolute pointer-events-none z-10 bg-slate-900 text-white rounded-xl px-3 py-2 shadow-xl"
+          <div className="absolute pointer-events-none z-10 bg-slate-900 text-white rounded-xl px-3 py-2 shadow-xl"
             style={{
               left: `${(hov.x / W) * 100}%`,
               top: `${(hov.y / H) * 100}%`,
-              transform: hov.x > W * 0.7 ? "translate(-110%, -50%)" : "translate(10%, -50%)",
+              transform: hov.x > W * 0.7 ? "translate(-110%,-50%)" : "translate(10%,-50%)",
               fontSize: 11, whiteSpace: "nowrap",
             }}
           >
             <div style={{ fontWeight: 700, color: meta.color }}>{hov[metric].toLocaleString()}{meta.unit}</div>
             <div style={{ color: "#94a3b8", fontSize: 10 }}>{hov.date}</div>
             {metric === "total_qty" && (
-              <div style={{ color: "#64748b", fontSize: 10 }}>
-                {hov.sku_count} SKUs · {hov.location_count} locs
-              </div>
+              <div style={{ color: "#64748b", fontSize: 10 }}>{hov.sku_count} SKUs · {hov.location_count} locs</div>
             )}
           </div>
         )}
@@ -422,6 +443,8 @@ export default function DashboardPage() {
   const [receiving, setReceiving] = useState<Row[]>([]);
   const [inventory, setInventory] = useState<Row[]>([]);
   const [inventoryTrend, setInventoryTrend] = useState<TrendPoint[]>([]);
+  const [trendWarehouses, setTrendWarehouses] = useState<string[]>([]);
+  const [trendFilterWh, setTrendFilterWh] = useState("");
   const [snapshotOccupied, setSnapshotOccupied] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -479,7 +502,7 @@ export default function DashboardPage() {
       setReceiving(parseList(d4, ["data", "list"], ["data"], ["list"], []));
       setInventory(parseList(d5, ["data"], ["data", "list"], ["list"], []));
       setInventoryTrend((dTrend?.trend ?? []) as TrendPoint[]);
-      // Build occupied location set from snapshot (normalized: strip dashes+lowercase)
+      setTrendWarehouses((dTrend?.warehouses ?? []) as string[]);
       const occLocs = (dTrend?.occupied_locations ?? []) as string[];
       setSnapshotOccupied(new Set(occLocs.map((l: string) => l.toLowerCase().replace(/[\s\-_/]+/g, ""))));
       setLastUpdated(new Date());
@@ -732,17 +755,30 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* ── KPI Row 1: 핵심 운영 지표 ── */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
-          <KpiCard label="Pending Receiving" value={pendingReceiving} sub="Scheduled inbound" icon={PackageCheck} accentColor="bg-emerald-500" numColor="text-emerald-600" href="/receiving" animated={animated} delay={0}   size="lg" />
-          <KpiCard label="Pending Shipments" value={pendingShipments} sub="Awaiting dispatch" icon={Truck}        accentColor="bg-amber-500"   numColor="text-amber-600"   href="/shipping"  animated={animated} delay={60}  size="lg" />
-          <KpiCard label="Returns"           value={returns}          sub="Needs review"       icon={RotateCcw}    accentColor="bg-red-500"     numColor="text-red-600"     href="/returns"   animated={animated} delay={120} size="lg" />
+        {/* ── Inventory Trend Chart (TOP) ── */}
+        <div className={`bg-white rounded-2xl border border-slate-100 shadow-sm px-5 pt-4 pb-3 mb-5 transition-all duration-500 ${animated ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}
+          style={{ transitionDelay: "80ms" }}>
+          <div className="flex items-center gap-2 mb-3">
+            <BarChart2 className="w-4 h-4 text-slate-400" />
+            <h2 className="text-sm font-semibold text-slate-700">Inventory Trend</h2>
+            <span className="text-xs text-slate-300 ml-1">Last 45 days</span>
+          </div>
+          <InventoryTrendChart
+            data={inventoryTrend}
+            warehouses={trendWarehouses}
+            filterWh={trendFilterWh}
+            onFilterWh={setTrendFilterWh}
+          />
         </div>
-        {/* ── KPI Row 2: 재고 현황 ── */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-6">
-          <KpiCard label="Total Locations"  value={totalLocations}  sub="Registered slots"               icon={MapPin}     accentColor="bg-blue-500"   numColor="text-blue-600"   href="/inventory" animated={animated} delay={180} size="sm" />
-          <KpiCard label="Total SKUs"       value={totalSKUs}       sub="Distinct products in warehouse" icon={Boxes}      accentColor="bg-purple-500" numColor="text-purple-600" href="/products"  animated={animated} delay={240} size="sm" />
-          <KpiCard label="Total Inventory"  value={totalInventory}  sub="Units currently in stock"       icon={TrendingUp} accentColor="bg-indigo-500" numColor="text-indigo-600" href="/inventory" animated={animated} delay={300} size="sm" />
+
+        {/* ── KPI Row: 6-card compact grid ── */}
+        <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-5">
+          <KpiCard label="Pending Receiving" value={pendingReceiving} sub="Inbound"          icon={PackageCheck} accentColor="bg-emerald-500" numColor="text-emerald-600" href="/receiving" animated={animated} delay={0}   size="sm" />
+          <KpiCard label="Pending Shipments" value={pendingShipments} sub="Dispatch"         icon={Truck}        accentColor="bg-amber-500"   numColor="text-amber-600"   href="/shipping"  animated={animated} delay={40}  size="sm" />
+          <KpiCard label="Returns"           value={returns}          sub="Needs review"      icon={RotateCcw}    accentColor="bg-red-500"     numColor="text-red-600"     href="/returns"   animated={animated} delay={80}  size="sm" />
+          <KpiCard label="Total Locations"   value={totalLocations}   sub="Slots"            icon={MapPin}       accentColor="bg-blue-500"    numColor="text-blue-600"    href="/locations" animated={animated} delay={120} size="sm" />
+          <KpiCard label="Total SKUs"        value={totalSKUs}        sub="Products"         icon={Boxes}        accentColor="bg-purple-500"  numColor="text-purple-600"  href="/products"  animated={animated} delay={160} size="sm" />
+          <KpiCard label="Total Inventory"   value={totalInventory}   sub="Units in stock"   icon={TrendingUp}   accentColor="bg-indigo-500"  numColor="text-indigo-600"  href="/inventory" animated={animated} delay={200} size="sm" />
         </div>
 
         {/* ── Analytics Row ── */}
@@ -920,27 +956,6 @@ export default function DashboardPage() {
               ))}
             </div>
           </div>
-        </div>
-
-        {/* ── Inventory Trend Chart ── */}
-        <div
-          className={`bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-6 transition-all duration-500 ${animated ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}
-          style={{ transitionDelay: "560ms" }}
-        >
-          <div className="flex items-center gap-2 mb-4">
-            <BarChart2 className="w-4 h-4 text-slate-400" />
-            <h2 className="text-sm font-semibold text-slate-700">Inventory Trend</h2>
-            {inventoryTrend.length > 0 && (
-              <span className="text-xs text-slate-400">
-                · Latest{" "}
-                <span className="font-semibold text-slate-600">
-                  {inventoryTrend[inventoryTrend.length - 1]?.total_qty.toLocaleString()} EA
-                </span>
-                {" "}({inventoryTrend[inventoryTrend.length - 1]?.date})
-              </span>
-            )}
-          </div>
-          <InventoryTrendChart data={inventoryTrend} />
         </div>
 
         {/* ── Recent Receiving Orders ── */}
