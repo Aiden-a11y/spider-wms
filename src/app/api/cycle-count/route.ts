@@ -53,15 +53,14 @@ export async function PATCH(req: NextRequest) {
   const id = new URL(req.url).searchParams.get("id");
   if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
 
-  const body = (await req.json()) as { adjusted_by?: string };
-  const { error } = await client
-    .from("cycle_count")
-    .update({
-      adjusted: true,
-      adjusted_by: body.adjusted_by ?? "manager",
-      adjusted_at: new Date().toISOString(),
-    })
-    .eq("id", id);
+  const body = (await req.json()) as { adjusted_by?: string; action?: string };
+
+  const update =
+    body.action === "keep"
+      ? { status: "OK", adjusted_by: body.adjusted_by ?? "manager", adjusted_at: new Date().toISOString() }
+      : { adjusted: true, adjusted_by: body.adjusted_by ?? "manager", adjusted_at: new Date().toISOString() };
+
+  const { error } = await client.from("cycle_count").update(update).eq("id", id);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });

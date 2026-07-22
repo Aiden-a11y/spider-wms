@@ -199,9 +199,11 @@ export default function CycleCountPage() {
   const [filterFrom, setFilterFrom] = useState("");
   const [filterTo, setFilterTo] = useState("");
   const [adjustingIds, setAdjustingIds] = useState<Set<string>>(new Set());
+  const [keepingIds, setKeepingIds] = useState<Set<string>>(new Set());
 
   /* ── Confirm modal state ── */
   const [confirmRec, setConfirmRec] = useState<CycleRecord | null>(null);
+  const [modalAction, setModalAction] = useState<"adjust" | "keep">("adjust");
   const [modalStep, setModalStep] = useState<"confirm" | "passcode">("confirm");
   const [passcode, setPasscode] = useState("");
   const [passcodeError, setPasscodeError] = useState(false);
@@ -252,6 +254,15 @@ export default function CycleCountPage() {
   /* ── Open confirm modal ── */
   function handleMarkClick(rec: CycleRecord) {
     setConfirmRec(rec);
+    setModalAction("adjust");
+    setModalStep("confirm");
+    setPasscode("");
+    setPasscodeError(false);
+  }
+
+  function handleKeepClick(rec: CycleRecord) {
+    setConfirmRec(rec);
+    setModalAction("keep");
     setModalStep("confirm");
     setPasscode("");
     setPasscodeError(false);
@@ -267,7 +278,8 @@ export default function CycleCountPage() {
     if (passcode === "2025") {
       const id = confirmRec!.id;
       closeModal();
-      markAdjusted(id);
+      if (modalAction === "keep") keepAsIs(id);
+      else markAdjusted(id);
     } else {
       setPasscodeError(true);
       setPasscode("");
@@ -352,6 +364,26 @@ export default function CycleCountPage() {
       alert(`Adjustment failed: ${e instanceof Error ? e.message : String(e)}`);
     }
     setAdjustingIds((prev) => { const s = new Set(prev); s.delete(id); return s; });
+  }
+
+  /* ── Keep as-is (status → OK, no WMS adjust) ── */
+  async function keepAsIs(id: string) {
+    setKeepingIds((prev) => new Set(prev).add(id));
+    try {
+      await fetch(`/api/cycle-count?id=${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "keep", adjusted_by: user?.userId ?? "manager" }),
+      });
+      setRecords((prev) =>
+        prev.map((r) =>
+          r.id === id ? { ...r, status: "OK" as Status } : r
+        )
+      );
+    } catch (e) {
+      alert(`Failed to keep: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    setKeepingIds((prev) => { const s = new Set(prev); s.delete(id); return s; });
   }
 
   /* ── Warehouses from records ── */
@@ -546,15 +578,26 @@ export default function CycleCountPage() {
                         </td>
                         <td className="px-4 py-3">
                           {r.status !== "OK" && !r.adjusted && (
-                            <button
-                              onClick={() => handleMarkClick(r)}
-                              disabled={adjustingIds.has(r.id)}
-                              className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold disabled:opacity-50 transition-colors whitespace-nowrap"
-                            >
-                              {adjustingIds.has(r.id) ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : "Mark Adjusted"}
-                            </button>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => handleMarkClick(r)}
+                                disabled={adjustingIds.has(r.id) || keepingIds.has(r.id)}
+                                className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold disabled:opacity-50 transition-colors whitespace-nowrap"
+                              >
+                                {adjustingIds.has(r.id) ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                ) : "Mark Adjusted"}
+                              </button>
+                              <button
+                                onClick={() => handleKeepClick(r)}
+                                disabled={adjustingIds.has(r.id) || keepingIds.has(r.id)}
+                                className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold disabled:opacity-50 transition-colors whitespace-nowrap"
+                              >
+                                {keepingIds.has(r.id) ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                ) : "Keep"}
+                              </button>
+                            </div>
                           )}
                         </td>
                       </tr>
@@ -577,9 +620,13 @@ export default function CycleCountPage() {
             {modalStep === "confirm" ? (
               <>
                 <div className="px-6 pt-6 pb-4">
-                  <h2 className="text-base font-bold text-slate-800 mb-1">Confirm Adjustment</h2>
+                  <h2 className="text-base font-bold text-slate-800 mb-1">
+                    {modalAction === "keep" ? "Keep As-Is" : "Confirm Adjustment"}
+                  </h2>
                   <p className="text-sm text-slate-500 mb-4">
-                    Are you sure you want to adjust inventory for this record?
+                    {modalAction === "keep"
+                      ? "Are you sure? This will mark the record as OK without adjusting inventory."
+                      : "Are you sure you want to adjust inventory for this record?"}
                   </p>
                   <div className="bg-slate-50 rounded-xl p-3 space-y-1 text-xs">
                     <div className="flex justify-between">
