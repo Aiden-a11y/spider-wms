@@ -198,7 +198,13 @@ export default function CycleCountPage() {
   const [filterStatus, setFilterStatus] = useState("ALL");
   const [filterFrom, setFilterFrom] = useState("");
   const [filterTo, setFilterTo] = useState("");
-  const [adjustingId, setAdjustingId] = useState<string | null>(null);
+  const [adjustingIds, setAdjustingIds] = useState<Set<string>>(new Set());
+
+  /* ── Confirm modal state ── */
+  const [confirmRec, setConfirmRec] = useState<CycleRecord | null>(null);
+  const [modalStep, setModalStep] = useState<"confirm" | "passcode">("confirm");
+  const [passcode, setPasscode] = useState("");
+  const [passcodeError, setPasscodeError] = useState(false);
 
   /* ── Analytics state ── */
   const [allRecords, setAllRecords] = useState<CycleRecord[]>([]);
@@ -243,11 +249,36 @@ export default function CycleCountPage() {
     if (tab === "analytics" && allRecords.length === 0) fetchAll();
   }, [tab, allRecords.length, fetchAll]);
 
+  /* ── Open confirm modal ── */
+  function handleMarkClick(rec: CycleRecord) {
+    setConfirmRec(rec);
+    setModalStep("confirm");
+    setPasscode("");
+    setPasscodeError(false);
+  }
+
+  function closeModal() {
+    setConfirmRec(null);
+    setPasscode("");
+    setPasscodeError(false);
+  }
+
+  function handlePasscodeSubmit() {
+    if (passcode === "2025") {
+      const id = confirmRec!.id;
+      closeModal();
+      markAdjusted(id);
+    } else {
+      setPasscodeError(true);
+      setPasscode("");
+    }
+  }
+
   /* ── Mark adjusted (+ WMS inventory adjust) ── */
   async function markAdjusted(id: string) {
     const rec = records.find((r) => r.id === id);
     if (!rec || !user?.token) return;
-    setAdjustingId(id);
+    setAdjustingIds((prev) => new Set(prev).add(id));
 
     const wmsHeaders = {
       Authorization: `Bearer ${user.token}`,
@@ -320,7 +351,7 @@ export default function CycleCountPage() {
     } catch (e) {
       alert(`Adjustment failed: ${e instanceof Error ? e.message : String(e)}`);
     }
-    setAdjustingId(null);
+    setAdjustingIds((prev) => { const s = new Set(prev); s.delete(id); return s; });
   }
 
   /* ── Warehouses from records ── */
@@ -516,11 +547,11 @@ export default function CycleCountPage() {
                         <td className="px-4 py-3">
                           {r.status !== "OK" && !r.adjusted && (
                             <button
-                              onClick={() => markAdjusted(r.id)}
-                              disabled={adjustingId === r.id}
+                              onClick={() => handleMarkClick(r)}
+                              disabled={adjustingIds.has(r.id)}
                               className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold disabled:opacity-50 transition-colors whitespace-nowrap"
                             >
-                              {adjustingId === r.id ? (
+                              {adjustingIds.has(r.id) ? (
                                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
                               ) : "Mark Adjusted"}
                             </button>
@@ -536,6 +567,95 @@ export default function CycleCountPage() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── CONFIRM / PASSCODE MODAL ── */}
+      {confirmRec && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden">
+            {modalStep === "confirm" ? (
+              <>
+                <div className="px-6 pt-6 pb-4">
+                  <h2 className="text-base font-bold text-slate-800 mb-1">Confirm Adjustment</h2>
+                  <p className="text-sm text-slate-500 mb-4">
+                    Are you sure you want to adjust inventory for this record?
+                  </p>
+                  <div className="bg-slate-50 rounded-xl p-3 space-y-1 text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">SKU</span>
+                      <span className="font-mono font-semibold text-slate-800">{confirmRec.sku}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Location</span>
+                      <span className="font-mono text-slate-700">{confirmRec.location}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Difference</span>
+                      <span className={`font-bold ${confirmRec.difference > 0 ? "text-blue-600" : "text-red-600"}`}>
+                        {confirmRec.difference > 0 ? `+${confirmRec.difference}` : confirmRec.difference}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Status</span>
+                      <StatusBadge status={confirmRec.status} />
+                    </div>
+                  </div>
+                </div>
+                <div className="px-6 pb-6 flex gap-3">
+                  <button
+                    onClick={closeModal}
+                    className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => setModalStep("passcode")}
+                    className="flex-1 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold transition-colors"
+                  >
+                    OK
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="px-6 pt-6 pb-4">
+                  <h2 className="text-base font-bold text-slate-800 mb-1">Enter Passcode</h2>
+                  <p className="text-sm text-slate-500 mb-4">Enter the manager passcode to proceed.</p>
+                  <input
+                    type="password"
+                    value={passcode}
+                    onChange={(e) => { setPasscode(e.target.value); setPasscodeError(false); }}
+                    onKeyDown={(e) => e.key === "Enter" && handlePasscodeSubmit()}
+                    placeholder="Passcode"
+                    autoFocus
+                    className={`w-full px-4 py-2.5 rounded-xl border text-sm text-slate-800 focus:outline-none focus:ring-2 transition-colors ${
+                      passcodeError
+                        ? "border-red-400 focus:ring-red-200 bg-red-50"
+                        : "border-slate-200 focus:ring-blue-200"
+                    }`}
+                  />
+                  {passcodeError && (
+                    <p className="text-xs text-red-500 mt-1.5">Incorrect passcode. Please try again.</p>
+                  )}
+                </div>
+                <div className="px-6 pb-6 flex gap-3">
+                  <button
+                    onClick={() => { setModalStep("confirm"); setPasscode(""); setPasscodeError(false); }}
+                    className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
+                  >
+                    Back
+                  </button>
+                  <button
+                    onClick={handlePasscodeSubmit}
+                    className="flex-1 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold transition-colors"
+                  >
+                    Confirm
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
 
