@@ -243,23 +243,83 @@ export default function CycleCountPage() {
     if (tab === "analytics" && allRecords.length === 0) fetchAll();
   }, [tab, allRecords.length, fetchAll]);
 
-  /* ── Mark adjusted ── */
+  /* ── Mark adjusted (+ WMS inventory adjust) ── */
   async function markAdjusted(id: string) {
+    const rec = records.find((r) => r.id === id);
+    if (!rec || !user?.token) return;
     setAdjustingId(id);
+
+    const wmsHeaders = {
+      Authorization: `Bearer ${user.token}`,
+      "Content-Type": "application/json",
+    };
+
     try {
+      // Step 1: location-search to register location in WMS session + get warehouseCd
+      let warehouseCd = "";
+      try {
+        const locRes = await fetch("/api/wms/warehouse/location-search", {
+          method: "POST",
+          headers: wmsHeaders,
+          body: JSON.stringify({
+            warehouseCode: rec.warehouse_code,
+            search: rec.location.replace(/-/g, ""),
+          }),
+        });
+        if (locRes.ok) {
+          const locJson = await locRes.json();
+          const arr: Record<string, unknown>[] = Array.isArray(locJson?.data)
+            ? locJson.data
+            : Array.isArray(locJson?.data?.list) ? locJson.data.list : [];
+          if (arr.length > 0 && arr[0].warehouseCd) {
+            warehouseCd = String(arr[0].warehouseCd);
+          }
+        }
+      } catch { /* non-fatal */ }
+
+      // Step 2: inventory/adjust with the difference as adjustQty
+      const adjustPayload: Record<string, unknown> = {
+        customerCode:  rec.customer_code ?? "",
+        warehouseCode: rec.warehouse_code,
+        adjustQty:     rec.difference,
+        adjustType:    "N",
+        expireDate:    rec.expire_date ? rec.expire_date.replace(/-/g, "") : "",
+        itemCondition: "GOOD",
+        lotNo:         rec.lot ?? "",
+        productSku:    rec.sku,
+        remark:        `Cycle count adjustment by ${user.userId ?? "manager"}`,
+        serialNo:      "",
+      };
+      if (warehouseCd) adjustPayload.warehouseCd = warehouseCd;
+      Object.keys(adjustPayload).forEach((k) => adjustPayload[k] === undefined && delete adjustPayload[k]);
+
+      const adjRes = await fetch("/api/wms/inventory/adjust", {
+        method: "POST",
+        headers: wmsHeaders,
+        body: JSON.stringify(adjustPayload),
+      });
+      const adjJson = await adjRes.json().catch(() => null) as Record<string, unknown> | null;
+      if (!adjRes.ok || adjJson?.isSuccess === false || adjJson?.success === false) {
+        throw new Error(String(adjJson?.message ?? adjJson?.msg ?? `Adjust failed (HTTP ${adjRes.status})`));
+      }
+
+      // Step 3: mark adjusted in Supabase
       await fetch(`/api/cycle-count?id=${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ adjusted_by: user?.userId ?? "manager" }),
+        body: JSON.stringify({ adjusted_by: user.userId ?? "manager" }),
       });
+
       setRecords((prev) =>
         prev.map((r) =>
           r.id === id
-            ? { ...r, adjusted: true, adjusted_by: user?.userId ?? "manager", adjusted_at: new Date().toISOString() }
+            ? { ...r, adjusted: true, adjusted_by: user.userId ?? "manager", adjusted_at: new Date().toISOString() }
             : r
         )
       );
-    } catch { /* silent */ }
+    } catch (e) {
+      alert(`Adjustment failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
     setAdjustingId(null);
   }
 
