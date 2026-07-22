@@ -124,8 +124,8 @@ function StatusBadge({ status }: { status: Status }) {
 /* ─── bar chart ──────────────────────────────────────────────── */
 function BarChart({ buckets }: { buckets: Bucket[] }) {
   if (buckets.length === 0) return null;
-  const W = 600; const H = 180;
-  const PL = 40; const PR = 16; const PT = 16; const PB = 36;
+  const W = 700; const H = 130;
+  const PL = 36; const PR = 12; const PT = 12; const PB = 30;
   const chartW = W - PL - PR;
   const chartH = H - PT - PB;
   const maxVal = Math.max(1, ...buckets.map((b) => Math.max(b.ok, b.discrepancy)));
@@ -172,9 +172,9 @@ function BarChart({ buckets }: { buckets: Bucket[] }) {
             {/* X label */}
             <text
               x={cx}
-              y={H - 4}
+              y={PT + chartH + 14}
               textAnchor="middle"
-              fontSize="8"
+              fontSize="7.5"
               fill="#94a3b8"
             >
               {b.label}
@@ -182,13 +182,6 @@ function BarChart({ buckets }: { buckets: Bucket[] }) {
           </g>
         );
       })}
-      {/* Legend */}
-      <g transform={`translate(${PL},${H - PB + 22})`}>
-        <rect width="8" height="8" rx="1" fill="#22c55e" opacity="0.85" />
-        <text x="11" y="8" fontSize="8" fill="#64748b">OK</text>
-        <rect x="36" width="8" height="8" rx="1" fill="#f97316" opacity="0.85" />
-        <text x="47" y="8" fontSize="8" fill="#64748b">Discrepancy</text>
-      </g>
     </svg>
   );
 }
@@ -515,7 +508,7 @@ export default function CycleCountPage() {
           </div>
 
           {/* KPI cards */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <KpiCard
               label="Total Counts"
               value={kpi.total.toLocaleString()}
@@ -546,20 +539,34 @@ export default function CycleCountPage() {
           </div>
 
           {/* Bar chart */}
-          <div className="bg-white rounded-xl border border-slate-200 p-6">
-            <h3 className="text-sm font-semibold text-slate-700 mb-4">
+          <div className="bg-white rounded-xl border border-slate-200 p-4">
+            <h3 className="text-sm font-semibold text-slate-700 mb-3">
               {period === "week" ? "Weekly" : "Monthly"} Cycle Count Volume
             </h3>
             {loadingAll ? (
-              <div className="flex items-center justify-center h-40 text-slate-400">
+              <div className="flex items-center justify-center h-28 text-slate-400">
                 <Loader2 className="w-5 h-5 animate-spin mr-2" />Loading chart…
               </div>
             ) : allRecords.length === 0 ? (
-              <div className="flex items-center justify-center h-40 text-slate-400 text-sm">
+              <div className="flex items-center justify-center h-28 text-slate-400 text-sm">
                 No data available
               </div>
             ) : (
-              <BarChart buckets={buckets} />
+              <>
+                <div style={{ maxHeight: "150px" }}>
+                  <BarChart buckets={buckets} />
+                </div>
+                <div className="flex items-center gap-4 mt-1.5 px-1">
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-2.5 h-2.5 rounded-sm bg-green-500 opacity-85" />
+                    <span className="text-xs text-slate-500">OK</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-2.5 h-2.5 rounded-sm bg-orange-500 opacity-85" />
+                    <span className="text-xs text-slate-500">Discrepancy</span>
+                  </div>
+                </div>
+              </>
             )}
           </div>
         </div>
@@ -573,13 +580,15 @@ function KpiCard({ label, value, icon, bg, sub }: {
   label: string; value: string; icon: React.ReactNode; bg: string; sub?: string;
 }) {
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-5">
-      <div className={`w-9 h-9 rounded-lg flex items-center justify-center mb-3 ${bg}`}>
+    <div className="bg-white rounded-xl border border-slate-200 p-4 flex items-center gap-3">
+      <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${bg}`}>
         {icon}
       </div>
-      <p className="text-2xl font-bold text-slate-900">{value}</p>
-      <p className="text-xs font-semibold text-slate-500 mt-0.5">{label}</p>
-      {sub && <p className="text-xs text-slate-400 mt-0.5">{sub}</p>}
+      <div className="min-w-0">
+        <p className="text-sm font-semibold text-slate-600 truncate">{label}</p>
+        <p className="text-lg font-bold text-slate-900 leading-tight">{value}</p>
+        {sub && <p className="text-[11px] text-slate-400 truncate">{sub}</p>}
+      </div>
     </div>
   );
 }
