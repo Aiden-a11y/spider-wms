@@ -131,11 +131,11 @@ function BarChart({ buckets }: { buckets: Bucket[] }) {
   const maxVal = Math.max(1, ...buckets.map((b) => Math.max(b.ok, b.discrepancy)));
   const yMax = Math.ceil(maxVal * 1.2);
   const bw = chartW / buckets.length;
-  const barW = Math.max(4, bw * 0.36);
+  const barW = Math.max(3, bw * 0.18);
   const yTicks = [0, Math.ceil(yMax / 2), yMax];
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ overflow: "visible" }}>
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "150px", display: "block" }}>
       {/* Y grid + labels */}
       {yTicks.map((t) => {
         const y = PT + chartH - (t / yMax) * chartH;
@@ -553,9 +553,7 @@ export default function CycleCountPage() {
               </div>
             ) : (
               <>
-                <div style={{ maxHeight: "150px" }}>
-                  <BarChart buckets={buckets} />
-                </div>
+                <BarChart buckets={buckets} />
                 <div className="flex items-center gap-4 mt-1.5 px-1">
                   <div className="flex items-center gap-1.5">
                     <div className="w-2.5 h-2.5 rounded-sm bg-green-500 opacity-85" />
@@ -585,8 +583,8 @@ function KpiCard({ label, value, icon, bg, sub }: {
         {icon}
       </div>
       <div className="min-w-0">
-        <p className="text-sm font-semibold text-slate-600 truncate">{label}</p>
-        <p className="text-lg font-bold text-slate-900 leading-tight">{value}</p>
+        <p className="text-base font-semibold text-slate-700 truncate">{label}</p>
+        <p className="text-sm font-bold text-slate-900 leading-tight">{value}</p>
         {sub && <p className="text-[11px] text-slate-400 truncate">{sub}</p>}
       </div>
     </div>
