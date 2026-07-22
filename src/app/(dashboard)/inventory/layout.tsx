@@ -2,12 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Package, RefreshCw, AlertTriangle, ClipboardList } from "lucide-react";
+import { Package, ClipboardList } from "lucide-react";
 
 const TABS = [
   { href: "/inventory", label: "Inventory", icon: Package },
-  { href: "/inventory/replenishment", label: "Replenishment", icon: RefreshCw },
-  { href: "/inventory/conflicts", label: "Conflicts", icon: AlertTriangle },
   { href: "/inventory/cycle-count", label: "Cycle Count", icon: ClipboardList },
 ];
 
