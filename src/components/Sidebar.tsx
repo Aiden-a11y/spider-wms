@@ -56,6 +56,7 @@ const nav: NavItem[] = [
       { href: "/inventory/replenishment", label: "Replenishment", icon: ArrowDownToLine },
       { href: "/history", label: "History", icon: History },
       { href: "/inventory/conflicts", label: "Location Conflicts", icon: AlertTriangle },
+      { href: "/inventory/cycle-count", label: "Cycle Count", icon: ClipboardList },
     ],
   },
   { href: "/products", label: "Products", icon: Package, children: undefined },
