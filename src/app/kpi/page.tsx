@@ -3,185 +3,141 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import { useRouter } from "next/navigation";
-import {
-  Maximize2, Minimize2, RefreshCw, X, Boxes, Package,
-  MapPin, Truck, Building2, User, Layers, Clock, TrendingUp,
-  CheckCircle2, AlertCircle, Loader2,
-} from "lucide-react";
+import { Maximize2, Minimize2, RefreshCw, X, Loader2 } from "lucide-react";
 import type { B2CCluster } from "@/lib/b2c-cluster";
 
-/* ─── types ─────────────────────────────────────────────────── */
-type Row = Record<string, unknown>;
+/* ─── constants ─────────────────────────────────────────────── */
+const BG       = "#0d1117";
+const CARD_BG  = "#161c27";
+const BORDER   = "#1e2a3a";
+const TEXT_DIM = "#6b7a90";
+const REFRESH_SEC = 120;
 
-const SHIPPING_STATUS: Record<string, { label: string; color: string; bg: string; dot: string }> = {
-  AA: { label: "Outbound Req",      color: "#ca8a04", bg: "rgba(234,179,8,0.12)",   dot: "#eab308" },
-  CA: { label: "Packing Req",       color: "#3b82f6", bg: "rgba(59,130,246,0.12)",  dot: "#3b82f6" },
-  DA: { label: "Packing Complete",  color: "#06b6d4", bg: "rgba(6,182,212,0.12)",   dot: "#06b6d4" },
-  AR: { label: "Auto Label Req",    color: "#8b5cf6", bg: "rgba(139,92,246,0.12)",  dot: "#8b5cf6" },
-  AC: { label: "Auto Label Comp",   color: "#6366f1", bg: "rgba(99,102,241,0.12)",  dot: "#6366f1" },
-  LR: { label: "Twinny Pack Req",   color: "#f59e0b", bg: "rgba(245,158,11,0.12)",  dot: "#f59e0b" },
-  LC: { label: "Twinny Pack Comp",  color: "#14b8a6", bg: "rgba(20,184,166,0.12)",  dot: "#14b8a6" },
-  HA: { label: "Hold",              color: "#ef4444", bg: "rgba(239,68,68,0.12)",   dot: "#ef4444" },
-  CC: { label: "Cancelled",         color: "#64748b", bg: "rgba(100,116,139,0.12)", dot: "#64748b" },
-  FA: { label: "Complete",          color: "#22c55e", bg: "rgba(34,197,94,0.12)",   dot: "#22c55e" },
+const STATUS_CFG: Record<string, { label: string; color: string }> = {
+  AA: { label: "Outbound Req",     color: "#f59e0b" },
+  CA: { label: "Packing Req",      color: "#3b82f6" },
+  DA: { label: "Packing Complete", color: "#06b6d4" },
+  AR: { label: "Auto Label Req",   color: "#8b5cf6" },
+  AC: { label: "Auto Label Comp",  color: "#6366f1" },
+  LR: { label: "Twinny Pack Req",  color: "#f97316" },
+  L2: { label: "Twinny Cancel",    color: "#ef4444" },
+  LC: { label: "Twinny Pack Comp", color: "#14b8a6" },
+  HA: { label: "Hold",             color: "#ef4444" },
+  CC: { label: "Cancelled",        color: "#475569" },
+  FA: { label: "Complete",         color: "#22c55e" },
 };
-const ACTIVE_STATUSES = ["AA","CA","DA","AR","AC","LR","LC","HA"];
-
-function fmtDate(d: Date) {
-  return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`;
-}
-function isoDate(iso: string) {
-  return (iso ?? "").slice(0, 10);
-}
-function todayStr() { return new Date().toISOString().slice(0, 10); }
-function yesterdayStr() {
-  const d = new Date(); d.setDate(d.getDate() - 1);
-  return d.toISOString().slice(0, 10);
-}
+const ACTIVE_S = ["AA","CA","DA","AR","AC","LR","L2","LC","HA"];
+const STATUS_ORDER = ["AA","CA","DA","AR","AC","LR","L2","LC","HA","CC","FA"];
 
 /* ─── helpers ────────────────────────────────────────────────── */
-function arrOf(json: unknown): Row[] {
+function arrOf(json: unknown): Record<string, unknown>[] {
   const j = json as Record<string, unknown>;
   const d = j?.data as Record<string, unknown> | undefined;
   const list = d?.list ?? d?.items ?? (Array.isArray(d) ? d : null)
     ?? j?.list ?? j?.items ?? (Array.isArray(json) ? json : []);
-  return Array.isArray(list) ? (list as Row[]) : [];
+  return Array.isArray(list) ? (list as Record<string, unknown>[]) : [];
 }
 
-function orderDateOf(o: Row): string {
+function orderDateOf(o: Record<string, unknown>): string {
   const raw = String(o.orderDate ?? o.requestDate ?? o.shippingDate ?? o.createdAt ?? "");
   if (!raw) return "";
-  if (raw.length === 8 && /^\d{8}$/.test(raw)) {
-    return `${raw.slice(0,4)}-${raw.slice(4,6)}-${raw.slice(6,8)}`;
-  }
+  if (/^\d{8}$/.test(raw)) return `${raw.slice(0,4)}-${raw.slice(4,6)}-${raw.slice(6,8)}`;
   return raw.slice(0, 10);
 }
 
-function statusOf(o: Row): string {
+function statusOf(o: Record<string, unknown>): string {
   return String(o.status ?? o.orderStatus ?? "");
 }
 
-function groupByStatus(orders: Row[]): Record<string, number> {
-  const map: Record<string, number> = {};
-  for (const o of orders) {
-    const s = statusOf(o);
-    if (s) map[s] = (map[s] ?? 0) + 1;
-  }
-  return map;
-}
+function todayISO()     { return new Date().toISOString().slice(0,10); }
+function yesterdayISO() { const d=new Date(); d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); }
+function isoOf(s: string) { return s.slice(0,10); }
 
-/* ─── clock ────────────────────────────────────────────────── */
+/* ─── clock ──────────────────────────────────────────────────── */
 function useClock() {
   const [now, setNow] = useState(new Date());
-  useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(id);
-  }, []);
+  useEffect(() => { const id = setInterval(()=>setNow(new Date()), 1000); return ()=>clearInterval(id); }, []);
   return now;
 }
 
-/* ─── cluster calc ──────────────────────────────────────────── */
-function clusterStats(cluster: B2CCluster) {
-  const start = new Date(cluster.createdAt);
-  const end = cluster.completedAt ? new Date(cluster.completedAt) : null;
-  const durationMs = end ? end.getTime() - start.getTime() : null;
-  const durationHr = durationMs ? durationMs / 3600000 : null;
-  const totalOrders = cluster.bins.length;
-  const totalUnits = cluster.bins.reduce(
-    (s, bin) => s + bin.items.reduce((ss, item) => ss + (item.qty ?? 0), 0), 0
-  );
-  const unitsPerHr = durationHr && durationHr > 0 ? Math.round(totalUnits / durationHr) : null;
-  const ordersPerHr = durationHr && durationHr > 0 ? Math.round(totalOrders / durationHr) : null;
-  const durationMin = durationMs ? Math.round(durationMs / 60000) : null;
-  return { totalOrders, totalUnits, unitsPerHr, ordersPerHr, durationMin };
+/* ─── cluster calc ───────────────────────────────────────────── */
+function clusterStats(c: B2CCluster) {
+  const start   = new Date(c.createdAt);
+  const end     = c.completedAt ? new Date(c.completedAt) : null;
+  const ms      = end ? end.getTime()-start.getTime() : null;
+  const hr      = ms ? ms/3600000 : null;
+  const orders  = c.bins.length;
+  const units   = c.bins.reduce((s,b)=>s+b.items.reduce((ss,i)=>ss+(i.qty??0),0),0);
+  const uph     = hr && hr>0 ? Math.round(units/hr) : null;
+  const oph     = hr && hr>0 ? Math.round(orders/hr) : null;
+  const minTotal= ms ? Math.round(ms/60000) : null;
+  return { orders, units, uph, oph, minTotal };
 }
 
 /* ─── components ─────────────────────────────────────────────── */
-function KpiTile({
-  label, value, sub, icon: Icon, accent,
-}: {
-  label: string; value: string | number; sub?: string;
-  icon: React.ElementType; accent: string;
+function BigTile({ label, value, sub, accentColor }: {
+  label: string; value: string|number; sub?: string; accentColor: string;
 }) {
   return (
-    <div className="rounded-2xl p-5 flex flex-col gap-2" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}>
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: "rgba(148,163,184,1)" }}>{label}</span>
-        <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: `${accent}22` }}>
-          <Icon className="w-4 h-4" style={{ color: accent }} />
-        </div>
-      </div>
-      <p className="text-4xl font-black text-white leading-none tabular-nums">{typeof value === "number" ? value.toLocaleString() : value}</p>
-      {sub && <p className="text-xs text-slate-400">{sub}</p>}
+    <div style={{ background: CARD_BG, border: `1px solid ${BORDER}`, borderTop: `3px solid ${accentColor}`, borderRadius: 12, padding: "20px 20px 16px" }}>
+      <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: TEXT_DIM, marginBottom: 8 }}>{label}</p>
+      <p style={{ fontSize: 40, fontWeight: 900, color: "#fff", lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>{typeof value==="number"?value.toLocaleString():value}</p>
+      {sub && <p style={{ fontSize: 12, color: TEXT_DIM, marginTop: 6 }}>{sub}</p>}
     </div>
   );
 }
 
-function OrderPanel({
-  title, icon: Icon, accent, todayOrders, yestOrders,
-}: {
-  title: string; icon: React.ElementType; accent: string;
-  todayOrders: Row[]; yestOrders: Row[];
-}) {
-  const todayByStatus = useMemo(() => groupByStatus(todayOrders), [todayOrders]);
-  const yestPending = useMemo(() => yestOrders.filter(o => ACTIVE_STATUSES.includes(statusOf(o))), [yestOrders]);
-  const yestPendingByStatus = useMemo(() => groupByStatus(yestPending), [yestPending]);
+function StatusRow({ code, count, type }: { code: string; count: number; type: "today"|"yest" }) {
+  const cfg = STATUS_CFG[code] ?? { label: code, color: "#94a3b8" };
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:8, padding:"5px 10px", borderRadius:6, background:`${cfg.color}14`, marginBottom:3 }}>
+      <span style={{ width:7, height:7, borderRadius:"50%", background:cfg.color, flexShrink:0 }} />
+      <span style={{ fontSize:12, color: cfg.color, flex:1 }}>{code} · {cfg.label}</span>
+      <span style={{ fontSize:13, fontWeight:800, color: type==="yest" ? "#fbbf24" : "#fff", fontVariantNumeric:"tabular-nums" }}>{count}</span>
+    </div>
+  );
+}
 
-  const todayActive = todayOrders.filter(o => ACTIVE_STATUSES.includes(statusOf(o))).length;
-  const todayComplete = todayOrders.filter(o => statusOf(o) === "FA").length;
+function OrderPanel({ title, accentColor, todayOrders, yestOrders }: {
+  title: string; accentColor: string;
+  todayOrders: Record<string,unknown>[];
+  yestOrders:  Record<string,unknown>[];
+}) {
+  const todayMap  = useMemo(()=>{ const m:Record<string,number>={}; todayOrders.forEach(o=>{const s=statusOf(o); m[s]=(m[s]??0)+1;}); return m; }, [todayOrders]);
+  const yestPend  = useMemo(()=>yestOrders.filter(o=>ACTIVE_S.includes(statusOf(o))), [yestOrders]);
+  const yestMap   = useMemo(()=>{ const m:Record<string,number>={}; yestPend.forEach(o=>{const s=statusOf(o); m[s]=(m[s]??0)+1;}); return m; }, [yestPend]);
+  const todayDone = todayOrders.filter(o=>statusOf(o)==="FA").length;
+  const todayActive= todayOrders.filter(o=>ACTIVE_S.includes(statusOf(o))).length;
 
   return (
-    <div className="rounded-2xl overflow-hidden flex flex-col" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
+    <div style={{ background: CARD_BG, border:`1px solid ${BORDER}`, borderTop:`3px solid ${accentColor}`, borderRadius:12, overflow:"hidden", display:"flex", flexDirection:"column" }}>
       {/* header */}
-      <div className="px-4 py-3 flex items-center gap-2" style={{ borderBottom: "1px solid rgba(255,255,255,0.07)", background: `${accent}18` }}>
-        <Icon className="w-4 h-4" style={{ color: accent }} />
-        <span className="text-sm font-bold text-white">{title}</span>
-        <div className="ml-auto flex items-center gap-3">
-          <span className="text-xs text-slate-400">Today: <span className="text-white font-bold">{todayOrders.length}</span></span>
-          <span className="text-xs" style={{ color: "#22c55e" }}>Done: <span className="font-bold">{todayComplete}</span></span>
-          <span className="text-xs text-amber-400">Active: <span className="font-bold">{todayActive}</span></span>
-        </div>
+      <div style={{ padding:"12px 16px", borderBottom:`1px solid ${BORDER}`, display:"flex", alignItems:"center", gap:12 }}>
+        <p style={{ fontSize:13, fontWeight:800, color:"#fff", flex:1 }}>{title}</p>
+        <span style={{ fontSize:12, color: TEXT_DIM }}>Today <strong style={{ color:"#fff" }}>{todayOrders.length}</strong></span>
+        <span style={{ fontSize:12, color:"#22c55e" }}>Done <strong>{todayDone}</strong></span>
+        <span style={{ fontSize:12, color:"#f59e0b" }}>Active <strong>{todayActive}</strong></span>
+        {yestPend.length>0 && <span style={{ fontSize:12, color:"#ef4444" }}>Yest Pending <strong>{yestPend.length}</strong></span>}
       </div>
-
-      <div className="flex flex-1 min-h-0">
-        {/* Today */}
-        <div className="flex-1 p-3 space-y-1.5" style={{ borderRight: "1px solid rgba(255,255,255,0.06)" }}>
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500 mb-2">Today by Status</p>
-          {Object.entries(SHIPPING_STATUS).map(([code, meta]) => {
-            const cnt = todayByStatus[code] ?? 0;
-            if (!cnt) return null;
-            return (
-              <div key={code} className="flex items-center gap-2 rounded-lg px-2 py-1" style={{ background: meta.bg }}>
-                <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: meta.dot }} />
-                <span className="text-xs flex-1 truncate" style={{ color: meta.color }}>{code} · {meta.label}</span>
-                <span className="text-xs font-bold text-white tabular-nums">{cnt}</span>
-              </div>
-            );
+      {/* body: two columns */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", flex:1 }}>
+        <div style={{ padding:"12px 12px", borderRight:`1px solid ${BORDER}` }}>
+          <p style={{ fontSize:10, fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", color:TEXT_DIM, marginBottom:8 }}>Today</p>
+          {STATUS_ORDER.map(code=>{
+            const cnt=todayMap[code]??0;
+            if(!cnt) return null;
+            return <StatusRow key={code} code={code} count={cnt} type="today" />;
           })}
-          {Object.keys(todayByStatus).length === 0 && (
-            <p className="text-xs text-slate-600 py-4 text-center">No orders today</p>
-          )}
+          {Object.keys(todayMap).length===0 && <p style={{ fontSize:12, color:TEXT_DIM, padding:"8px 0" }}>No orders today</p>}
         </div>
-
-        {/* Yesterday pending */}
-        <div className="flex-1 p-3 space-y-1.5">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500 mb-2">
-            Yesterday Pending <span className="text-amber-400">({yestPending.length})</span>
-          </p>
-          {Object.entries(SHIPPING_STATUS).filter(([c]) => ACTIVE_STATUSES.includes(c)).map(([code, meta]) => {
-            const cnt = yestPendingByStatus[code] ?? 0;
-            if (!cnt) return null;
-            return (
-              <div key={code} className="flex items-center gap-2 rounded-lg px-2 py-1" style={{ background: meta.bg }}>
-                <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: meta.dot }} />
-                <span className="text-xs flex-1 truncate" style={{ color: meta.color }}>{code} · {meta.label}</span>
-                <span className="text-xs font-bold text-amber-300 tabular-nums">{cnt}</span>
-              </div>
-            );
+        <div style={{ padding:"12px 12px" }}>
+          <p style={{ fontSize:10, fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", color:TEXT_DIM, marginBottom:8 }}>Yesterday Pending</p>
+          {STATUS_ORDER.filter(c=>ACTIVE_S.includes(c)).map(code=>{
+            const cnt=yestMap[code]??0;
+            if(!cnt) return null;
+            return <StatusRow key={code} code={code} count={cnt} type="yest" />;
           })}
-          {yestPending.length === 0 && (
-            <p className="text-xs text-slate-600 py-4 text-center">No pending</p>
-          )}
+          {yestPend.length===0 && <p style={{ fontSize:12, color:TEXT_DIM, padding:"8px 0" }}>None pending</p>}
         </div>
       </div>
     </div>
@@ -189,328 +145,272 @@ function OrderPanel({
 }
 
 /* ─── main ───────────────────────────────────────────────────── */
-const REFRESH_SEC = 120;
-
 export default function KpiPage() {
   const { user, loading: authLoading } = useAuth();
-  const router = useRouter();
-  const now = useClock();
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-
-  /* data */
-  const [inventory, setInventory] = useState<Row[]>([]);
-  const [locations, setLocations] = useState<Row[]>([]);
-  const [b2bOrders, setB2bOrders] = useState<Row[]>([]);
-  const [b2cOrders, setB2cOrders] = useState<Row[]>([]);
-  const [clusters, setClusters] = useState<B2CCluster[]>([]);
-  const [dataLoading, setDataLoading] = useState(true);
+  const router   = useRouter();
+  const now      = useClock();
+  const ref      = useRef<HTMLDivElement>(null);
+  const [isFs, setIsFs] = useState(false);
   const [countdown, setCountdown] = useState(REFRESH_SEC);
+  const [dataLoading, setDataLoading] = useState(true);
+
+  const [inventory,  setInventory]  = useState<Record<string,unknown>[]>([]);
+  const [locations,  setLocations]  = useState<Record<string,unknown>[]>([]);
+  const [b2bOrders,  setB2bOrders]  = useState<Record<string,unknown>[]>([]);
+  const [b2cOrders,  setB2cOrders]  = useState<Record<string,unknown>[]>([]);
+  const [clusters,   setClusters]   = useState<B2CCluster[]>([]);
 
   const headers = useMemo(
-    (): Record<string, string> => user
-      ? { Authorization: `Bearer ${user.token}`, "Content-Type": "application/json" }
-      : { "Content-Type": "application/json" },
+    (): Record<string,string> => ({
+      Authorization: `Bearer ${user?.token ?? ""}`,
+      "Content-Type": "application/json",
+    }),
     [user]
   );
 
   /* fullscreen */
-  function toggleFullscreen() {
-    if (!document.fullscreenElement) {
-      containerRef.current?.requestFullscreen();
-    } else {
-      document.exitFullscreen();
-    }
+  function toggleFs() {
+    if (!document.fullscreenElement) ref.current?.requestFullscreen();
+    else document.exitFullscreen();
   }
   useEffect(() => {
-    function onFsChange() { setIsFullscreen(!!document.fullscreenElement); }
-    document.addEventListener("fullscreenchange", onFsChange);
-    return () => document.removeEventListener("fullscreenchange", onFsChange);
+    const fn = () => setIsFs(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", fn);
+    return () => document.removeEventListener("fullscreenchange", fn);
   }, []);
 
-  /* load */
+  /* load orders — try multiple endpoints, no date filter (filter client-side) */
+  async function loadOrders(type: "b2b"|"b2c"): Promise<Record<string,unknown>[]> {
+    const body = { limit:2000, pageSize:2000, orderType:type.toUpperCase(), warehouseCode:"STOO1" };
+    const endpoints = [
+      `/api/wms/shipping/${type}/list`,
+      `/api/wms/shipping/list`,
+      `/api/wms/outbound/${type}/list`,
+      `/api/wms/outbound/list`,
+    ];
+    for (const ep of endpoints) {
+      try {
+        const res = await fetch(ep, { method:"POST", headers, body:JSON.stringify({ ...body, page:1 }) });
+        if (!res.ok) continue;
+        const json = await res.json().catch(()=>({}));
+        const rows = arrOf(json);
+        if (rows.length > 0) return rows;
+      } catch { /* try next */ }
+    }
+    return [];
+  }
+
   const load = useCallback(async () => {
     if (!user) return;
     setDataLoading(true);
-    const today = fmtDate(new Date());
-    const yest = (() => { const d = new Date(); d.setDate(d.getDate()-1); return fmtDate(d); })();
-    const base = { limit: 2000, pageSize: 2000, warehouseCode: "STOO1" };
-
     try {
-      const [rInv, rLoc, rB2B, rB2C, rClusters] = await Promise.all([
-        fetch("/api/wms/inventory/detail", { method: "POST", headers, body: JSON.stringify({ pageSize: 9999 }) }),
-        fetch("/api/wms/warehouse/location/list", { method: "POST", headers, body: JSON.stringify({ page: 1, pageSize: 9999, warehouseCode: "", search: "", sortField: "WarehouseCode", sortDir: "asc" }) }),
-        fetch("/api/wms/shipping/b2b/list", { method: "POST", headers, body: JSON.stringify({ ...base, orderType: "B2B", dateFrom: yest, dateTo: today }) }),
-        fetch("/api/wms/shipping/b2c/list", { method: "POST", headers, body: JSON.stringify({ ...base, orderType: "B2C", dateFrom: yest, dateTo: today }) }),
-        fetch("/api/cluster"),
+      const [rInv, rLoc, b2b, b2c, rClusters] = await Promise.all([
+        fetch("/api/wms/inventory/detail", { method:"POST", headers, body:JSON.stringify({ pageSize:9999, page:1 }) }).then(r=>r.json()).catch(()=>({})),
+        fetch("/api/wms/warehouse/location/list", { method:"POST", headers, body:JSON.stringify({ page:1, pageSize:9999, warehouseCode:"", search:"", sortField:"WarehouseCode", sortDir:"asc" }) }).then(r=>r.json()).catch(()=>({})),
+        loadOrders("b2b"),
+        loadOrders("b2c"),
+        fetch("/api/cluster").then(r=>r.json()).catch(()=>[]),
       ]);
-
-      const [dInv, dLoc, dB2B, dB2C, dClusters] = await Promise.all([
-        rInv.json().catch(() => ({})),
-        rLoc.json().catch(() => ({})),
-        rB2B.json().catch(() => ({})),
-        rB2C.json().catch(() => ({})),
-        rClusters.json().catch(() => []),
-      ]);
-
-      setInventory(arrOf(dInv));
-      setLocations(arrOf(dLoc));
-      setB2bOrders(arrOf(dB2B));
-      setB2cOrders(arrOf(dB2C));
-      setClusters(Array.isArray(dClusters) ? dClusters as B2CCluster[] : []);
+      setInventory(arrOf(rInv));
+      setLocations(arrOf(rLoc));
+      setB2bOrders(b2b);
+      setB2cOrders(b2c);
+      setClusters(Array.isArray(rClusters) ? rClusters as B2CCluster[] : []);
     } catch { /* silent */ }
-
     setDataLoading(false);
     setCountdown(REFRESH_SEC);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, headers]);
 
   useEffect(() => { if (!authLoading && !user) router.replace("/login"); }, [user, authLoading, router]);
   useEffect(() => { if (user) load(); }, [user, load]);
-
   useEffect(() => {
-    const id = setInterval(() => {
-      setCountdown(c => { if (c <= 1) { load(); return REFRESH_SEC; } return c - 1; });
-    }, 1000);
-    return () => clearInterval(id);
+    const id = setInterval(()=>setCountdown(c=>{ if(c<=1){load();return REFRESH_SEC;} return c-1; }), 1000);
+    return ()=>clearInterval(id);
   }, [load]);
 
   /* derived */
-  const todayStr_ = todayStr();
-  const yestStr_ = yesterdayStr();
+  const today_ = todayISO(), yest_ = yesterdayISO();
 
-  const b2bToday = useMemo(() => b2bOrders.filter(o => orderDateOf(o) === todayStr_), [b2bOrders, todayStr_]);
-  const b2bYest  = useMemo(() => b2bOrders.filter(o => orderDateOf(o) === yestStr_),  [b2bOrders, yestStr_]);
-  const b2cToday = useMemo(() => b2cOrders.filter(o => orderDateOf(o) === todayStr_), [b2cOrders, todayStr_]);
-  const b2cYest  = useMemo(() => b2cOrders.filter(o => orderDateOf(o) === yestStr_),  [b2cOrders, yestStr_]);
+  const totalQty  = useMemo(()=>inventory.reduce((s,i)=>s+(Number(i.qty)||0),0), [inventory]);
+  const totalSkus = useMemo(()=>new Set(inventory.map(i=>String(i.productSku??i.sku??"")).filter(Boolean)).size, [inventory]);
+  const totalLocs = locations.length;
+  const norm      = (s:string)=>s.toLowerCase().replace(/[\s\-_/]+/g,"");
+  const invLocSet = useMemo(()=>new Set(inventory.map(i=>norm(String(i.locationCode??i.location??""))).filter(Boolean)), [inventory]); // eslint-disable-line react-hooks/exhaustive-deps
+  const occupiedLocs = useMemo(()=>locations.filter(l=>invLocSet.has(norm(String(l.locationCode??l.location??""))) || Number(l.currentQty??l.qty??0)>0).length, [locations, invLocSet]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const totalQty   = useMemo(() => inventory.reduce((s, i) => s + (Number(i.qty) || 0), 0), [inventory]);
-  const totalSkus  = useMemo(() => new Set(inventory.map(i => String(i.productSku ?? i.sku ?? "")).filter(Boolean)).size, [inventory]);
-  const totalLocs  = locations.length;
-  const occupiedLocs = useMemo(() => {
-    const norm = (s: string) => s.toLowerCase().replace(/[\s\-_/]+/g, "");
-    const set = new Set(inventory.map(i => norm(String(i.locationCode ?? i.location ?? ""))).filter(Boolean));
-    return locations.filter(l => {
-      const direct = String(l.locationCode ?? l.location ?? "");
-      return set.has(norm(direct)) || Number(l.currentQty ?? l.qty ?? 0) > 0;
-    }).length;
-  }, [inventory, locations]);
+  const b2bToday = useMemo(()=>b2bOrders.filter(o=>orderDateOf(o)===today_), [b2bOrders, today_]);
+  const b2bYest  = useMemo(()=>b2bOrders.filter(o=>orderDateOf(o)===yest_),  [b2bOrders, yest_]);
+  const b2cToday = useMemo(()=>b2cOrders.filter(o=>orderDateOf(o)===today_), [b2cOrders, today_]);
+  const b2cYest  = useMemo(()=>b2cOrders.filter(o=>orderDateOf(o)===yest_),  [b2cOrders, yest_]);
 
-  /* cluster stats for today */
-  const todayClusters = useMemo(() => {
-    return clusters
-      .filter(c => c.completedAt && isoDate(c.completedAt) === todayStr_)
-      .map(c => ({ cluster: c, stats: clusterStats(c) }))
-      .sort((a, b) => new Date(b.cluster.completedAt!).getTime() - new Date(a.cluster.completedAt!).getTime());
-  }, [clusters, todayStr_]);
+  /* clusters today */
+  const todayClusters = useMemo(()=>
+    clusters
+      .filter(c=>c.completedAt && isoOf(c.completedAt)===today_)
+      .map(c=>({c, s:clusterStats(c)}))
+      .sort((a,b)=>new Date(b.c.completedAt!).getTime()-new Date(a.c.completedAt!).getTime()),
+  [clusters, today_]);
 
-  const clusterAvgUnitsPerHr = useMemo(() => {
-    const valid = todayClusters.filter(x => x.stats.unitsPerHr !== null);
-    if (!valid.length) return null;
-    return Math.round(valid.reduce((s, x) => s + x.stats.unitsPerHr!, 0) / valid.length);
+  const avgUph = useMemo(()=>{
+    const v=todayClusters.filter(x=>x.s.uph!==null);
+    return v.length ? Math.round(v.reduce((s,x)=>s+x.s.uph!,0)/v.length) : null;
   }, [todayClusters]);
 
-  const clusterTotalUnitsToday = useMemo(() =>
-    todayClusters.reduce((s, x) => s + x.stats.totalUnits, 0), [todayClusters]);
+  const totalUnitsToday  = useMemo(()=>todayClusters.reduce((s,x)=>s+x.s.units,0), [todayClusters]);
+  const totalOrdersToday = useMemo(()=>todayClusters.reduce((s,x)=>s+x.s.orders,0), [todayClusters]);
 
-  const clusterTotalOrdersToday = useMemo(() =>
-    todayClusters.reduce((s, x) => s + x.stats.totalOrders, 0), [todayClusters]);
+  /* location by type */
+  const locByType = useMemo(()=>{
+    const map: Record<string,{total:number;occupied:number}> = {};
+    for (const loc of locations) {
+      const t = String(loc.occupancyInfo ?? loc.locationType ?? "Other");
+      if (!map[t]) map[t]={total:0,occupied:0};
+      map[t].total++;
+      const k=norm(String(loc.locationCode??loc.location??""));
+      if(invLocSet.has(k)||Number(loc.currentQty??loc.qty??0)>0) map[t].occupied++;
+    }
+    return Object.entries(map).sort((a,b)=>b[1].occupied-a[1].occupied);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locations, invLocSet]);
 
-  /* time display */
-  const timeStr = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
-  const dateStr = now.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+  /* clock */
+  const timeStr = now.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});
+  const dateStr = now.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"});
 
-  if (authLoading) return null;
+  if (authLoading || !user) return null;
 
   return (
-    <div
-      ref={containerRef}
-      className="min-h-screen flex flex-col select-none"
-      style={{ background: "radial-gradient(ellipse at 20% 0%, #0f2040 0%, #060d1a 60%)", fontFamily: "inherit" }}
-    >
-      {/* ── Top Bar ── */}
-      <header className="flex items-center gap-4 px-6 py-3 flex-shrink-0" style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center">
-            <Layers className="w-4 h-4 text-white" />
+    <div ref={ref} style={{ minHeight:"100vh", background:BG, display:"flex", flexDirection:"column", fontFamily:"Inter, system-ui, sans-serif", color:"#fff" }}>
+
+      {/* ── Header ── */}
+      <header style={{ display:"flex", alignItems:"center", gap:12, padding:"10px 20px", borderBottom:`1px solid ${BORDER}`, flexShrink:0 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <div style={{ width:28, height:28, borderRadius:6, background:"#1d4ed8", display:"flex", alignItems:"center", justifyContent:"center" }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
           </div>
-          <span className="text-sm font-bold text-white">WMS · KPI Display</span>
+          <span style={{ fontSize:14, fontWeight:700, color:"#fff" }}>WMS · KPI Display</span>
         </div>
 
-        <div className="flex items-center gap-2 ml-4 text-xs text-slate-500">
+        <div style={{ display:"flex", alignItems:"center", gap:6, marginLeft:16, color:TEXT_DIM, fontSize:12 }}>
           {dataLoading
-            ? <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" />
-            : <RefreshCw className="w-3 h-3" />}
+            ? <Loader2 style={{ width:13, height:13, color:"#3b82f6" }} className="animate-spin" />
+            : <RefreshCw style={{ width:12, height:12 }} />}
           <span>Refresh in {countdown}s</span>
-          <button onClick={load} className="text-slate-500 hover:text-white transition-colors ml-1">
-            <RefreshCw className="w-3 h-3" />
+          <button onClick={load} style={{ marginLeft:4, color:TEXT_DIM, background:"none", border:"none", cursor:"pointer", display:"flex" }}>
+            <RefreshCw style={{ width:12, height:12 }} />
           </button>
         </div>
 
-        <div className="ml-auto flex items-center gap-4">
-          <div className="text-right">
-            <p className="text-2xl font-black text-white tabular-nums tracking-wide">{timeStr}</p>
-            <p className="text-[11px] text-slate-400">{dateStr}</p>
+        <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:12 }}>
+          <div style={{ textAlign:"right" }}>
+            <p style={{ fontSize:28, fontWeight:900, color:"#fff", fontVariantNumeric:"tabular-nums", lineHeight:1, letterSpacing:"0.02em" }}>{timeStr}</p>
+            <p style={{ fontSize:11, color:TEXT_DIM, marginTop:2 }}>{dateStr}</p>
           </div>
-          <button
-            onClick={toggleFullscreen}
-            className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
-            title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
-          >
-            {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+          <button onClick={toggleFs} style={{ padding:8, borderRadius:8, background:"rgba(255,255,255,0.05)", border:`1px solid ${BORDER}`, color:TEXT_DIM, cursor:"pointer", display:"flex" }}>
+            {isFs ? <Minimize2 style={{width:15,height:15}} /> : <Maximize2 style={{width:15,height:15}} />}
           </button>
-          <button
-            onClick={() => router.push("/dashboard")}
-            className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
-            title="Back to dashboard"
-          >
-            <X className="w-4 h-4" />
+          <button onClick={()=>router.push("/dashboard")} style={{ padding:8, borderRadius:8, background:"rgba(255,255,255,0.05)", border:`1px solid ${BORDER}`, color:TEXT_DIM, cursor:"pointer", display:"flex" }}>
+            <X style={{width:15,height:15}} />
           </button>
         </div>
       </header>
 
-      {/* ── Main ── */}
-      <div className="flex-1 overflow-y-auto p-5 space-y-4">
+      {/* ── Body ── */}
+      <div style={{ flex:1, overflowY:"auto", padding:"16px 20px 20px", display:"flex", flexDirection:"column", gap:14 }}>
 
-        {/* ── Row 1: Big KPI tiles ── */}
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-          <KpiTile label="Total Inventory" value={totalQty} sub="units on hand" icon={Boxes} accent="#3b82f6" />
-          <KpiTile label="Total SKUs" value={totalSkus} sub="distinct products" icon={Package} accent="#8b5cf6" />
-          <KpiTile label="Occupied Locs" value={`${occupiedLocs}/${totalLocs}`} sub="locations in use" icon={MapPin} accent="#14b8a6" />
-          <KpiTile label="B2B Today" value={b2bToday.length} sub={`${b2bToday.filter(o=>statusOf(o)==="FA").length} complete`} icon={Building2} accent="#f59e0b" />
-          <KpiTile label="B2C Today" value={b2cToday.length} sub={`${b2cToday.filter(o=>statusOf(o)==="FA").length} complete`} icon={User} accent="#ec4899" />
-          <KpiTile
-            label="Cluster Units/hr"
-            value={clusterAvgUnitsPerHr !== null ? clusterAvgUnitsPerHr : "—"}
-            sub={todayClusters.length ? `${todayClusters.length} runs · ${clusterTotalUnitsToday} units` : "No clusters today"}
-            icon={TrendingUp}
-            accent="#22c55e"
-          />
+        {/* ── Row 1: KPI tiles ── */}
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(6,1fr)", gap:12 }}>
+          <BigTile label="Total Inventory" value={totalQty} sub="units on hand" accentColor="#3b82f6" />
+          <BigTile label="Total SKUs"      value={totalSkus} sub="distinct products" accentColor="#8b5cf6" />
+          <BigTile label="Occupied Locs"   value={`${occupiedLocs}/${totalLocs}`} sub={totalLocs>0?`${Math.round(occupiedLocs/totalLocs*100)}% utilized`:""} accentColor="#14b8a6" />
+          <BigTile label="B2B Today"       value={b2bToday.length} sub={`${b2bToday.filter(o=>statusOf(o)==="FA").length} complete · ${b2bToday.filter(o=>ACTIVE_S.includes(statusOf(o))).length} active`} accentColor="#f59e0b" />
+          <BigTile label="B2C Today"       value={b2cToday.length} sub={`${b2cToday.filter(o=>statusOf(o)==="FA").length} complete · ${b2cToday.filter(o=>ACTIVE_S.includes(statusOf(o))).length} active`} accentColor="#ec4899" />
+          <BigTile label="Cluster Units/hr" value={avgUph!==null?avgUph:"—"} sub={todayClusters.length?`${todayClusters.length} runs · ${totalUnitsToday} units · ${totalOrdersToday} orders`:"No clusters today"} accentColor="#22c55e" />
         </div>
 
-        {/* ── Row 2: B2B + B2C order panels ── */}
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          <OrderPanel
-            title="B2B Orders"
-            icon={Building2}
-            accent="#f59e0b"
-            todayOrders={b2bToday}
-            yestOrders={b2bYest}
-          />
-          <OrderPanel
-            title="B2C Orders"
-            icon={User}
-            accent="#ec4899"
-            todayOrders={b2cToday}
-            yestOrders={b2cYest}
-          />
+        {/* ── Row 2: Orders ── */}
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+          <OrderPanel title="B2B Orders" accentColor="#f59e0b" todayOrders={b2bToday} yestOrders={b2bYest} />
+          <OrderPanel title="B2C Orders" accentColor="#ec4899" todayOrders={b2cToday} yestOrders={b2cYest} />
         </div>
 
-        {/* ── Row 3: Inventory by type + Cluster performance ── */}
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        {/* ── Row 3: Location + Cluster table ── */}
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
 
-          {/* Inventory by location type */}
-          <div className="rounded-2xl overflow-hidden" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
-            <div className="px-4 py-3 flex items-center gap-2" style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
-              <MapPin className="w-4 h-4 text-teal-400" />
-              <span className="text-sm font-bold text-white">Location Occupancy</span>
-              <span className="ml-auto text-xs text-slate-500">{occupiedLocs} / {totalLocs} occupied</span>
+          {/* Location occupancy */}
+          <div style={{ background:CARD_BG, border:`1px solid ${BORDER}`, borderTop:`3px solid #14b8a6`, borderRadius:12, overflow:"hidden" }}>
+            <div style={{ padding:"12px 16px", borderBottom:`1px solid ${BORDER}`, display:"flex", alignItems:"center", gap:8 }}>
+              <p style={{ fontSize:13, fontWeight:800, color:"#fff", flex:1 }}>Location Occupancy</p>
+              <span style={{ fontSize:12, color:TEXT_DIM }}>{occupiedLocs} / {totalLocs}</span>
             </div>
-            <div className="p-4 space-y-2">
-              {(() => {
-                const byType: Record<string, { total: number; occupied: number }> = {};
-                const norm = (s: string) => s.toLowerCase().replace(/[\s\-_/]+/g, "");
-                const invSet = new Set(inventory.map(i => norm(String(i.locationCode ?? i.location ?? ""))).filter(Boolean));
-                for (const loc of locations) {
-                  const t = String(loc.occupancyInfo ?? loc.locationType ?? "Other");
-                  if (!byType[t]) byType[t] = { total: 0, occupied: 0 };
-                  byType[t].total++;
-                  const direct = norm(String(loc.locationCode ?? loc.location ?? ""));
-                  if (invSet.has(direct) || Number(loc.currentQty ?? loc.qty ?? 0) > 0) byType[t].occupied++;
-                }
-                return Object.entries(byType).sort((a, b) => b[1].occupied - a[1].occupied).map(([type, d]) => {
-                  const pct = d.total > 0 ? Math.round((d.occupied / d.total) * 100) : 0;
-                  return (
-                    <div key={type}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs text-slate-300 truncate max-w-[160px]">{type}</span>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-slate-500 tabular-nums">{d.occupied}/{d.total}</span>
-                          <span className="text-xs font-bold text-white tabular-nums w-9 text-right">{pct}%</span>
-                        </div>
-                      </div>
-                      <div className="h-1.5 rounded-full" style={{ background: "rgba(255,255,255,0.08)" }}>
-                        <div
-                          className="h-full rounded-full"
-                          style={{ width: `${pct}%`, background: pct >= 90 ? "#ef4444" : pct >= 70 ? "#f59e0b" : "#3b82f6", transition: "width 0.8s ease" }}
-                        />
+            <div style={{ padding:"12px 16px", display:"flex", flexDirection:"column", gap:10 }}>
+              {locByType.map(([type, d])=>{
+                const pct=d.total>0?Math.round(d.occupied/d.total*100):0;
+                const barColor=pct>=90?"#ef4444":pct>=70?"#f59e0b":"#3b82f6";
+                return (
+                  <div key={type}>
+                    <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                      <span style={{ fontSize:12, color:"#cbd5e1" }}>{type}</span>
+                      <div style={{ display:"flex", gap:10 }}>
+                        <span style={{ fontSize:12, color:TEXT_DIM, fontVariantNumeric:"tabular-nums" }}>{d.occupied}/{d.total}</span>
+                        <span style={{ fontSize:12, fontWeight:700, color:"#fff", fontVariantNumeric:"tabular-nums", width:34, textAlign:"right" }}>{pct}%</span>
                       </div>
                     </div>
-                  );
-                });
-              })()}
-              {locations.length === 0 && <p className="text-xs text-slate-600 text-center py-4">No location data</p>}
+                    <div style={{ height:5, borderRadius:3, background:"rgba(255,255,255,0.07)" }}>
+                      <div style={{ height:"100%", borderRadius:3, background:barColor, width:`${pct}%`, transition:"width 1s ease" }} />
+                    </div>
+                  </div>
+                );
+              })}
+              {locByType.length===0 && <p style={{ fontSize:12, color:TEXT_DIM, textAlign:"center", padding:"16px 0" }}>No location data</p>}
             </div>
           </div>
 
-          {/* Cluster pick performance */}
-          <div className="rounded-2xl overflow-hidden" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
-            <div className="px-4 py-3 flex items-center gap-2" style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
-              <Layers className="w-4 h-4 text-emerald-400" />
-              <span className="text-sm font-bold text-white">Cluster Pick · Today</span>
-              <div className="ml-auto flex items-center gap-4 text-xs">
-                <span className="text-slate-400">Orders: <span className="text-white font-bold">{clusterTotalOrdersToday}</span></span>
-                <span className="text-slate-400">Units: <span className="text-white font-bold">{clusterTotalUnitsToday}</span></span>
-                {clusterAvgUnitsPerHr !== null && (
-                  <span className="text-emerald-400 font-bold">avg {clusterAvgUnitsPerHr} u/hr</span>
-                )}
-              </div>
+          {/* Cluster pick */}
+          <div style={{ background:CARD_BG, border:`1px solid ${BORDER}`, borderTop:`3px solid #22c55e`, borderRadius:12, overflow:"hidden", display:"flex", flexDirection:"column" }}>
+            <div style={{ padding:"12px 16px", borderBottom:`1px solid ${BORDER}`, display:"flex", alignItems:"center", gap:12, flexShrink:0 }}>
+              <p style={{ fontSize:13, fontWeight:800, color:"#fff", flex:1 }}>Cluster Pick · Today</p>
+              <span style={{ fontSize:12, color:TEXT_DIM }}>Orders: <strong style={{ color:"#fff" }}>{totalOrdersToday}</strong></span>
+              <span style={{ fontSize:12, color:TEXT_DIM }}>Units: <strong style={{ color:"#fff" }}>{totalUnitsToday}</strong></span>
+              {avgUph!==null && <span style={{ fontSize:12, fontWeight:800, color:"#22c55e" }}>avg {avgUph} u/hr</span>}
             </div>
-            <div className="overflow-auto" style={{ maxHeight: 240 }}>
-              {todayClusters.length === 0 ? (
-                <div className="flex items-center justify-center h-24 text-xs text-slate-600">
-                  No completed clusters today
+            {todayClusters.length===0
+              ? <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center" }}>
+                  <p style={{ fontSize:12, color:TEXT_DIM }}>No completed clusters today</p>
                 </div>
-              ) : (
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                      {["Cluster #","Orders","Units","Duration","Units/hr","Orders/hr"].map(h => (
-                        <th key={h} className="px-3 py-2 text-left font-semibold text-slate-500 whitespace-nowrap">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {todayClusters.map(({ cluster, stats }) => (
-                      <tr key={cluster.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                        <td className="px-3 py-2 font-mono text-blue-300 font-bold">
-                          #{String(cluster.clusterNo ?? "—").padStart(4,"0")}
-                        </td>
-                        <td className="px-3 py-2 text-white font-semibold">{stats.totalOrders}</td>
-                        <td className="px-3 py-2 text-white font-semibold">{stats.totalUnits}</td>
-                        <td className="px-3 py-2 text-slate-300 tabular-nums">
-                          {stats.durationMin !== null
-                            ? stats.durationMin >= 60
-                              ? `${Math.floor(stats.durationMin/60)}h ${stats.durationMin%60}m`
-                              : `${stats.durationMin}m`
-                            : "—"}
-                        </td>
-                        <td className="px-3 py-2 font-bold" style={{ color: stats.unitsPerHr && stats.unitsPerHr > 0 ? "#22c55e" : "#94a3b8" }}>
-                          {stats.unitsPerHr ?? "—"}
-                        </td>
-                        <td className="px-3 py-2 text-slate-300 tabular-nums">{stats.ordersPerHr ?? "—"}</td>
+              : <div style={{ overflowY:"auto", flex:1 }}>
+                  <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                    <thead>
+                      <tr style={{ borderBottom:`1px solid ${BORDER}` }}>
+                        {["Cluster #","Orders","Units","Duration","Units/hr","Orders/hr"].map(h=>(
+                          <th key={h} style={{ padding:"8px 14px", textAlign:"left", fontWeight:700, fontSize:11, letterSpacing:"0.06em", textTransform:"uppercase", color:TEXT_DIM, whiteSpace:"nowrap" }}>{h}</th>
+                        ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
+                    </thead>
+                    <tbody>
+                      {todayClusters.map(({c,s})=>(
+                        <tr key={c.id} style={{ borderBottom:`1px solid ${BORDER}` }}>
+                          <td style={{ padding:"9px 14px", fontWeight:800, color:"#60a5fa", fontVariantNumeric:"tabular-nums" }}>#{String(c.clusterNo??"—").padStart(4,"0")}</td>
+                          <td style={{ padding:"9px 14px", fontWeight:700, color:"#fff", fontVariantNumeric:"tabular-nums" }}>{s.orders}</td>
+                          <td style={{ padding:"9px 14px", fontWeight:700, color:"#fff", fontVariantNumeric:"tabular-nums" }}>{s.units}</td>
+                          <td style={{ padding:"9px 14px", color:"#94a3b8", fontVariantNumeric:"tabular-nums" }}>
+                            {s.minTotal!==null ? (s.minTotal>=60?`${Math.floor(s.minTotal/60)}h ${s.minTotal%60}m`:`${s.minTotal}m`) : "—"}
+                          </td>
+                          <td style={{ padding:"9px 14px", fontWeight:900, fontSize:15, color: s.uph&&s.uph>0?"#22c55e":"#94a3b8", fontVariantNumeric:"tabular-nums" }}>{s.uph??"-"}</td>
+                          <td style={{ padding:"9px 14px", fontWeight:700, color:"#fff", fontVariantNumeric:"tabular-nums" }}>{s.oph??"-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+            }
           </div>
 
         </div>
       </div>
 
-      {/* footer */}
-      <footer className="px-6 py-2 flex items-center justify-between text-[10px] text-slate-600 flex-shrink-0" style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+      <footer style={{ padding:"6px 20px", borderTop:`1px solid ${BORDER}`, display:"flex", justifyContent:"space-between", fontSize:10, color:"#2a3547", flexShrink:0 }}>
         <span>Spider WMS · KPI Display</span>
         <span>Auto-refresh every {REFRESH_SEC}s</span>
       </footer>
