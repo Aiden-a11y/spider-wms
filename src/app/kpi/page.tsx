@@ -208,7 +208,9 @@ export default function KpiPage() {
   const [countdown, setCountdown] = useState(REFRESH_SEC);
 
   const headers = useMemo(
-    () => user ? { Authorization: `Bearer ${user.token}`, "Content-Type": "application/json" } : {},
+    (): Record<string, string> => user
+      ? { Authorization: `Bearer ${user.token}`, "Content-Type": "application/json" }
+      : { "Content-Type": "application/json" },
     [user]
   );
 
