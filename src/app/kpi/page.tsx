@@ -12,7 +12,7 @@ import type { B2CCluster } from "@/lib/b2c-cluster";
 const BG   = "#080d14";
 const C1   = "#0d1624";
 const BRDR = "#1e2d42";
-const LBL  = "#b0c4d8";  // secondary labels — visible
+const LBL  = "#b0c4d8";
 
 const REFRESH_SEC = 120;
 
@@ -32,10 +32,23 @@ const STATUS_CFG: Record<string, { label: string; color: string }> = {
 const ACTIVE_S     = ["AA","CA","DA","AR","AC","LR","L2","LC","HA"];
 const STATUS_ORDER = ["AA","CA","DA","AR","AC","LR","L2","LC","HA","CC","FA"];
 
-/* ─── helpers ───────────────────────────────────────────────────── */
+/* ─── types ─────────────────────────────────────────────────────── */
 type Row = Record<string, unknown>;
 
-/* exact same parseList as dashboard/page.tsx */
+type TrendPoint = {
+  date: string;
+  total_qty: number;
+  sku_count: number;
+  location_count: number;
+};
+
+type TrendResponse = {
+  trend: TrendPoint[];
+  warehouses: string[];
+  occupied_locations: string[];
+};
+
+/* ─── helpers ───────────────────────────────────────────────────── */
 function parseList(json: unknown, ...paths: string[][]): Row[] {
   const j = json as Record<string, unknown>;
   for (const path of paths) {
@@ -56,6 +69,7 @@ const statusOf  = (o: Row) => String(o.status ?? o.orderStatus ?? "");
 const todayISO  = () => new Date().toISOString().slice(0,10);
 const yesterISO = () => { const d=new Date(); d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); };
 const isoOf     = (s: string) => s.slice(0,10);
+const fmtQty    = (n: number) => n >= 1000 ? `${(n/1000).toFixed(0)}k` : String(n);
 
 /* ─── clock ─────────────────────────────────────────────────────── */
 function useClock() {
@@ -78,15 +92,40 @@ function clusterStats(c: B2CCluster) {
   };
 }
 
-/* ─── KPI card ─────────────────────────────────────────────────── */
-function KpiCard({ label, value, sub }: { label:string; value:string|number; sub?:string }) {
+/* ─── sparkline ─────────────────────────────────────────────────── */
+function Sparkline({ points, color }: { points: number[]; color: string }) {
+  if (points.length < 2) return null;
+  const W = 120, H = 36;
+  const min = Math.min(...points), max = Math.max(...points);
+  const range = max - min || 1;
+  const pts = points.map((v, i) => ({
+    x: (i / (points.length - 1)) * W,
+    y: H - ((v - min) / range) * H * 0.85 - H * 0.075,
+  }));
+  const d = pts.map((p, i) => `${i===0?"M":"L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
   return (
-    <div style={{ background:C1, border:`1px solid ${BRDR}`, borderRadius:0, padding:"16px 20px 12px", display:"flex", flexDirection:"column", gap:6, minWidth:0 }}>
-      <p style={{ fontSize:12, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", color:LBL }}>{label}</p>
-      <p style={{ fontSize:52, fontWeight:900, color:"#fff", lineHeight:1, fontVariantNumeric:"tabular-nums" }}>
+    <svg width={W} height={H} style={{ display:"block", overflow:"visible" }}>
+      <path d={d} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round"/>
+      <circle cx={pts[pts.length-1].x} cy={pts[pts.length-1].y} r={2.5} fill={color}/>
+    </svg>
+  );
+}
+
+/* ─── KPI card ─────────────────────────────────────────────────── */
+function KpiCard({ label, value, sub, sparkPoints, sparkColor }: {
+  label: string; value: string|number; sub?: string;
+  sparkPoints?: number[]; sparkColor?: string;
+}) {
+  return (
+    <div style={{ background:C1, border:`1px solid ${BRDR}`, borderRadius:0, padding:"14px 18px 12px", display:"flex", flexDirection:"column", gap:4, minWidth:0 }}>
+      <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between" }}>
+        <p style={{ fontSize:11, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", color:LBL }}>{label}</p>
+        {sparkPoints && sparkPoints.length > 1 && <Sparkline points={sparkPoints} color={sparkColor ?? "#3b82f6"}/>}
+      </div>
+      <p style={{ fontSize:48, fontWeight:900, color:"#fff", lineHeight:1, fontVariantNumeric:"tabular-nums" }}>
         {typeof value==="number" ? value.toLocaleString() : value}
       </p>
-      {sub && <p style={{ fontSize:13, color:LBL }}>{sub}</p>}
+      {sub && <p style={{ fontSize:12, color:LBL }}>{sub}</p>}
     </div>
   );
 }
@@ -102,7 +141,7 @@ function OrderCol({ title, orders, type }: { title:string; orders:Row[]; type:"t
 
   return (
     <div style={{ flex:1, display:"flex", flexDirection:"column", minHeight:0 }}>
-      <p style={{ fontSize:12, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", color:LBL, marginBottom:10 }}>
+      <p style={{ fontSize:11, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", color:LBL, marginBottom:10 }}>
         {title}{isYest && orders.length>0 && <span style={{ color:"#fbbf24", marginLeft:6 }}>({orders.length})</span>}
       </p>
       {STATUS_ORDER
@@ -112,7 +151,7 @@ function OrderCol({ title, orders, type }: { title:string; orders:Row[]; type:"t
           if (!cnt) return null;
           const cfg = STATUS_CFG[code]??{label:code,color:"#94a3b8"};
           return (
-            <div key={code} style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 10px", borderRadius:0, background:"rgba(255,255,255,0.04)", borderLeft:`3px solid ${cfg.color}`, marginBottom:4 }}>
+            <div key={code} style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 10px", background:"rgba(255,255,255,0.04)", borderLeft:`3px solid ${cfg.color}`, marginBottom:4 }}>
               <span style={{ fontSize:14, color:"#fff", flex:1, fontWeight:700 }}>{code} · {cfg.label}</span>
               <span style={{ fontSize:19, fontWeight:900, color:isYest?"#fbbf24":"#fff", fontVariantNumeric:"tabular-nums" }}>{cnt}</span>
             </div>
@@ -163,11 +202,11 @@ export default function KpiPage() {
   const [countdown, setCountdown] = useState(REFRESH_SEC);
   const [busy, setBusy] = useState(true);
 
-  const [inventory, setInventory] = useState<Row[]>([]);
-  const [locations, setLocations] = useState<Row[]>([]);
-  const [b2b,      setB2b]        = useState<Row[]>([]);
-  const [b2c,      setB2c]        = useState<Row[]>([]);
-  const [clusters, setClusters]   = useState<B2CCluster[]>([]);
+  const [trendData,  setTrendData]  = useState<TrendResponse | null>(null);
+  const [locations,  setLocations]  = useState<Row[]>([]);
+  const [b2b,        setB2b]        = useState<Row[]>([]);
+  const [b2c,        setB2c]        = useState<Row[]>([]);
+  const [clusters,   setClusters]   = useState<B2CCluster[]>([]);
 
   const headers = useMemo(
     () => ({ Authorization: `Bearer ${user?.token ?? ""}`, "Content-Type": "application/json" }),
@@ -209,9 +248,10 @@ export default function KpiPage() {
     if (!user) return;
     setBusy(true);
     try {
-      const [rInv, rLoc, ordB2B, ordB2C, rClusters] = await Promise.all([
-        fetch("/api/wms/inventory/detail", { method:"POST", headers, body:JSON.stringify({ pageSize:9999 }) })
-          .then(r=>r.json()).catch(()=>({})),
+      const [rTrend, rLoc, ordB2B, ordB2C, rClusters] = await Promise.all([
+        /* inventory trend — Supabase snapshot, same as dashboard */
+        fetch("/api/inventory-trend").then(r=>r.json()).catch(()=>null),
+        /* locations for occupancy breakdown */
         fetch("/api/wms/warehouse/location/list", { method:"POST", headers, body:JSON.stringify({ page:1, pageSize:9999, warehouseCode:"", search:"", sortField:"WarehouseCode", sortDir:"asc" }) })
           .then(r=>r.json()).catch(()=>({})),
         loadOrders("b2b"),
@@ -219,15 +259,7 @@ export default function KpiPage() {
         fetch("/api/cluster").then(r=>r.json()).catch(()=>[]),
       ]);
 
-      /* debug — remove after confirming */
-      console.log("[KPI] inv raw keys:", Object.keys(rInv ?? {}));
-      console.log("[KPI] inv data type:", Array.isArray(rInv?.data) ? `array(${rInv.data.length})` : typeof rInv?.data);
-      if (rInv?.data && typeof rInv.data === "object" && !Array.isArray(rInv.data)) {
-        console.log("[KPI] inv data keys:", Object.keys(rInv.data));
-      }
-      const invRows = parseList(rInv, ["data"], ["data","list"], ["list"], []);
-      console.log("[KPI] inv parsed rows:", invRows.length, invRows[0] ? Object.keys(invRows[0]) : []);
-      setInventory(invRows);
+      if (rTrend?.trend) setTrendData(rTrend as TrendResponse);
       setLocations(parseList(rLoc, ["data","list"],["data"],[]));
       setB2b(ordB2B);
       setB2c(ordB2C);
@@ -244,32 +276,23 @@ export default function KpiPage() {
     return ()=>clearInterval(id);
   },[load]);
 
-  /* derived */
+  /* derived — inventory from snapshot */
   const today_ = todayISO(), yest_ = yesterISO();
 
-  const totalQty  = useMemo(()=>inventory.reduce((s,i)=>s+(Number(i.qty)||0),0),[inventory]);
-  const totalSkus = useMemo(()=>new Set(inventory.map(i=>String(i.productSku??i.sku??"")).filter(Boolean)).size,[inventory]);
+  const latestSnap  = trendData?.trend[trendData.trend.length - 1] ?? null;
+  const totalQty    = latestSnap?.total_qty  ?? 0;
+  const totalSkus   = latestSnap?.sku_count  ?? 0;
+  const snapOccLocs = trendData?.occupied_locations.length ?? 0;
+
+  /* trend sparkline — last 14 points */
+  const qtySparkPoints = useMemo(()=>(trendData?.trend ?? []).slice(-14).map(p=>p.total_qty),[trendData]);
+  const skuSparkPoints = useMemo(()=>(trendData?.trend ?? []).slice(-14).map(p=>p.sku_count),[trendData]);
+
+  /* locations */
   const totalLocs = locations.length;
-
   const norm = (s:string) => s.toLowerCase().replace(/[\s\-_/]+/g,"");
-  const invSet = useMemo(()=>new Set(inventory.map(i=>norm(String(i.locationCode??i.location??""))).filter(Boolean)),[inventory]); // eslint-disable-line react-hooks/exhaustive-deps
-  const occupiedLocs = useMemo(()=>locations.filter(l=>invSet.has(norm(String(l.locationCode??l.location??"")))||Number(l.currentQty??l.qty??0)>0).length,[locations,invSet]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const b2bToday = useMemo(()=>b2b.filter(o=>orderDateOf(o)===today_),[b2b,today_]);
-  const b2bYest  = useMemo(()=>b2b.filter(o=>orderDateOf(o)===yest_), [b2b,yest_]);
-  const b2cToday = useMemo(()=>b2c.filter(o=>orderDateOf(o)===today_),[b2c,today_]);
-  const b2cYest  = useMemo(()=>b2c.filter(o=>orderDateOf(o)===yest_), [b2c,yest_]);
-
-  const todayC   = useMemo(()=>clusters.filter(c=>c.completedAt&&isoOf(c.completedAt)===today_).map(c=>({c,s:clusterStats(c)})).sort((a,b)=>new Date(b.c.completedAt!).getTime()-new Date(a.c.completedAt!).getTime()),[clusters,today_]);
-  const avgUph       = useMemo(()=>{ const v=todayC.filter(x=>x.s.uph!==null); return v.length?Math.round(v.reduce((s,x)=>s+x.s.uph!,0)/v.length):null; },[todayC]);
-  const totUnits     = useMemo(()=>todayC.reduce((s,x)=>s+x.s.units,0),[todayC]);
-  const totOrders    = useMemo(()=>todayC.reduce((s,x)=>s+x.s.orders,0),[todayC]);
-  const avgMinPerOrd = useMemo(()=>{
-    const v = todayC.filter(x=>x.s.min!==null && x.s.orders>0);
-    if(!v.length) return null;
-    const total = v.reduce((s,x)=>s + x.s.min!/x.s.orders, 0);
-    return Math.round(total/v.length*10)/10;
-  },[todayC]);
+  const snapLocSet = useMemo(()=>new Set((trendData?.occupied_locations??[]).map(l=>norm(l))),[trendData]); // eslint-disable-line react-hooks/exhaustive-deps
+  const occupiedLocs = snapOccLocs || totalLocs;
 
   const locByType = useMemo(()=>{
     const m:Record<string,{t:number;o:number}>={};
@@ -277,11 +300,28 @@ export default function KpiPage() {
       const k=String(l.occupancyInfo??l.locationType??"Other");
       if(!m[k]) m[k]={t:0,o:0};
       m[k].t++;
-      if(invSet.has(norm(String(l.locationCode??l.location??"")))||Number(l.currentQty??l.qty??0)>0) m[k].o++;
+      if(snapLocSet.has(norm(String(l.locationCode??l.location??"")))||Number(l.currentQty??l.qty??0)>0) m[k].o++;
     }
     return Object.entries(m).sort((a,b)=>b[1].o-a[1].o);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[locations,invSet]);
+  },[locations,snapLocSet]);
+
+  /* orders */
+  const b2bToday = useMemo(()=>b2b.filter(o=>orderDateOf(o)===today_),[b2b,today_]);
+  const b2bYest  = useMemo(()=>b2b.filter(o=>orderDateOf(o)===yest_), [b2b,yest_]);
+  const b2cToday = useMemo(()=>b2c.filter(o=>orderDateOf(o)===today_),[b2c,today_]);
+  const b2cYest  = useMemo(()=>b2c.filter(o=>orderDateOf(o)===yest_), [b2c,yest_]);
+
+  /* clusters */
+  const todayC    = useMemo(()=>clusters.filter(c=>c.completedAt&&isoOf(c.completedAt)===today_).map(c=>({c,s:clusterStats(c)})).sort((a,b)=>new Date(b.c.completedAt!).getTime()-new Date(a.c.completedAt!).getTime()),[clusters,today_]);
+  const avgUph    = useMemo(()=>{ const v=todayC.filter(x=>x.s.uph!==null); return v.length?Math.round(v.reduce((s,x)=>s+x.s.uph!,0)/v.length):null; },[todayC]);
+  const totUnits  = useMemo(()=>todayC.reduce((s,x)=>s+x.s.units,0),[todayC]);
+  const totOrders = useMemo(()=>todayC.reduce((s,x)=>s+x.s.orders,0),[todayC]);
+  const avgMinPerOrd = useMemo(()=>{
+    const v = todayC.filter(x=>x.s.min!==null && x.s.orders>0);
+    if(!v.length) return null;
+    return Math.round(v.reduce((s,x)=>s+x.s.min!/x.s.orders,0)/v.length*10)/10;
+  },[todayC]);
 
   const timeStr = now.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});
   const dateStr = now.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"});
@@ -328,10 +368,10 @@ export default function KpiPage() {
       </header>
 
       {/* ── KPI tiles ── */}
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:1, padding:"0", boxSizing:"border-box", borderBottom:`1px solid ${BRDR}` }}>
-        <KpiCard label="Total Inventory"    value={totalQty}   sub="units on hand"/>
-        <KpiCard label="Total SKUs"         value={totalSkus}  sub="distinct products"/>
-        <KpiCard label="Occupied Locs"      value={`${occupiedLocs}/${totalLocs}`} sub={totalLocs>0?`${Math.round(occupiedLocs/totalLocs*100)}% utilized`:""}/>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:1, boxSizing:"border-box", borderBottom:`1px solid ${BRDR}` }}>
+        <KpiCard label="Total Inventory"    value={fmtQty(totalQty)}  sub={`${totalQty.toLocaleString()} units`}  sparkPoints={qtySparkPoints} sparkColor="#3b82f6"/>
+        <KpiCard label="Total SKUs"         value={totalSkus.toLocaleString()} sub="distinct products" sparkPoints={skuSparkPoints} sparkColor="#a855f7"/>
+        <KpiCard label="Occupied Locs"      value={`${snapOccLocs}/${latestSnap?.location_count ?? totalLocs}`} sub={latestSnap ? `${Math.round(snapOccLocs/(latestSnap.location_count||1)*100)}% utilized` : ""}/>
         <KpiCard label="B2B Today"          value={b2bToday.length} sub={`${b2bToday.filter(o=>statusOf(o)==="FA").length} done · ${b2bToday.filter(o=>ACTIVE_S.includes(statusOf(o))).length} active`}/>
         <KpiCard label="B2C Today"          value={b2cToday.length} sub={`${b2cToday.filter(o=>statusOf(o)==="FA").length} done · ${b2cToday.filter(o=>ACTIVE_S.includes(statusOf(o))).length} active`}/>
         <KpiCard label="Cluster Units / hr" value={avgUph!==null?avgUph:"—"} sub={todayC.length?`${todayC.length} runs · ${totUnits} units · ${totOrders} orders`:"No clusters today"}/>
@@ -339,22 +379,22 @@ export default function KpiPage() {
       </div>
 
       {/* ── B2B + B2C ── */}
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:1, padding:"0", boxSizing:"border-box", minHeight:0 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:1, boxSizing:"border-box", minHeight:0 }}>
         <OrderPanel title="B2B Orders" todayOrders={b2bToday} yestOrders={b2bYest}/>
         <OrderPanel title="B2C Orders" todayOrders={b2cToday} yestOrders={b2cYest}/>
       </div>
 
-      {/* ── Location + Cluster ── */}
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:1, padding:"0", boxSizing:"border-box", minHeight:0 }}>
+      {/* ── Location Occupancy + Cluster Pick ── */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:1, boxSizing:"border-box", minHeight:0 }}>
 
-        {/* Location occupancy */}
-        <div style={{ background:C1, border:`0px solid ${BRDR}`, borderTop:`1px solid ${BRDR}`, borderRadius:0, display:"flex", flexDirection:"column", minHeight:0, overflow:"hidden" }}>
+        {/* inventory trend + location occupancy */}
+        <div style={{ background:C1, borderTop:`1px solid ${BRDR}`, display:"flex", flexDirection:"column", minHeight:0, overflow:"hidden" }}>
           <div style={{ padding:"10px 18px", borderBottom:`1px solid ${BRDR}`, display:"flex", alignItems:"center", flexShrink:0 }}>
             <p style={{ fontSize:17, fontWeight:800, color:"#fff", flex:1 }}>Location Occupancy</p>
-            <span style={{ fontSize:14, color:LBL }}>{occupiedLocs} / {totalLocs} used</span>
+            <span style={{ fontSize:14, color:LBL }}>{snapOccLocs || "—"} / {latestSnap?.location_count ?? totalLocs} used</span>
           </div>
           <div style={{ flex:1, overflowY:"auto", padding:"10px 18px", display:"flex", flexDirection:"column", gap:8 }}>
-            {locByType.map(([type,d])=>{
+            {locByType.length > 0 ? locByType.map(([type,d])=>{
               const pct=d.t>0?Math.round(d.o/d.t*100):0;
               const bar=pct>=90?"#ef4444":pct>=70?"#f59e0b":"#3b82f6";
               return (
@@ -366,18 +406,28 @@ export default function KpiPage() {
                       <span style={{ fontSize:15, fontWeight:900, color:"#fff", fontVariantNumeric:"tabular-nums", width:38, textAlign:"right" }}>{pct}%</span>
                     </div>
                   </div>
-                  <div style={{ height:5, borderRadius:0, background:"rgba(255,255,255,0.07)" }}>
-                    <div style={{ height:"100%", borderRadius:0, background:bar, width:`${pct}%`, transition:"width 1s ease" }}/>
+                  <div style={{ height:5, background:"rgba(255,255,255,0.07)" }}>
+                    <div style={{ height:"100%", background:bar, width:`${pct}%`, transition:"width 1s ease" }}/>
                   </div>
                 </div>
               );
-            })}
-            {locByType.length===0 && <p style={{ fontSize:14, color:LBL, textAlign:"center", paddingTop:20 }}>No location data</p>}
+            }) : (
+              /* fallback: show inventory trend sparkline if no location breakdown */
+              <div style={{ display:"flex", flexDirection:"column", gap:10, paddingTop:8 }}>
+                {(trendData?.trend ?? []).slice(-7).reverse().map(p=>(
+                  <div key={p.date} style={{ display:"flex", alignItems:"center", gap:12 }}>
+                    <span style={{ fontSize:12, color:LBL, width:60 }}>{p.date.slice(5)}</span>
+                    <span style={{ fontSize:15, fontWeight:700, color:"#fff", fontVariantNumeric:"tabular-nums" }}>{p.total_qty.toLocaleString()}</span>
+                    <span style={{ fontSize:12, color:LBL }}>{p.sku_count} SKUs</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
         {/* Cluster pick */}
-        <div style={{ background:C1, borderTop:`1px solid ${BRDR}`, borderLeft:`1px solid ${BRDR}`, borderRadius:0, display:"flex", flexDirection:"column", minHeight:0, overflow:"hidden" }}>
+        <div style={{ background:C1, borderTop:`1px solid ${BRDR}`, borderLeft:`1px solid ${BRDR}`, display:"flex", flexDirection:"column", minHeight:0, overflow:"hidden" }}>
           <div style={{ padding:"10px 18px", borderBottom:`1px solid ${BRDR}`, display:"flex", alignItems:"center", gap:20, flexShrink:0 }}>
             <p style={{ fontSize:17, fontWeight:800, color:"#fff", flex:1 }}>Cluster Pick · Today</p>
             <span style={{ fontSize:14, color:LBL }}>Orders <strong style={{ color:"#fff", fontSize:17 }}>{totOrders}</strong></span>
