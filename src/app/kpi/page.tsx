@@ -126,73 +126,97 @@ function Sparkline({ points, color }: { points: number[]; color: string }) {
 /* ─── inventory trend chart ─────────────────────────────────────── */
 function TrendChart({ trend }: { trend: TrendPoint[] }) {
   const pts = trend.slice(-21);
-  if (pts.length < 2) return <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center" }}><p style={{ color:LBL, fontSize:14 }}>No trend data</p></div>;
+  if (pts.length < 2) return (
+    <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <p style={{ color:LBL, fontSize:14 }}>No trend data</p>
+    </div>
+  );
 
-  const W = 100, H = 100; // percentages in viewBox
-  const padL = 8, padR = 2, padT = 6, padB = 14;
+  const W = 100, H = 100;
+  const padL = 7, padR = 4, padT = 5, padB = 12;
   const cW = W - padL - padR, cH = H - padT - padB;
 
   const qtyVals = pts.map(p => p.total_qty);
   const skuVals = pts.map(p => p.sku_count);
 
-  const qtyMin = Math.min(...qtyVals), qtyMax = Math.max(...qtyVals, 1);
-  const skuMin = Math.min(...skuVals), skuMax = Math.max(...skuVals, 1);
+  /* add 8% padding above/below each series so flat lines appear mid-chart */
+  const pad = (mn: number, mx: number) => {
+    const r = (mx - mn) * 0.12 || mx * 0.08 || 1;
+    return [mn - r, mx + r] as const;
+  };
+  const [qtyLo, qtyHi] = pad(Math.min(...qtyVals), Math.max(...qtyVals));
+  const [skuLo, skuHi] = pad(Math.min(...skuVals), Math.max(...skuVals));
 
-  const xOf = (i: number) => padL + (i / (pts.length - 1)) * cW;
-  const yOfQty = (v: number) => padT + (1 - (v - qtyMin) / (qtyMax - qtyMin || 1)) * cH;
-  const yOfSku = (v: number) => padT + (1 - (v - skuMin) / (skuMax - skuMin || 1)) * cH;
+  const xOf     = (i: number) => padL + (i / (pts.length - 1)) * cW;
+  const yOfQty  = (v: number) => padT + (1 - (v - qtyLo) / (qtyHi - qtyLo)) * cH;
+  const yOfSku  = (v: number) => padT + (1 - (v - skuLo) / (skuHi - skuLo)) * cH;
 
-  const qtyLine = pts.map((p, i) => `${i===0?"M":"L"}${xOf(i).toFixed(1)},${yOfQty(p.total_qty).toFixed(1)}`).join(" ");
-  const qtyArea = `${qtyLine} L${xOf(pts.length-1).toFixed(1)},${(padT+cH).toFixed(1)} L${xOf(0).toFixed(1)},${(padT+cH).toFixed(1)}Z`;
-  const skuLine = pts.map((p, i) => `${i===0?"M":"L"}${xOf(i).toFixed(1)},${yOfSku(p.sku_count).toFixed(1)}`).join(" ");
+  const qtyLine = pts.map((p, i) => `${i===0?"M":"L"}${xOf(i).toFixed(2)},${yOfQty(p.total_qty).toFixed(2)}`).join(" ");
+  const qtyArea = `${qtyLine} L${xOf(pts.length-1).toFixed(2)},${(padT+cH).toFixed(2)} L${xOf(0).toFixed(2)},${(padT+cH).toFixed(2)}Z`;
+  const skuLine = pts.map((p, i) => `${i===0?"M":"L"}${xOf(i).toFixed(2)},${yOfSku(p.sku_count).toFixed(2)}`).join(" ");
 
-  /* pick 4 evenly spaced x-axis labels */
-  const lblIdxs = [0, Math.floor(pts.length/3), Math.floor(pts.length*2/3), pts.length-1];
+  /* 5 evenly-spaced labels; first=start, last=end so they don't clip */
+  const n = pts.length;
+  const lblIdxs = [0, Math.round(n*0.25), Math.round(n*0.5), Math.round(n*0.75), n-1]
+    .filter((v,i,a) => a.indexOf(v)===i);
+  const anchor = (i: number) => i===0 ? "start" : i===n-1 ? "end" : "middle";
 
   return (
-    <div style={{ flex:1, minHeight:0, padding:"8px 14px 10px", display:"flex", flexDirection:"column", gap:8 }}>
+    <div style={{ flex:1, minHeight:0, padding:"8px 14px 8px", display:"flex", flexDirection:"column", gap:6 }}>
       {/* legend */}
-      <div style={{ display:"flex", gap:18, flexShrink:0 }}>
+      <div style={{ display:"flex", gap:18, alignItems:"center", flexShrink:0 }}>
         <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-          <div style={{ width:20, height:2, background:"#3b82f6", borderRadius:1 }}/>
+          <div style={{ width:18, height:2, background:"#3b82f6", borderRadius:1 }}/>
           <span style={{ fontSize:11, color:LBL }}>Total Qty</span>
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-          <div style={{ width:20, height:2, background:"#a855f7", borderRadius:1 }}/>
+          <svg width="18" height="2"><line x1="0" y1="1" x2="18" y2="1" stroke="#a855f7" strokeWidth="2" strokeDasharray="3,2"/></svg>
           <span style={{ fontSize:11, color:LBL }}>SKU Count</span>
         </div>
-        <span style={{ fontSize:11, color:LBL, marginLeft:"auto" }}>Latest: <strong style={{ color:"#fff" }}>{fmtK(qtyVals[qtyVals.length-1])} units</strong> · <strong style={{ color:"#fff" }}>{skuVals[skuVals.length-1]} SKUs</strong></span>
+        <span style={{ fontSize:11, color:LBL, marginLeft:"auto" }}>
+          Latest: <strong style={{ color:"#fff" }}>{fmtK(qtyVals[qtyVals.length-1])} units</strong>
+          {" · "}
+          <strong style={{ color:"#a855f7" }}>{skuVals[skuVals.length-1]} SKUs</strong>
+        </span>
       </div>
 
       {/* chart */}
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ flex:1, width:"100%", display:"block" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ flex:1, width:"100%", display:"block", overflow:"visible" }}>
         <defs>
           <linearGradient id="qty-fill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.3"/>
+            <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.35"/>
             <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.02"/>
           </linearGradient>
         </defs>
-        {/* grid lines */}
+        {/* horizontal grid */}
         {[0.25, 0.5, 0.75].map(f => (
           <line key={f}
-            x1={padL} y1={(padT + f*cH).toFixed(1)}
-            x2={padL+cW} y2={(padT + f*cH).toFixed(1)}
-            stroke={BRDR} strokeWidth="0.4"/>
+            x1={padL.toFixed(1)} y1={(padT+f*cH).toFixed(2)}
+            x2={(padL+cW).toFixed(1)} y2={(padT+f*cH).toFixed(2)}
+            stroke={BRDR} strokeWidth="0.35"/>
         ))}
-        {/* qty area + line */}
+        {/* qty area */}
         <path d={qtyArea} fill="url(#qty-fill)"/>
-        <path d={qtyLine} fill="none" stroke="#3b82f6" strokeWidth="0.8" strokeLinejoin="round"/>
-        {/* sku line */}
-        <path d={skuLine} fill="none" stroke="#a855f7" strokeWidth="0.8" strokeLinejoin="round" strokeDasharray="1.5,1"/>
+        {/* qty line */}
+        <path d={qtyLine} fill="none" stroke="#3b82f6" strokeWidth="0.9" strokeLinejoin="round"/>
+        {/* sku line (independent scale, dashed) */}
+        <path d={skuLine} fill="none" stroke="#a855f7" strokeWidth="0.75" strokeLinejoin="round" strokeDasharray="1.8,1.2"/>
         {/* x-axis labels */}
         {lblIdxs.map(i => (
-          <text key={i} x={xOf(i).toFixed(1)} y={(padT+cH+6).toFixed(1)}
-            textAnchor="middle" fontSize="3.5" fill={LBL}>
+          <text key={i}
+            x={xOf(i).toFixed(2)} y={(padT+cH+5.5).toFixed(2)}
+            textAnchor={anchor(i)} fontSize="3.8" fill={LBL} fontFamily="monospace">
             {pts[i].date.slice(5)}
           </text>
         ))}
-        {/* latest dot */}
-        <circle cx={xOf(pts.length-1).toFixed(1)} cy={yOfQty(qtyVals[qtyVals.length-1]).toFixed(1)} r="1.2" fill="#3b82f6"/>
+        {/* latest qty dot */}
+        <circle
+          cx={xOf(n-1).toFixed(2)} cy={yOfQty(qtyVals[n-1]).toFixed(2)}
+          r="1.3" fill="#3b82f6"/>
+        {/* latest sku dot */}
+        <circle
+          cx={xOf(n-1).toFixed(2)} cy={yOfSku(skuVals[n-1]).toFixed(2)}
+          r="1.1" fill="#a855f7"/>
       </svg>
     </div>
   );
