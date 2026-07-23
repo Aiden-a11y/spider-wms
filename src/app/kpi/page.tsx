@@ -291,7 +291,9 @@ export default function KpiPage() {
 
       {/* ── Header ── */}
       <header style={{ display:"flex", alignItems:"center", padding:"0 20px", borderBottom:`1px solid ${BRDR}`, gap:14 }}>
-        <span style={{ fontSize:15, fontWeight:800, color:"#fff", letterSpacing:"0.04em" }}>WMS · KPI Display</span>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/stl-logo.png" alt="STL" style={{ height:36, width:"auto", objectFit:"contain" }}/>
+        <span style={{ fontSize:15, fontWeight:700, color:LBL, letterSpacing:"0.04em" }}>KPI Display</span>
 
         <div style={{ display:"flex", alignItems:"center", gap:8, marginLeft:20, color:LBL, fontSize:13 }}>
           {busy
