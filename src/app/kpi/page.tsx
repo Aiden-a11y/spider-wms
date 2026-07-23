@@ -206,7 +206,7 @@ function TrendChart({ trend }: { trend: TrendPoint[] }) {
           <text key={i}
             x={xOf(i).toFixed(2)} y={(padT+cH+4.5).toFixed(2)}
             textAnchor={anchor(i)} fontSize="5" fill={LBL}>
-            {pts[i].date.slice(5)}
+            {pts[i].date.slice(8)}
           </text>
         ))}
       </svg>
