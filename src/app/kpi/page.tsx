@@ -132,8 +132,8 @@ function TrendChart({ trend }: { trend: TrendPoint[] }) {
     </div>
   );
 
-  const W = 100, H = 100;
-  const padL = 7, padR = 4, padT = 5, padB = 12;
+  const W = 500, H = 80;
+  const padL = 6, padR = 4, padT = 6, padB = 14;
   const cW = W - padL - padR, cH = H - padT - padB;
 
   const qtyVals = pts.map(p => p.total_qty);
@@ -181,7 +181,7 @@ function TrendChart({ trend }: { trend: TrendPoint[] }) {
       </div>
 
       {/* chart */}
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ flex:1, width:"100%", display:"block", overflow:"hidden" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" style={{ flex:1, width:"100%", display:"block", overflow:"hidden" }}>
         <defs>
           <linearGradient id="qty-fill" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.35"/>
@@ -198,14 +198,14 @@ function TrendChart({ trend }: { trend: TrendPoint[] }) {
         {/* qty area */}
         <path d={qtyArea} fill="url(#qty-fill)"/>
         {/* qty line */}
-        <path d={qtyLine} fill="none" stroke="#3b82f6" strokeWidth="0.4" strokeLinejoin="round"/>
+        <path d={qtyLine} fill="none" stroke="#3b82f6" strokeWidth="1" strokeLinejoin="round"/>
         {/* sku line (independent scale, dashed) */}
-        <path d={skuLine} fill="none" stroke="#a855f7" strokeWidth="0.35" strokeLinejoin="round" strokeDasharray="1.5,1"/>
+        <path d={skuLine} fill="none" stroke="#a855f7" strokeWidth="0.8" strokeLinejoin="round" strokeDasharray="4,3"/>
         {/* x-axis labels */}
         {lblIdxs.map(i => (
           <text key={i}
             x={xOf(i).toFixed(2)} y={(padT+cH+4.5).toFixed(2)}
-            textAnchor={anchor(i)} fontSize="2.6" fill={LBL}>
+            textAnchor={anchor(i)} fontSize="5" fill={LBL}>
             {pts[i].date.slice(5)}
           </text>
         ))}
