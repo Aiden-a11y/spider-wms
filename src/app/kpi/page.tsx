@@ -219,8 +219,15 @@ export default function KpiPage() {
         fetch("/api/cluster").then(r=>r.json()).catch(()=>[]),
       ]);
 
-      /* exact same paths as dashboard/page.tsx */
-      setInventory(parseList(rInv, ["data"], ["data","list"], ["list"], []));
+      /* debug — remove after confirming */
+      console.log("[KPI] inv raw keys:", Object.keys(rInv ?? {}));
+      console.log("[KPI] inv data type:", Array.isArray(rInv?.data) ? `array(${rInv.data.length})` : typeof rInv?.data);
+      if (rInv?.data && typeof rInv.data === "object" && !Array.isArray(rInv.data)) {
+        console.log("[KPI] inv data keys:", Object.keys(rInv.data));
+      }
+      const invRows = parseList(rInv, ["data"], ["data","list"], ["list"], []);
+      console.log("[KPI] inv parsed rows:", invRows.length, invRows[0] ? Object.keys(invRows[0]) : []);
+      setInventory(invRows);
       setLocations(parseList(rLoc, ["data","list"],["data"],[]));
       setB2b(ordB2B);
       setB2c(ordB2C);
