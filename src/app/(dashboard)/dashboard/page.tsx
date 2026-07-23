@@ -5,7 +5,7 @@ import { useAuth } from "@/contexts/auth-context";
 import { useRouter } from "next/navigation";
 import {
   RefreshCw, MapPin, PackageCheck, Truck, RotateCcw, Boxes, TrendingUp,
-  AlertCircle, ChevronRight, LayoutGrid, BarChart2,
+  AlertCircle, ChevronRight, LayoutGrid, BarChart2, Maximize2,
 } from "lucide-react";
 
 type Row = Record<string, unknown>;
@@ -809,6 +809,15 @@ export default function DashboardPage() {
                 {Math.floor(countdown / 60)}:{String(countdown % 60).padStart(2, "0")}
               </span>
             </div>
+
+            <button
+              onClick={() => router.push("/kpi")}
+              className="flex items-center gap-2 text-sm text-slate-600 hover:text-purple-600 border border-slate-200 hover:border-purple-300 rounded-xl px-3 py-2 hover:bg-purple-50 transition-all duration-200 active:scale-95"
+              title="Open KPI Display (fullscreen)"
+            >
+              <Maximize2 className="w-4 h-4" />
+              KPI Display
+            </button>
 
             <button
               onClick={load} disabled={loading}
