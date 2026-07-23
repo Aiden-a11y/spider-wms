@@ -1,5 +1,7 @@
 "use client";
 
+export const dynamic = "force-dynamic";
+
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import { useRouter } from "next/navigation";
@@ -167,9 +169,8 @@ export default function KpiPage() {
   const [b2c,      setB2c]        = useState<Row[]>([]);
   const [clusters, setClusters]   = useState<B2CCluster[]>([]);
 
-  /* match dashboard exactly — non-null token assertion after user guard */
   const headers = useMemo(
-    () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
+    () => ({ Authorization: `Bearer ${user?.token ?? ""}`, "Content-Type": "application/json" }),
     [user]
   );
 
