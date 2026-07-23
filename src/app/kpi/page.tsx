@@ -33,25 +33,15 @@ const STATUS_ORDER = ["AA","CA","DA","AR","AC","LR","L2","LC","HA","CC","FA"];
 /* ─── helpers ───────────────────────────────────────────────────── */
 type Row = Record<string, unknown>;
 
-/* depth-first array finder — same logic as mobile's arrOf */
-function findArr(j: unknown, depth = 0): Row[] {
-  if (Array.isArray(j) && j.length > 0) return j as Row[];
-  if (!j || typeof j !== "object" || depth > 4) return [];
-  for (const v of Object.values(j as Record<string, unknown>)) {
-    const r = findArr(v, depth + 1);
-    if (r.length > 0) return r;
-  }
-  return [];
-}
-
+/* exact same parseList as dashboard/page.tsx */
 function parseList(json: unknown, ...paths: string[][]): Row[] {
   const j = json as Record<string, unknown>;
   for (const path of paths) {
     let cur: unknown = j;
     for (const p of path) cur = (cur as Record<string, unknown>)?.[p];
-    if (Array.isArray(cur) && (cur as Row[]).length > 0) return cur as Row[];
+    if (Array.isArray(cur)) return cur as Row[];
   }
-  return findArr(json);  // fallback: find any non-empty array recursively
+  return [];
 }
 
 function orderDateOf(o: Row): string {
@@ -177,11 +167,9 @@ export default function KpiPage() {
   const [b2c,      setB2c]        = useState<Row[]>([]);
   const [clusters, setClusters]   = useState<B2CCluster[]>([]);
 
+  /* match dashboard exactly — non-null token assertion after user guard */
   const headers = useMemo(
-    (): Record<string,string> => ({
-      Authorization: `Bearer ${user?.token ?? ""}`,
-      "Content-Type": "application/json",
-    }),
+    () => ({ Authorization: `Bearer ${user!.token}`, "Content-Type": "application/json" }),
     [user]
   );
 
@@ -230,8 +218,8 @@ export default function KpiPage() {
         fetch("/api/cluster").then(r=>r.json()).catch(()=>[]),
       ]);
 
-      /* inventory: try all explicit paths, then fall back to recursive search */
-      setInventory(parseList(rInv, ["data","list"],["data","records"],["data"],["list"],["records"],[]));
+      /* exact same paths as dashboard/page.tsx */
+      setInventory(parseList(rInv, ["data"], ["data","list"], ["list"], []));
       setLocations(parseList(rLoc, ["data","list"],["data"],[]));
       setB2b(ordB2B);
       setB2c(ordB2C);
@@ -265,9 +253,15 @@ export default function KpiPage() {
   const b2cYest  = useMemo(()=>b2c.filter(o=>orderDateOf(o)===yest_), [b2c,yest_]);
 
   const todayC   = useMemo(()=>clusters.filter(c=>c.completedAt&&isoOf(c.completedAt)===today_).map(c=>({c,s:clusterStats(c)})).sort((a,b)=>new Date(b.c.completedAt!).getTime()-new Date(a.c.completedAt!).getTime()),[clusters,today_]);
-  const avgUph   = useMemo(()=>{ const v=todayC.filter(x=>x.s.uph!==null); return v.length?Math.round(v.reduce((s,x)=>s+x.s.uph!,0)/v.length):null; },[todayC]);
-  const totUnits = useMemo(()=>todayC.reduce((s,x)=>s+x.s.units,0),[todayC]);
-  const totOrders= useMemo(()=>todayC.reduce((s,x)=>s+x.s.orders,0),[todayC]);
+  const avgUph       = useMemo(()=>{ const v=todayC.filter(x=>x.s.uph!==null); return v.length?Math.round(v.reduce((s,x)=>s+x.s.uph!,0)/v.length):null; },[todayC]);
+  const totUnits     = useMemo(()=>todayC.reduce((s,x)=>s+x.s.units,0),[todayC]);
+  const totOrders    = useMemo(()=>todayC.reduce((s,x)=>s+x.s.orders,0),[todayC]);
+  const avgMinPerOrd = useMemo(()=>{
+    const v = todayC.filter(x=>x.s.min!==null && x.s.orders>0);
+    if(!v.length) return null;
+    const total = v.reduce((s,x)=>s + x.s.min!/x.s.orders, 0);
+    return Math.round(total/v.length*10)/10;
+  },[todayC]);
 
   const locByType = useMemo(()=>{
     const m:Record<string,{t:number;o:number}>={};
@@ -290,7 +284,7 @@ export default function KpiPage() {
     <div ref={ref} style={{
       width:"100vw", height:"100vh", overflow:"hidden",
       background:BG, display:"grid",
-      gridTemplateRows:"52px 168px 1fr 1fr 26px",
+      gridTemplateRows:"72px 168px 1fr 1fr 26px",
       fontFamily:"Inter, system-ui, -apple-system, sans-serif", color:"#fff",
       boxSizing:"border-box",
     }}>
@@ -311,8 +305,8 @@ export default function KpiPage() {
 
         <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:12 }}>
           <div style={{ textAlign:"right" }}>
-            <p style={{ fontSize:34, fontWeight:900, color:"#fff", lineHeight:1, letterSpacing:"0.04em", fontVariantNumeric:"tabular-nums" }}>{timeStr}</p>
-            <p style={{ fontSize:11, color:LBL, marginTop:2 }}>{dateStr}</p>
+            <p style={{ fontSize:52, fontWeight:900, color:"#fff", lineHeight:1, letterSpacing:"0.04em", fontVariantNumeric:"tabular-nums" }}>{timeStr}</p>
+            <p style={{ fontSize:13, color:LBL, marginTop:4 }}>{dateStr}</p>
           </div>
           <button onClick={toggleFs} style={{ padding:8, borderRadius:0, background:C1, border:`1px solid ${BRDR}`, color:LBL, cursor:"pointer", display:"flex" }}>
             {isFs?<Minimize2 style={{width:16,height:16}}/>:<Maximize2 style={{width:16,height:16}}/>}
@@ -324,13 +318,14 @@ export default function KpiPage() {
       </header>
 
       {/* ── KPI tiles ── */}
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(6,1fr)", gap:1, padding:"0", boxSizing:"border-box", borderBottom:`1px solid ${BRDR}` }}>
-        <KpiCard label="Total Inventory"   value={totalQty}   sub="units on hand"/>
-        <KpiCard label="Total SKUs"        value={totalSkus}  sub="distinct products"/>
-        <KpiCard label="Occupied Locs"     value={`${occupiedLocs}/${totalLocs}`} sub={totalLocs>0?`${Math.round(occupiedLocs/totalLocs*100)}% utilized`:""}/>
-        <KpiCard label="B2B Today"         value={b2bToday.length} sub={`${b2bToday.filter(o=>statusOf(o)==="FA").length} done · ${b2bToday.filter(o=>ACTIVE_S.includes(statusOf(o))).length} active`}/>
-        <KpiCard label="B2C Today"         value={b2cToday.length} sub={`${b2cToday.filter(o=>statusOf(o)==="FA").length} done · ${b2cToday.filter(o=>ACTIVE_S.includes(statusOf(o))).length} active`}/>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:1, padding:"0", boxSizing:"border-box", borderBottom:`1px solid ${BRDR}` }}>
+        <KpiCard label="Total Inventory"    value={totalQty}   sub="units on hand"/>
+        <KpiCard label="Total SKUs"         value={totalSkus}  sub="distinct products"/>
+        <KpiCard label="Occupied Locs"      value={`${occupiedLocs}/${totalLocs}`} sub={totalLocs>0?`${Math.round(occupiedLocs/totalLocs*100)}% utilized`:""}/>
+        <KpiCard label="B2B Today"          value={b2bToday.length} sub={`${b2bToday.filter(o=>statusOf(o)==="FA").length} done · ${b2bToday.filter(o=>ACTIVE_S.includes(statusOf(o))).length} active`}/>
+        <KpiCard label="B2C Today"          value={b2cToday.length} sub={`${b2cToday.filter(o=>statusOf(o)==="FA").length} done · ${b2cToday.filter(o=>ACTIVE_S.includes(statusOf(o))).length} active`}/>
         <KpiCard label="Cluster Units / hr" value={avgUph!==null?avgUph:"—"} sub={todayC.length?`${todayC.length} runs · ${totUnits} units · ${totOrders} orders`:"No clusters today"}/>
+        <KpiCard label="Min / Order"        value={avgMinPerOrd!==null?avgMinPerOrd:"—"} sub={avgMinPerOrd!==null?"avg min per order":"No clusters today"}/>
       </div>
 
       {/* ── B2B + B2C ── */}
