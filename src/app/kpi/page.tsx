@@ -181,7 +181,7 @@ function TrendChart({ trend }: { trend: TrendPoint[] }) {
       </div>
 
       {/* chart */}
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ flex:1, width:"100%", display:"block", overflow:"visible" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ flex:1, width:"100%", display:"block", overflow:"hidden" }}>
         <defs>
           <linearGradient id="qty-fill" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.35"/>
@@ -204,19 +204,11 @@ function TrendChart({ trend }: { trend: TrendPoint[] }) {
         {/* x-axis labels */}
         {lblIdxs.map(i => (
           <text key={i}
-            x={xOf(i).toFixed(2)} y={(padT+cH+5.5).toFixed(2)}
-            textAnchor={anchor(i)} fontSize="3.8" fill={LBL} fontFamily="monospace">
+            x={xOf(i).toFixed(2)} y={(padT+cH+4.5).toFixed(2)}
+            textAnchor={anchor(i)} fontSize="3.5" fill={LBL}>
             {pts[i].date.slice(5)}
           </text>
         ))}
-        {/* latest qty dot */}
-        <circle
-          cx={xOf(n-1).toFixed(2)} cy={yOfQty(qtyVals[n-1]).toFixed(2)}
-          r="1.3" fill="#3b82f6"/>
-        {/* latest sku dot */}
-        <circle
-          cx={xOf(n-1).toFixed(2)} cy={yOfSku(skuVals[n-1]).toFixed(2)}
-          r="1.1" fill="#a855f7"/>
       </svg>
     </div>
   );
