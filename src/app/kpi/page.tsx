@@ -69,7 +69,13 @@ const statusOf  = (o: Row) => String(o.status ?? o.orderStatus ?? "");
 const todayISO  = () => new Date().toISOString().slice(0,10);
 const yesterISO = () => { const d=new Date(); d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); };
 const isoOf     = (s: string) => s.slice(0,10);
-const fmtQty    = (n: number) => n >= 1000 ? `${(n/1000).toFixed(0)}k` : String(n);
+const fmtK      = (n: number) => n >= 1000 ? `${(n/1000).toFixed(0)}k` : String(n);
+
+/* OPH / UPH thresholds */
+const uphColor = (v: number | null) =>
+  v === null ? "#475569" : v >= 150 ? "#4ade80" : v >= 75 ? "#fbbf24" : "#f87171";
+const ophColor = (v: number | null) =>
+  v === null ? "#475569" : v >= 40  ? "#4ade80" : v >= 20 ? "#fbbf24" : "#f87171";
 
 /* ─── clock ─────────────────────────────────────────────────────── */
 function useClock() {
@@ -92,22 +98,103 @@ function clusterStats(c: B2CCluster) {
   };
 }
 
-/* ─── sparkline ─────────────────────────────────────────────────── */
+/* ─── sparkline (KPI tile) ──────────────────────────────────────── */
 function Sparkline({ points, color }: { points: number[]; color: string }) {
   if (points.length < 2) return null;
-  const W = 120, H = 36;
+  const W = 100, H = 32;
   const min = Math.min(...points), max = Math.max(...points);
   const range = max - min || 1;
-  const pts = points.map((v, i) => ({
-    x: (i / (points.length - 1)) * W,
-    y: H - ((v - min) / range) * H * 0.85 - H * 0.075,
-  }));
-  const d = pts.map((p, i) => `${i===0?"M":"L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  const xs = points.map((_, i) => (i / (points.length - 1)) * W);
+  const ys = points.map(v => H - ((v - min) / range) * H * 0.8 - H * 0.1);
+  const line = xs.map((x, i) => `${i===0?"M":"L"}${x.toFixed(1)},${ys[i].toFixed(1)}`).join(" ");
+  const area = `${line} L${xs[xs.length-1].toFixed(1)},${H} L0,${H}Z`;
   return (
-    <svg width={W} height={H} style={{ display:"block", overflow:"visible" }}>
-      <path d={d} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round"/>
-      <circle cx={pts[pts.length-1].x} cy={pts[pts.length-1].y} r={2.5} fill={color}/>
+    <svg width={W} height={H} style={{ display:"block", flexShrink:0 }}>
+      <defs>
+        <linearGradient id={`sg-${color.replace("#","")}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.25"/>
+          <stop offset="100%" stopColor={color} stopOpacity="0.02"/>
+        </linearGradient>
+      </defs>
+      <path d={area} fill={`url(#sg-${color.replace("#","")})`}/>
+      <path d={line} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round"/>
+      <circle cx={xs[xs.length-1]} cy={ys[ys.length-1]} r={2.5} fill={color}/>
     </svg>
+  );
+}
+
+/* ─── inventory trend chart ─────────────────────────────────────── */
+function TrendChart({ trend }: { trend: TrendPoint[] }) {
+  const pts = trend.slice(-21);
+  if (pts.length < 2) return <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center" }}><p style={{ color:LBL, fontSize:14 }}>No trend data</p></div>;
+
+  const W = 100, H = 100; // percentages in viewBox
+  const padL = 8, padR = 2, padT = 6, padB = 14;
+  const cW = W - padL - padR, cH = H - padT - padB;
+
+  const qtyVals = pts.map(p => p.total_qty);
+  const skuVals = pts.map(p => p.sku_count);
+
+  const qtyMin = Math.min(...qtyVals), qtyMax = Math.max(...qtyVals, 1);
+  const skuMin = Math.min(...skuVals), skuMax = Math.max(...skuVals, 1);
+
+  const xOf = (i: number) => padL + (i / (pts.length - 1)) * cW;
+  const yOfQty = (v: number) => padT + (1 - (v - qtyMin) / (qtyMax - qtyMin || 1)) * cH;
+  const yOfSku = (v: number) => padT + (1 - (v - skuMin) / (skuMax - skuMin || 1)) * cH;
+
+  const qtyLine = pts.map((p, i) => `${i===0?"M":"L"}${xOf(i).toFixed(1)},${yOfQty(p.total_qty).toFixed(1)}`).join(" ");
+  const qtyArea = `${qtyLine} L${xOf(pts.length-1).toFixed(1)},${(padT+cH).toFixed(1)} L${xOf(0).toFixed(1)},${(padT+cH).toFixed(1)}Z`;
+  const skuLine = pts.map((p, i) => `${i===0?"M":"L"}${xOf(i).toFixed(1)},${yOfSku(p.sku_count).toFixed(1)}`).join(" ");
+
+  /* pick 4 evenly spaced x-axis labels */
+  const lblIdxs = [0, Math.floor(pts.length/3), Math.floor(pts.length*2/3), pts.length-1];
+
+  return (
+    <div style={{ flex:1, minHeight:0, padding:"8px 14px 10px", display:"flex", flexDirection:"column", gap:8 }}>
+      {/* legend */}
+      <div style={{ display:"flex", gap:18, flexShrink:0 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+          <div style={{ width:20, height:2, background:"#3b82f6", borderRadius:1 }}/>
+          <span style={{ fontSize:11, color:LBL }}>Total Qty</span>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+          <div style={{ width:20, height:2, background:"#a855f7", borderRadius:1 }}/>
+          <span style={{ fontSize:11, color:LBL }}>SKU Count</span>
+        </div>
+        <span style={{ fontSize:11, color:LBL, marginLeft:"auto" }}>Latest: <strong style={{ color:"#fff" }}>{fmtK(qtyVals[qtyVals.length-1])} units</strong> · <strong style={{ color:"#fff" }}>{skuVals[skuVals.length-1]} SKUs</strong></span>
+      </div>
+
+      {/* chart */}
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ flex:1, width:"100%", display:"block" }}>
+        <defs>
+          <linearGradient id="qty-fill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.3"/>
+            <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.02"/>
+          </linearGradient>
+        </defs>
+        {/* grid lines */}
+        {[0.25, 0.5, 0.75].map(f => (
+          <line key={f}
+            x1={padL} y1={(padT + f*cH).toFixed(1)}
+            x2={padL+cW} y2={(padT + f*cH).toFixed(1)}
+            stroke={BRDR} strokeWidth="0.4"/>
+        ))}
+        {/* qty area + line */}
+        <path d={qtyArea} fill="url(#qty-fill)"/>
+        <path d={qtyLine} fill="none" stroke="#3b82f6" strokeWidth="0.8" strokeLinejoin="round"/>
+        {/* sku line */}
+        <path d={skuLine} fill="none" stroke="#a855f7" strokeWidth="0.8" strokeLinejoin="round" strokeDasharray="1.5,1"/>
+        {/* x-axis labels */}
+        {lblIdxs.map(i => (
+          <text key={i} x={xOf(i).toFixed(1)} y={(padT+cH+6).toFixed(1)}
+            textAnchor="middle" fontSize="3.5" fill={LBL}>
+            {pts[i].date.slice(5)}
+          </text>
+        ))}
+        {/* latest dot */}
+        <circle cx={xOf(pts.length-1).toFixed(1)} cy={yOfQty(qtyVals[qtyVals.length-1]).toFixed(1)} r="1.2" fill="#3b82f6"/>
+      </svg>
+    </div>
   );
 }
 
@@ -118,7 +205,7 @@ function KpiCard({ label, value, sub, sparkPoints, sparkColor }: {
 }) {
   return (
     <div style={{ background:C1, border:`1px solid ${BRDR}`, borderRadius:0, padding:"14px 18px 12px", display:"flex", flexDirection:"column", gap:4, minWidth:0 }}>
-      <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between" }}>
+      <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:8 }}>
         <p style={{ fontSize:11, fontWeight:700, letterSpacing:"0.12em", textTransform:"uppercase", color:LBL }}>{label}</p>
         {sparkPoints && sparkPoints.length > 1 && <Sparkline points={sparkPoints} color={sparkColor ?? "#3b82f6"}/>}
       </div>
@@ -203,7 +290,6 @@ export default function KpiPage() {
   const [busy, setBusy] = useState(true);
 
   const [trendData,  setTrendData]  = useState<TrendResponse | null>(null);
-  const [locations,  setLocations]  = useState<Row[]>([]);
   const [b2b,        setB2b]        = useState<Row[]>([]);
   const [b2c,        setB2c]        = useState<Row[]>([]);
   const [clusters,   setClusters]   = useState<B2CCluster[]>([]);
@@ -213,7 +299,6 @@ export default function KpiPage() {
     [user]
   );
 
-  /* fullscreen */
   function toggleFs() {
     if (!document.fullscreenElement) ref.current?.requestFullscreen();
     else document.exitFullscreen();
@@ -224,7 +309,6 @@ export default function KpiPage() {
     return ()=>document.removeEventListener("fullscreenchange",fn);
   },[]);
 
-  /* load orders */
   const loadOrders = useCallback(async (type:"b2b"|"b2c"): Promise<Row[]> => {
     const body = { limit:2000, pageSize:2000, orderType:type.toUpperCase(), warehouseCode:"STOO1" };
     for (const ep of [
@@ -248,19 +332,13 @@ export default function KpiPage() {
     if (!user) return;
     setBusy(true);
     try {
-      const [rTrend, rLoc, ordB2B, ordB2C, rClusters] = await Promise.all([
-        /* inventory trend — Supabase snapshot, same as dashboard */
+      const [rTrend, ordB2B, ordB2C, rClusters] = await Promise.all([
         fetch("/api/inventory-trend").then(r=>r.json()).catch(()=>null),
-        /* locations for occupancy breakdown */
-        fetch("/api/wms/warehouse/location/list", { method:"POST", headers, body:JSON.stringify({ page:1, pageSize:9999, warehouseCode:"", search:"", sortField:"WarehouseCode", sortDir:"asc" }) })
-          .then(r=>r.json()).catch(()=>({})),
         loadOrders("b2b"),
         loadOrders("b2c"),
         fetch("/api/cluster").then(r=>r.json()).catch(()=>[]),
       ]);
-
       if (rTrend?.trend) setTrendData(rTrend as TrendResponse);
-      setLocations(parseList(rLoc, ["data","list"],["data"],[]));
       setB2b(ordB2B);
       setB2c(ordB2C);
       setClusters(Array.isArray(rClusters) ? rClusters as B2CCluster[] : []);
@@ -276,43 +354,23 @@ export default function KpiPage() {
     return ()=>clearInterval(id);
   },[load]);
 
-  /* derived — inventory from snapshot */
+  /* derived */
   const today_ = todayISO(), yest_ = yesterISO();
 
   const latestSnap  = trendData?.trend[trendData.trend.length - 1] ?? null;
   const totalQty    = latestSnap?.total_qty  ?? 0;
   const totalSkus   = latestSnap?.sku_count  ?? 0;
   const snapOccLocs = trendData?.occupied_locations.length ?? 0;
+  const totalLocs   = latestSnap?.location_count ?? 0;
 
-  /* trend sparkline — last 14 points */
   const qtySparkPoints = useMemo(()=>(trendData?.trend ?? []).slice(-14).map(p=>p.total_qty),[trendData]);
   const skuSparkPoints = useMemo(()=>(trendData?.trend ?? []).slice(-14).map(p=>p.sku_count),[trendData]);
 
-  /* locations */
-  const totalLocs = locations.length;
-  const norm = (s:string) => s.toLowerCase().replace(/[\s\-_/]+/g,"");
-  const snapLocSet = useMemo(()=>new Set((trendData?.occupied_locations??[]).map(l=>norm(l))),[trendData]); // eslint-disable-line react-hooks/exhaustive-deps
-  const occupiedLocs = snapOccLocs || totalLocs;
-
-  const locByType = useMemo(()=>{
-    const m:Record<string,{t:number;o:number}>={};
-    for(const l of locations){
-      const k=String(l.occupancyInfo??l.locationType??"Other");
-      if(!m[k]) m[k]={t:0,o:0};
-      m[k].t++;
-      if(snapLocSet.has(norm(String(l.locationCode??l.location??"")))||Number(l.currentQty??l.qty??0)>0) m[k].o++;
-    }
-    return Object.entries(m).sort((a,b)=>b[1].o-a[1].o);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[locations,snapLocSet]);
-
-  /* orders */
   const b2bToday = useMemo(()=>b2b.filter(o=>orderDateOf(o)===today_),[b2b,today_]);
   const b2bYest  = useMemo(()=>b2b.filter(o=>orderDateOf(o)===yest_), [b2b,yest_]);
   const b2cToday = useMemo(()=>b2c.filter(o=>orderDateOf(o)===today_),[b2c,today_]);
   const b2cYest  = useMemo(()=>b2c.filter(o=>orderDateOf(o)===yest_), [b2c,yest_]);
 
-  /* clusters */
   const todayC    = useMemo(()=>clusters.filter(c=>c.completedAt&&isoOf(c.completedAt)===today_).map(c=>({c,s:clusterStats(c)})).sort((a,b)=>new Date(b.c.completedAt!).getTime()-new Date(a.c.completedAt!).getTime()),[clusters,today_]);
   const avgUph    = useMemo(()=>{ const v=todayC.filter(x=>x.s.uph!==null); return v.length?Math.round(v.reduce((s,x)=>s+x.s.uph!,0)/v.length):null; },[todayC]);
   const totUnits  = useMemo(()=>todayC.reduce((s,x)=>s+x.s.units,0),[todayC]);
@@ -332,7 +390,7 @@ export default function KpiPage() {
     <div ref={ref} style={{
       width:"100vw", height:"100vh", overflow:"hidden",
       background:BG, display:"grid",
-      gridTemplateRows:"72px 168px 1fr 1fr 26px",
+      gridTemplateRows:"72px 160px 1fr 1fr 26px",
       fontFamily:"Inter, system-ui, -apple-system, sans-serif", color:"#fff",
       boxSizing:"border-box",
     }}>
@@ -358,81 +416,51 @@ export default function KpiPage() {
             <p style={{ fontSize:52, fontWeight:900, color:"#fff", lineHeight:1, letterSpacing:"0.04em", fontVariantNumeric:"tabular-nums" }}>{timeStr}</p>
             <p style={{ fontSize:13, color:LBL, marginTop:4 }}>{dateStr}</p>
           </div>
-          <button onClick={toggleFs} style={{ padding:8, borderRadius:0, background:C1, border:`1px solid ${BRDR}`, color:LBL, cursor:"pointer", display:"flex" }}>
+          <button onClick={toggleFs} style={{ padding:8, background:C1, border:`1px solid ${BRDR}`, color:LBL, cursor:"pointer", display:"flex" }}>
             {isFs?<Minimize2 style={{width:16,height:16}}/>:<Maximize2 style={{width:16,height:16}}/>}
           </button>
-          <button onClick={()=>router.push("/dashboard")} style={{ padding:8, borderRadius:0, background:C1, border:`1px solid ${BRDR}`, color:LBL, cursor:"pointer", display:"flex" }}>
+          <button onClick={()=>router.push("/dashboard")} style={{ padding:8, background:C1, border:`1px solid ${BRDR}`, color:LBL, cursor:"pointer", display:"flex" }}>
             <X style={{width:16,height:16}}/>
           </button>
         </div>
       </header>
 
       {/* ── KPI tiles ── */}
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:1, boxSizing:"border-box", borderBottom:`1px solid ${BRDR}` }}>
-        <KpiCard label="Total Inventory"    value={fmtQty(totalQty)}  sub={`${totalQty.toLocaleString()} units`}  sparkPoints={qtySparkPoints} sparkColor="#3b82f6"/>
-        <KpiCard label="Total SKUs"         value={totalSkus.toLocaleString()} sub="distinct products" sparkPoints={skuSparkPoints} sparkColor="#a855f7"/>
-        <KpiCard label="Occupied Locs"      value={`${snapOccLocs}/${latestSnap?.location_count ?? totalLocs}`} sub={latestSnap ? `${Math.round(snapOccLocs/(latestSnap.location_count||1)*100)}% utilized` : ""}/>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:1, borderBottom:`1px solid ${BRDR}` }}>
+        <KpiCard label="Total Inventory"    value={fmtK(totalQty)}            sub={`${totalQty.toLocaleString()} units`}   sparkPoints={qtySparkPoints} sparkColor="#3b82f6"/>
+        <KpiCard label="Total SKUs"         value={totalSkus.toLocaleString()} sub="distinct products"                      sparkPoints={skuSparkPoints} sparkColor="#a855f7"/>
+        <KpiCard label="Occupied Locs"      value={`${snapOccLocs}/${totalLocs}`} sub={totalLocs>0?`${Math.round(snapOccLocs/(totalLocs||1)*100)}% utilized`:""}/>
         <KpiCard label="B2B Today"          value={b2bToday.length} sub={`${b2bToday.filter(o=>statusOf(o)==="FA").length} done · ${b2bToday.filter(o=>ACTIVE_S.includes(statusOf(o))).length} active`}/>
         <KpiCard label="B2C Today"          value={b2cToday.length} sub={`${b2cToday.filter(o=>statusOf(o)==="FA").length} done · ${b2cToday.filter(o=>ACTIVE_S.includes(statusOf(o))).length} active`}/>
-        <KpiCard label="Cluster Units / hr" value={avgUph!==null?avgUph:"—"} sub={todayC.length?`${todayC.length} runs · ${totUnits} units · ${totOrders} orders`:"No clusters today"}/>
+        <KpiCard label="Cluster Units / hr" value={avgUph!==null?avgUph:"—"}   sub={todayC.length?`${todayC.length} runs · ${totUnits} units · ${totOrders} orders`:"No clusters today"}/>
         <KpiCard label="Min / Order"        value={avgMinPerOrd!==null?avgMinPerOrd:"—"} sub={avgMinPerOrd!==null?"avg min per order":"No clusters today"}/>
       </div>
 
       {/* ── B2B + B2C ── */}
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:1, boxSizing:"border-box", minHeight:0 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:1, minHeight:0 }}>
         <OrderPanel title="B2B Orders" todayOrders={b2bToday} yestOrders={b2bYest}/>
         <OrderPanel title="B2C Orders" todayOrders={b2cToday} yestOrders={b2cYest}/>
       </div>
 
-      {/* ── Location Occupancy + Cluster Pick ── */}
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:1, boxSizing:"border-box", minHeight:0 }}>
+      {/* ── Inventory Trend + Cluster ── */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:1, minHeight:0 }}>
 
-        {/* inventory trend + location occupancy */}
+        {/* Inventory trend chart */}
         <div style={{ background:C1, borderTop:`1px solid ${BRDR}`, display:"flex", flexDirection:"column", minHeight:0, overflow:"hidden" }}>
           <div style={{ padding:"10px 18px", borderBottom:`1px solid ${BRDR}`, display:"flex", alignItems:"center", flexShrink:0 }}>
-            <p style={{ fontSize:17, fontWeight:800, color:"#fff", flex:1 }}>Location Occupancy</p>
-            <span style={{ fontSize:14, color:LBL }}>{snapOccLocs || "—"} / {latestSnap?.location_count ?? totalLocs} used</span>
+            <p style={{ fontSize:17, fontWeight:800, color:"#fff", flex:1 }}>Inventory Trend · Last 21 days</p>
+            <span style={{ fontSize:13, color:LBL }}>Snapshot from Supabase</span>
           </div>
-          <div style={{ flex:1, overflowY:"auto", padding:"10px 18px", display:"flex", flexDirection:"column", gap:8 }}>
-            {locByType.length > 0 ? locByType.map(([type,d])=>{
-              const pct=d.t>0?Math.round(d.o/d.t*100):0;
-              const bar=pct>=90?"#ef4444":pct>=70?"#f59e0b":"#3b82f6";
-              return (
-                <div key={type}>
-                  <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
-                    <span style={{ fontSize:14, color:"#fff", fontWeight:600 }}>{type}</span>
-                    <div style={{ display:"flex", gap:14 }}>
-                      <span style={{ fontSize:14, color:LBL, fontVariantNumeric:"tabular-nums" }}>{d.o}/{d.t}</span>
-                      <span style={{ fontSize:15, fontWeight:900, color:"#fff", fontVariantNumeric:"tabular-nums", width:38, textAlign:"right" }}>{pct}%</span>
-                    </div>
-                  </div>
-                  <div style={{ height:5, background:"rgba(255,255,255,0.07)" }}>
-                    <div style={{ height:"100%", background:bar, width:`${pct}%`, transition:"width 1s ease" }}/>
-                  </div>
-                </div>
-              );
-            }) : (
-              /* fallback: show inventory trend sparkline if no location breakdown */
-              <div style={{ display:"flex", flexDirection:"column", gap:10, paddingTop:8 }}>
-                {(trendData?.trend ?? []).slice(-7).reverse().map(p=>(
-                  <div key={p.date} style={{ display:"flex", alignItems:"center", gap:12 }}>
-                    <span style={{ fontSize:12, color:LBL, width:60 }}>{p.date.slice(5)}</span>
-                    <span style={{ fontSize:15, fontWeight:700, color:"#fff", fontVariantNumeric:"tabular-nums" }}>{p.total_qty.toLocaleString()}</span>
-                    <span style={{ fontSize:12, color:LBL }}>{p.sku_count} SKUs</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <TrendChart trend={trendData?.trend ?? []}/>
         </div>
 
         {/* Cluster pick */}
         <div style={{ background:C1, borderTop:`1px solid ${BRDR}`, borderLeft:`1px solid ${BRDR}`, display:"flex", flexDirection:"column", minHeight:0, overflow:"hidden" }}>
           <div style={{ padding:"10px 18px", borderBottom:`1px solid ${BRDR}`, display:"flex", alignItems:"center", gap:20, flexShrink:0 }}>
             <p style={{ fontSize:17, fontWeight:800, color:"#fff", flex:1 }}>Cluster Pick · Today</p>
-            <span style={{ fontSize:14, color:LBL }}>Orders <strong style={{ color:"#fff", fontSize:17 }}>{totOrders}</strong></span>
-            <span style={{ fontSize:14, color:LBL }}>Units <strong style={{ color:"#fff", fontSize:17 }}>{totUnits}</strong></span>
-            {avgUph!==null && <span style={{ fontSize:15, fontWeight:800, color:"#4ade80" }}>avg {avgUph} u/hr</span>}
+            <span style={{ fontSize:13, color:LBL }}>Orders <strong style={{ color:"#fff", fontSize:16 }}>{totOrders}</strong></span>
+            <span style={{ fontSize:13, color:LBL }}>Units <strong style={{ color:"#fff", fontSize:16 }}>{totUnits}</strong></span>
+            {avgUph!==null && <span style={{ fontSize:14, fontWeight:800, color:uphColor(avgUph) }}>avg {avgUph} u/hr</span>}
           </div>
           {todayC.length===0
             ? <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center" }}>
@@ -443,21 +471,21 @@ export default function KpiPage() {
                   <thead>
                     <tr style={{ borderBottom:`1px solid ${BRDR}` }}>
                       {["Cluster #","Orders","Units","Duration","Units / hr","Orders / hr"].map(h=>(
-                        <th key={h} style={{ padding:"9px 16px", textAlign:"left", fontSize:12, fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", color:LBL, whiteSpace:"nowrap" }}>{h}</th>
+                        <th key={h} style={{ padding:"9px 16px", textAlign:"left", fontSize:11, fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", color:LBL, whiteSpace:"nowrap" }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {todayC.map(({c,s})=>(
                       <tr key={c.id} style={{ borderBottom:`1px solid ${BRDR}` }}>
-                        <td style={{ padding:"10px 16px", fontWeight:800, color:"#60a5fa", fontVariantNumeric:"tabular-nums", fontSize:15 }}>#{String(c.clusterNo??"").padStart(4,"0")}</td>
-                        <td style={{ padding:"10px 16px", fontWeight:700, color:"#fff", fontSize:16, fontVariantNumeric:"tabular-nums" }}>{s.orders}</td>
-                        <td style={{ padding:"10px 16px", fontWeight:700, color:"#fff", fontSize:16, fontVariantNumeric:"tabular-nums" }}>{s.units}</td>
-                        <td style={{ padding:"10px 16px", color:"#fff", fontSize:15, fontVariantNumeric:"tabular-nums" }}>
+                        <td style={{ padding:"9px 16px", fontWeight:800, color:"#60a5fa", fontSize:14, fontVariantNumeric:"tabular-nums" }}>#{String(c.clusterNo??"").padStart(4,"0")}</td>
+                        <td style={{ padding:"9px 16px", fontWeight:700, color:"#fff", fontSize:15, fontVariantNumeric:"tabular-nums" }}>{s.orders}</td>
+                        <td style={{ padding:"9px 16px", fontWeight:700, color:"#fff", fontSize:15, fontVariantNumeric:"tabular-nums" }}>{s.units}</td>
+                        <td style={{ padding:"9px 16px", color:"#fff", fontSize:14, fontVariantNumeric:"tabular-nums" }}>
                           {s.min!==null?(s.min>=60?`${Math.floor(s.min/60)}h ${s.min%60}m`:`${s.min}m`):"—"}
                         </td>
-                        <td style={{ padding:"10px 16px", fontWeight:900, fontSize:24, color:s.uph&&s.uph>0?"#4ade80":"#475569", fontVariantNumeric:"tabular-nums" }}>{s.uph??"-"}</td>
-                        <td style={{ padding:"10px 16px", fontWeight:700, color:"#fff", fontSize:16, fontVariantNumeric:"tabular-nums" }}>{s.oph??"-"}</td>
+                        <td style={{ padding:"9px 16px", fontWeight:900, fontSize:22, color:uphColor(s.uph), fontVariantNumeric:"tabular-nums" }}>{s.uph??"-"}</td>
+                        <td style={{ padding:"9px 16px", fontWeight:900, fontSize:22, color:ophColor(s.oph), fontVariantNumeric:"tabular-nums" }}>{s.oph??"-"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -470,6 +498,7 @@ export default function KpiPage() {
       {/* ── Footer ── */}
       <footer style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"0 20px", fontSize:11, color:"#2a3d52", borderTop:`1px solid ${BRDR}` }}>
         <span>Spider WMS · KPI Display</span>
+        <span style={{ color:"#1e3a20" }}>UPH: 🟢 ≥150 · 🟡 75–149 · 🔴 &lt;75 &nbsp;|&nbsp; OPH: 🟢 ≥40 · 🟡 20–39 · 🔴 &lt;20</span>
         <span>Auto-refresh every {REFRESH_SEC}s</span>
       </footer>
     </div>
