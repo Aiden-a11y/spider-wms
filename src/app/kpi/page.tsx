@@ -125,7 +125,7 @@ function Sparkline({ points, color }: { points: number[]; color: string }) {
 
 /* ─── inventory trend chart ─────────────────────────────────────── */
 function TrendChart({ trend }: { trend: TrendPoint[] }) {
-  const pts = trend.slice(-21);
+  const pts = trend.slice(-14);
   if (pts.length < 2) return (
     <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center" }}>
       <p style={{ color:LBL, fontSize:14 }}>No trend data</p>
@@ -198,9 +198,9 @@ function TrendChart({ trend }: { trend: TrendPoint[] }) {
         {/* qty area */}
         <path d={qtyArea} fill="url(#qty-fill)"/>
         {/* qty line */}
-        <path d={qtyLine} fill="none" stroke="#3b82f6" strokeWidth="0.9" strokeLinejoin="round"/>
+        <path d={qtyLine} fill="none" stroke="#3b82f6" strokeWidth="0.4" strokeLinejoin="round"/>
         {/* sku line (independent scale, dashed) */}
-        <path d={skuLine} fill="none" stroke="#a855f7" strokeWidth="0.75" strokeLinejoin="round" strokeDasharray="1.8,1.2"/>
+        <path d={skuLine} fill="none" stroke="#a855f7" strokeWidth="0.35" strokeLinejoin="round" strokeDasharray="1.5,1"/>
         {/* x-axis labels */}
         {lblIdxs.map(i => (
           <text key={i}
@@ -464,7 +464,7 @@ export default function KpiPage() {
         {/* Inventory trend chart */}
         <div style={{ background:C1, borderTop:`1px solid ${BRDR}`, display:"flex", flexDirection:"column", minHeight:0, overflow:"hidden" }}>
           <div style={{ padding:"10px 18px", borderBottom:`1px solid ${BRDR}`, display:"flex", alignItems:"center", flexShrink:0 }}>
-            <p style={{ fontSize:17, fontWeight:800, color:"#fff", flex:1 }}>Inventory Trend · Last 21 days</p>
+            <p style={{ fontSize:17, fontWeight:800, color:"#fff", flex:1 }}>Inventory Trend · Last 14 days</p>
             <span style={{ fontSize:13, color:LBL }}>Snapshot from Supabase</span>
           </div>
           <TrendChart trend={trendData?.trend ?? []}/>
