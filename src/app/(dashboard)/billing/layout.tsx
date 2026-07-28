@@ -3,11 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, useEffect, useRef } from "react";
-import { Receipt, SlidersHorizontal, Lock, Eye, EyeOff } from "lucide-react";
+import { Receipt, SlidersHorizontal, Lock, Eye, EyeOff, CalendarDays } from "lucide-react";
 
 const TABS = [
-  { href: "/billing",       label: "Invoices",     icon: Receipt },
-  { href: "/billing/rates", label: "Rate Master",  icon: SlidersHorizontal },
+  { href: "/billing",        label: "Invoices",      icon: Receipt },
+  { href: "/billing/rates",  label: "Rate Master",   icon: SlidersHorizontal },
+  { href: "/billing/daily",  label: "Daily Invoice", icon: CalendarDays },
 ];
 
 const BILLING_PW = "2020";

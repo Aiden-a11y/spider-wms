@@ -216,7 +216,7 @@ export default function ShippingTypePage() {
 
   /* ── Batch picking state ── */
   /* ── Batch column state ── */
-  const [batchOrderCodes,  setBatchOrderCodes]  = useState<Set<string>>(new Set());
+  const [batchOrderCodes,  setBatchOrderCodes]  = useState<Map<string, string>>(new Map()); // orderCode → batchCode
   const [loadingBatches,   setLoadingBatches]   = useState(false);
 
   /* ── Pagination ── */
@@ -366,20 +366,21 @@ export default function ShippingTypePage() {
       const batches: Record<string, unknown>[] = Array.isArray(json?.data) ? json.data : [];
       if (!batches.length) { setLoadingBatches(false); return; }
 
-      const codes = new Set<string>();
+      const codeMap = new Map<string, string>();
       const CONC  = 10;
       let   idx   = 0;
       const worker = async () => {
         while (idx < batches.length) {
           const b    = batches[idx++];
-          const ores = await fetch("/api/wms/batch/orders", { method: "POST", headers, body: JSON.stringify([b.batchCode]) }).catch(() => null);
+          const batchCode = String(b.batchCode ?? "");
+          const ores = await fetch("/api/wms/batch/orders", { method: "POST", headers, body: JSON.stringify([batchCode]) }).catch(() => null);
           const oj   = await ores?.json().catch(() => ({})) ?? {};
           const ords: { shippingOrderCode?: string }[] = Array.isArray(oj?.data) ? oj.data : [];
-          ords.forEach((o) => { if (o.shippingOrderCode) codes.add(o.shippingOrderCode); });
+          ords.forEach((o) => { if (o.shippingOrderCode) codeMap.set(o.shippingOrderCode, batchCode); });
         }
       };
       await Promise.all(Array.from({ length: CONC }, worker));
-      setBatchOrderCodes(new Set(codes));
+      setBatchOrderCodes(new Map(codeMap));
     } catch { /* best-effort */ } finally { setLoadingBatches(false); }
   }
 
@@ -1907,7 +1908,12 @@ ${labels}
                         {loadingBatches ? (
                           <span className="text-slate-300 text-xs">…</span>
                         ) : batchOrderCodes.has(orderCode_) ? (
-                          <span className="px-1.5 py-0.5 rounded text-xs font-bold bg-violet-100 text-violet-700 border border-violet-200">Y</span>
+                          <span
+                            className="px-1.5 py-0.5 rounded text-xs font-bold bg-violet-100 text-violet-700 border border-violet-200 cursor-default"
+                            title={batchOrderCodes.get(orderCode_)}
+                          >
+                            {batchOrderCodes.get(orderCode_)}
+                          </span>
                         ) : (
                           <span className="text-slate-300 text-xs font-medium">N</span>
                         )}

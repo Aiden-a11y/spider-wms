@@ -34,6 +34,8 @@ import {
   ShoppingCart,
   ArrowDownToLine,
   ClipboardCheck,
+  CalendarDays,
+  Activity,
 } from "lucide-react";
 
 type NavChild = { href: string; label: string; icon: React.ElementType };
@@ -55,6 +57,7 @@ const nav: NavItem[] = [
       { href: "/inventory", label: "Inventory Inquiry", icon: Search },
       { href: "/inventory/replenishment", label: "Replenishment", icon: ArrowDownToLine },
       { href: "/history", label: "History", icon: History },
+      { href: "/inventory/activity", label: "Stock Activity", icon: Activity },
       { href: "/inventory/conflicts", label: "Location Conflicts", icon: AlertTriangle },
       { href: "/inventory/cycle-count", label: "Cycle Count", icon: ClipboardList },
     ],
@@ -102,6 +105,7 @@ const nav: NavItem[] = [
     children: [
       { href: "/billing", label: "Invoices", icon: FileText },
       { href: "/billing/rates", label: "Rate Master", icon: SlidersHorizontal },
+      { href: "/billing/daily", label: "Daily Invoice", icon: CalendarDays },
     ],
   },
 ];
