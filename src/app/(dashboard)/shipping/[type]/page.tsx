@@ -353,7 +353,7 @@ export default function ShippingTypePage() {
   async function loadBatchOrderCodes(whCode: string) {
     if (!whCode) return;
     setLoadingBatches(true);
-    setBatchOrderCodes(new Set());
+    setBatchOrderCodes(new Map());
     try {
       const today = new Date();
       const from  = new Date(today); from.setDate(from.getDate() - 30);

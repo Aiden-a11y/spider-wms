@@ -105,16 +105,15 @@ export default function StockActivityPage() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = await res.json().catch(() => ({})) as Record<string, unknown>;
 
+        const d = json?.data as Record<string, unknown> | undefined;
         const data: Record<string, unknown>[] =
-          Array.isArray(json?.data?.list)  ? json.data.list  :
-          Array.isArray(json?.data?.items) ? json.data.items :
-          Array.isArray(json?.data)        ? json.data       :
-          Array.isArray(json?.list)        ? json.list       :
-          Array.isArray(json)              ? json            : [];
+          Array.isArray(d?.list)  ? (d!.list  as Record<string, unknown>[]) :
+          Array.isArray(d?.items) ? (d!.items as Record<string, unknown>[]) :
+          Array.isArray(json?.data) ? (json.data as Record<string, unknown>[]) :
+          Array.isArray((json as Record<string,unknown>)?.list) ? ((json as Record<string,unknown>).list as Record<string, unknown>[]) :
+          Array.isArray(json) ? (json as Record<string, unknown>[]) : [];
 
-        const total = Number(
-          (json?.data as Record<string,unknown>)?.total ?? json?.total ?? json?.totalCount ?? 0
-        );
+        const total = Number(d?.total ?? json?.total ?? (json as Record<string,unknown>)?.totalCount ?? 0);
 
         allRows.push(...data.map(parseTxRow));
         setProgress({ fetched: allRows.length, total: total || allRows.length });
