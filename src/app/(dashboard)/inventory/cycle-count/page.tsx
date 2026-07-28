@@ -191,6 +191,9 @@ export default function CycleCountPage() {
   const { user } = useAuth();
   const [tab, setTab] = useState<"history" | "analytics">("history");
 
+  /* ── Customer name lookup ── */
+  const [custNames, setCustNames] = useState<Record<string, string>>({});
+
   /* ── History state ── */
   const [records, setRecords] = useState<CycleRecord[]>([]);
   const [loading, setLoading] = useState(false);
@@ -205,6 +208,7 @@ export default function CycleCountPage() {
   const [confirmRec, setConfirmRec] = useState<CycleRecord | null>(null);
   const [modalAction, setModalAction] = useState<"adjust" | "keep">("adjust");
   const [modalStep, setModalStep] = useState<"confirm" | "passcode">("confirm");
+  const [adjustQtyInput, setAdjustQtyInput] = useState("");
   const [passcode, setPasscode] = useState("");
   const [passcodeError, setPasscodeError] = useState(false);
 
@@ -212,6 +216,27 @@ export default function CycleCountPage() {
   const [allRecords, setAllRecords] = useState<CycleRecord[]>([]);
   const [loadingAll, setLoadingAll] = useState(false);
   const [period, setPeriod] = useState<"week" | "month">("week");
+
+  /* ── Load customer names ── */
+  useEffect(() => {
+    if (!user?.token) return;
+    const wh = filterWh !== "ALL" ? filterWh : "STOO1";
+    fetch(`/api/wms/combo/customer-by-warehouse/${encodeURIComponent(wh)}`, {
+      headers: { Authorization: `Bearer ${user.token}` },
+    })
+      .then(r => r.json()).catch(() => ({}))
+      .then((j: Record<string, unknown>) => {
+        const list = Array.isArray(j?.data) ? j.data as Record<string, unknown>[] : [];
+        const map: Record<string, string> = {};
+        list.forEach(c => {
+          const code = String(c.customerCode ?? c.code ?? "");
+          const name = String(c.customerName ?? c.name ?? code);
+          if (code) map[code] = name;
+        });
+        setCustNames(map);
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.token]);
 
   /* ── Fetch history ── */
   const fetchHistory = useCallback(async () => {
@@ -256,6 +281,7 @@ export default function CycleCountPage() {
     setConfirmRec(rec);
     setModalAction("adjust");
     setModalStep("confirm");
+    setAdjustQtyInput(String(rec.difference));
     setPasscode("");
     setPasscodeError(false);
   }
@@ -264,12 +290,14 @@ export default function CycleCountPage() {
     setConfirmRec(rec);
     setModalAction("keep");
     setModalStep("confirm");
+    setAdjustQtyInput("");
     setPasscode("");
     setPasscodeError(false);
   }
 
   function closeModal() {
     setConfirmRec(null);
+    setAdjustQtyInput("");
     setPasscode("");
     setPasscodeError(false);
   }
@@ -277,9 +305,10 @@ export default function CycleCountPage() {
   function handlePasscodeSubmit() {
     if (passcode === "2025") {
       const id = confirmRec!.id;
+      const qty = modalAction === "adjust" ? (parseInt(adjustQtyInput) || confirmRec!.difference) : 0;
       closeModal();
       if (modalAction === "keep") keepAsIs(id);
-      else markAdjusted(id);
+      else markAdjusted(id, qty);
     } else {
       setPasscodeError(true);
       setPasscode("");
@@ -287,7 +316,7 @@ export default function CycleCountPage() {
   }
 
   /* ── Mark adjusted (+ WMS inventory adjust) ── */
-  async function markAdjusted(id: string) {
+  async function markAdjusted(id: string, adjustQty?: number) {
     const rec = records.find((r) => r.id === id);
     if (!rec || !user?.token) return;
     setAdjustingIds((prev) => new Set(prev).add(id));
@@ -320,11 +349,12 @@ export default function CycleCountPage() {
         }
       } catch { /* non-fatal */ }
 
-      // Step 2: inventory/adjust with the difference as adjustQty
+      // Step 2: inventory/adjust with user-specified qty (defaults to difference)
+      const finalQty = adjustQty !== undefined ? adjustQty : rec.difference;
       const adjustPayload: Record<string, unknown> = {
         customerCode:  rec.customer_code ?? "",
         warehouseCode: rec.warehouse_code,
-        adjustQty:     rec.difference,
+        adjustQty:     finalQty,
         adjustType:    "N",
         expireDate:    rec.expire_date ? rec.expire_date.replace(/-/g, "") : "",
         itemCondition: "GOOD",
@@ -533,6 +563,7 @@ export default function CycleCountPage() {
                   <thead className="bg-slate-50 text-xs font-semibold text-slate-500 uppercase tracking-wide">
                     <tr>
                       <th className="px-4 py-3 whitespace-nowrap">Date / Time</th>
+                      <th className="px-4 py-3 whitespace-nowrap">Customer</th>
                       <th className="px-4 py-3 whitespace-nowrap">Warehouse</th>
                       <th className="px-4 py-3 whitespace-nowrap">Location</th>
                       <th className="px-4 py-3 whitespace-nowrap">SKU</th>
@@ -551,6 +582,14 @@ export default function CycleCountPage() {
                     {records.map((r) => (
                       <tr key={r.id} className="hover:bg-slate-50 transition-colors">
                         <td className="px-4 py-3 text-xs text-slate-500 whitespace-nowrap">{fmt(r.counted_at)}</td>
+                        <td className="px-4 py-3 text-xs whitespace-nowrap">
+                          <span className="font-medium text-slate-800">
+                            {r.customer_code ? (custNames[r.customer_code] ?? r.customer_code) : "—"}
+                          </span>
+                          {r.customer_code && custNames[r.customer_code] && (
+                            <span className="block text-slate-400 font-mono text-[10px]">{r.customer_code}</span>
+                          )}
+                        </td>
                         <td className="px-4 py-3 font-mono text-xs text-slate-600 whitespace-nowrap">{r.warehouse_code}</td>
                         <td className="px-4 py-3 font-mono text-xs text-slate-800 whitespace-nowrap">{r.location}</td>
                         <td className="px-4 py-3 font-mono text-xs font-semibold text-slate-800 whitespace-nowrap">{r.sku}</td>
@@ -625,10 +664,18 @@ export default function CycleCountPage() {
                   </h2>
                   <p className="text-sm text-slate-500 mb-4">
                     {modalAction === "keep"
-                      ? "Are you sure? This will mark the record as OK without adjusting inventory."
-                      : "Are you sure you want to adjust inventory for this record?"}
+                      ? "This will mark the record as OK without adjusting inventory."
+                      : "Set the adjustment quantity and confirm."}
                   </p>
-                  <div className="bg-slate-50 rounded-xl p-3 space-y-1 text-xs">
+                  <div className="bg-slate-50 rounded-xl p-3 space-y-1.5 text-xs mb-4">
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Customer</span>
+                      <span className="font-semibold text-slate-800">
+                        {confirmRec.customer_code
+                          ? (custNames[confirmRec.customer_code] ?? confirmRec.customer_code)
+                          : "—"}
+                      </span>
+                    </div>
                     <div className="flex justify-between">
                       <span className="text-slate-500">SKU</span>
                       <span className="font-mono font-semibold text-slate-800">{confirmRec.sku}</span>
@@ -636,6 +683,12 @@ export default function CycleCountPage() {
                     <div className="flex justify-between">
                       <span className="text-slate-500">Location</span>
                       <span className="font-mono text-slate-700">{confirmRec.location}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">System / Counted</span>
+                      <span className="text-slate-700">
+                        {confirmRec.system_qty} → {confirmRec.counted_qty}
+                      </span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-500">Difference</span>
@@ -648,6 +701,24 @@ export default function CycleCountPage() {
                       <StatusBadge status={confirmRec.status} />
                     </div>
                   </div>
+                  {modalAction === "adjust" && (
+                    <div>
+                      <label className="text-xs font-semibold text-slate-600 mb-1.5 block">
+                        Adjust Qty
+                        <span className="text-slate-400 font-normal ml-1">(pre-filled with difference — edit if needed)</span>
+                      </label>
+                      <input
+                        type="number"
+                        value={adjustQtyInput}
+                        onChange={e => setAdjustQtyInput(e.target.value)}
+                        className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-mono font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                        placeholder="e.g. -3 or +5"
+                      />
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Positive = add stock &nbsp;·&nbsp; Negative = remove stock
+                      </p>
+                    </div>
+                  )}
                 </div>
                 <div className="px-6 pb-6 flex gap-3">
                   <button
@@ -658,9 +729,10 @@ export default function CycleCountPage() {
                   </button>
                   <button
                     onClick={() => setModalStep("passcode")}
-                    className="flex-1 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold transition-colors"
+                    disabled={modalAction === "adjust" && adjustQtyInput === ""}
+                    className="flex-1 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold transition-colors disabled:opacity-50"
                   >
-                    OK
+                    Next
                   </button>
                 </div>
               </>
