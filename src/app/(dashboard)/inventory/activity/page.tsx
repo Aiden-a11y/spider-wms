@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useMemo, useRef, useCallback } from "react";
+import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { useAuth } from "@/contexts/auth-context";
-import { Search, Download, Loader2, X, ChevronDown, ChevronUp, RefreshCw } from "lucide-react";
+import { Search, Download, Loader2, X, ChevronDown, ChevronUp, RefreshCw, Bug } from "lucide-react";
 import * as XLSX from "xlsx";
 
 interface TxRow {
@@ -14,9 +14,9 @@ interface TxRow {
   condition: string;
   lot: string;
   remark: string;
-  sku?: string;
-  productName?: string;
-  customerCode?: string;
+  sku: string;
+  productName: string;
+  customerCode: string;
 }
 
 const TYPE_COLOR: Record<string, string> = {
@@ -25,30 +25,67 @@ const TYPE_COLOR: Record<string, string> = {
   ADJ:    "bg-yellow-100 text-yellow-700 border-yellow-200",
   MOVE:   "bg-blue-100 text-blue-700 border-blue-200",
   RETURN: "bg-purple-100 text-purple-700 border-purple-200",
+  IN:     "bg-green-100 text-green-700 border-green-200",
+  OUT:    "bg-red-100 text-red-700 border-red-200",
 };
 const typeColor = (t: string) => TYPE_COLOR[t?.toUpperCase()] ?? "bg-slate-100 text-slate-600 border-slate-200";
 
+/* Try every known field name variation */
+function pick(r: Record<string, unknown>, ...keys: string[]): string {
+  for (const k of keys) {
+    const v = r[k];
+    if (v !== undefined && v !== null && v !== "") return String(v);
+  }
+  return "";
+}
+function pickNum(r: Record<string, unknown>, ...keys: string[]): number {
+  for (const k of keys) {
+    const v = r[k];
+    if (v !== undefined && v !== null) {
+      const n = Number(v);
+      if (!isNaN(n)) return n;
+    }
+  }
+  return 0;
+}
+
 function parseTxRow(r: Record<string, unknown>): TxRow {
-  const dateRaw = String(r.transactionDate ?? r.date ?? r.createdAt ?? r.created_at ?? "");
+  const dateRaw = pick(r,
+    "transactionDate","txDate","date","workDate","createdAt","created_at","regDate","processDate"
+  );
   let date = dateRaw;
-  if (dateRaw.length === 8) {
+  if (dateRaw.length === 8 && /^\d{8}$/.test(dateRaw)) {
     date = `${dateRaw.slice(0,4)}-${dateRaw.slice(4,6)}-${dateRaw.slice(6,8)}`;
   } else if (dateRaw.includes("T")) {
     date = dateRaw.slice(0, 10);
   }
 
+  const qty = pickNum(r,
+    "qty","quantity","transQty","changeQty","inoutQty","moveQty",
+    "inQty","outQty","stockQty","adjustQty"
+  );
+
   return {
     date,
-    type:        String(r.transactionType ?? r.type ?? r.txType ?? ""),
-    location:    String(r.locationCode ?? r.location ?? r.inKey ?? ""),
-    qty:         Number(r.qty ?? r.quantity ?? r.transQty ?? 0),
-    reference:   String(r.shippingOrderCode ?? r.reference ?? r.referenceCode ?? r.orderCode ?? ""),
-    condition:   String(r.itemCondition ?? r.condition ?? ""),
-    lot:         String(r.lotNo ?? r.lot ?? ""),
-    remark:      String(r.remark ?? r.memo ?? r.note ?? ""),
-    sku:         String(r.productSku ?? r.sku ?? ""),
-    productName: String(r.productName ?? r.skuName ?? ""),
-    customerCode:String(r.customerCode ?? ""),
+    type: pick(r,
+      "transactionType","transType","txType","type","moveType","inOutType",
+      "inOutGbn","stockMoveType","transTypeName","moveTypeName","typeName"
+    ),
+    location: pick(r,
+      "locationCode","location","inKey","outKey","fromLocation","toLocation",
+      "locCd","locationId","locationNm"
+    ),
+    qty,
+    reference: pick(r,
+      "shippingOrderCode","reference","referenceCode","orderCode","refCode",
+      "outboundCode","inboundCode","receiptCode","adjustCode","txNo"
+    ),
+    condition: pick(r, "itemCondition","condition","conditionCode","goodsBadGbn"),
+    lot:       pick(r, "lotNo","lot","lotNumber","lotCd"),
+    remark:    pick(r, "remark","memo","note","remarks","description"),
+    sku:       pick(r, "productSku","sku","itemCode","skuCode","barcode","productCode"),
+    productName: pick(r, "productName","skuName","itemName","productNm","itemNm","goodsName"),
+    customerCode: pick(r, "customerCode","custCode","clientCode"),
   };
 }
 
@@ -59,30 +96,46 @@ export default function StockActivityPage() {
     [user]
   );
 
-  const [warehouseCode,   setWarehouseCode]   = useState("STOO1");
-  const [customerCode,    setCustomerCode]     = useState("");
-  const [skuInput,        setSkuInput]         = useState("");
-  const [typeFilter,      setTypeFilter]       = useState("ALL");
+  const [warehouseCode, setWarehouseCode] = useState("STOO1");
+  const [customerCode,  setCustomerCode]  = useState("");
+  const [customers,     setCustomers]     = useState<{ code: string; name: string }[]>([]);
+  const [skuInput,      setSkuInput]      = useState("");
+  const [typeFilter,    setTypeFilter]    = useState("ALL");
+  const [custFilter,    setCustFilter]    = useState("ALL");
 
-  const [rows,      setRows]      = useState<TxRow[]>([]);
-  const [loading,   setLoading]   = useState(false);
-  const [progress,  setProgress]  = useState({ fetched: 0, total: 0 });
-  const [error,     setError]     = useState<string | null>(null);
-  const [sortCol,   setSortCol]   = useState<keyof TxRow>("date");
-  const [sortAsc,   setSortAsc]   = useState(false);
+  const [rows,     setRows]     = useState<TxRow[]>([]);
+  const [loading,  setLoading]  = useState(false);
+  const [progress, setProgress] = useState({ fetched: 0, total: 0 });
+  const [error,    setError]    = useState<string | null>(null);
+  const [sortCol,  setSortCol]  = useState<keyof TxRow>("date");
+  const [sortAsc,  setSortAsc]  = useState(false);
+  const [debug,    setDebug]    = useState<Record<string, unknown> | null>(null);
   const abortRef = useRef(false);
 
-  /* ── fetch all pages ── */
+  /* ── Load customers ── */
+  useEffect(() => {
+    if (!warehouseCode) return;
+    fetch(`/api/wms/combo/customer-by-warehouse/${encodeURIComponent(warehouseCode)}`, { headers })
+      .then(r => r.json()).catch(() => ({}))
+      .then((j: Record<string, unknown>) => {
+        const list = Array.isArray(j?.data) ? j.data as Record<string, unknown>[] : [];
+        setCustomers(list.map(c => ({
+          code: String(c.customerCode ?? c.code ?? ""),
+          name: String(c.customerName ?? c.name ?? ""),
+        })));
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [warehouseCode]);
+
+  /* ── Fetch all pages ── */
   const fetchAll = useCallback(async () => {
     const sku = skuInput.trim();
-    if (!warehouseCode || !customerCode) {
-      setError("Warehouse and Customer are required.");
-      return;
-    }
+    if (!warehouseCode) { setError("Warehouse is required."); return; }
     abortRef.current = false;
     setLoading(true);
     setError(null);
     setRows([]);
+    setDebug(null);
     setProgress({ fetched: 0, total: 0 });
 
     const PAGE = 500;
@@ -91,19 +144,22 @@ export default function StockActivityPage() {
 
     try {
       while (!abortRef.current) {
+        const body: Record<string, unknown> = {
+          warehouseCode,
+          page,
+          pageSize: PAGE,
+          ...(customerCode ? { customerCode } : {}),
+          ...(sku ? { productSku: sku } : {}),
+        };
         const res = await fetch("/api/wms/inventory/transactions", {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            warehouseCode,
-            customerCode,
-            ...(sku ? { productSku: sku } : {}),
-            page,
-            pageSize: PAGE,
-          }),
+          method: "POST", headers,
+          body: JSON.stringify(body),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = await res.json().catch(() => ({})) as Record<string, unknown>;
+
+        /* Save first-page raw for debug */
+        if (page === 1) setDebug(json);
 
         const d = json?.data as Record<string, unknown> | undefined;
         const data: Record<string, unknown>[] =
@@ -113,7 +169,7 @@ export default function StockActivityPage() {
           Array.isArray((json as Record<string,unknown>)?.list) ? ((json as Record<string,unknown>).list as Record<string, unknown>[]) :
           Array.isArray(json) ? (json as Record<string, unknown>[]) : [];
 
-        const total = Number(d?.total ?? json?.total ?? (json as Record<string,unknown>)?.totalCount ?? 0);
+        const total = Number(d?.total ?? d?.totalCount ?? json?.total ?? (json as Record<string,unknown>)?.totalCount ?? 0);
 
         allRows.push(...data.map(parseTxRow));
         setProgress({ fetched: allRows.length, total: total || allRows.length });
@@ -129,24 +185,29 @@ export default function StockActivityPage() {
     }
   }, [warehouseCode, customerCode, skuInput, headers]);
 
-  /* ── sort + filter ── */
+  /* ── Sort + filter ── */
   const displayed = useMemo(() => {
-    let r = typeFilter === "ALL" ? rows : rows.filter(x => x.type.toUpperCase() === typeFilter);
-    r = [...r].sort((a, b) => {
-      const av = a[sortCol] ?? "";
-      const bv = b[sortCol] ?? "";
+    let r = rows;
+    if (typeFilter !== "ALL") r = r.filter(x => x.type.toUpperCase() === typeFilter);
+    if (custFilter !== "ALL") r = r.filter(x => x.customerCode === custFilter);
+    return [...r].sort((a, b) => {
+      const av = a[sortCol] ?? "", bv = b[sortCol] ?? "";
       const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
       return sortAsc ? cmp : -cmp;
     });
-    return r;
-  }, [rows, typeFilter, sortCol, sortAsc]);
+  }, [rows, typeFilter, custFilter, sortCol, sortAsc]);
 
   const types = useMemo(() => {
     const s = new Set(rows.map(r => r.type.toUpperCase()).filter(Boolean));
     return ["ALL", ...Array.from(s).sort()];
   }, [rows]);
 
-  /* ── export ── */
+  const custCodes = useMemo(() => {
+    const s = new Set(rows.map(r => r.customerCode).filter(Boolean));
+    return ["ALL", ...Array.from(s).sort()];
+  }, [rows]);
+
+  /* ── Export ── */
   function exportXLSX() {
     const ws = XLSX.utils.json_to_sheet(displayed.map(r => ({
       Date: r.date, Type: r.type, Location: r.location,
@@ -177,12 +238,29 @@ export default function StockActivityPage() {
           <h1 className="text-xl font-bold text-slate-900">Stock Activity</h1>
           <p className="text-sm text-slate-400 mt-0.5">Inventory transaction history from WMS</p>
         </div>
-        {rows.length > 0 && (
-          <button onClick={exportXLSX} className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 font-medium">
-            <Download className="w-4 h-4" /> Export
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {debug && (
+            <button onClick={() => setDebug(d => d ? null : debug)} className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 rounded-lg text-xs text-slate-500 hover:bg-slate-50">
+              <Bug className="w-3.5 h-3.5" /> Raw
+            </button>
+          )}
+          {rows.length > 0 && (
+            <button onClick={exportXLSX} className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 font-medium">
+              <Download className="w-4 h-4" /> Export
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* ── Raw debug panel ── */}
+      {debug && (
+        <details className="mb-4 bg-slate-900 rounded-xl">
+          <summary className="px-4 py-2 text-xs text-green-400 cursor-pointer">Raw API response (first page)</summary>
+          <pre className="px-4 pb-4 text-xs text-green-300 overflow-x-auto max-h-60">
+            {JSON.stringify(debug, null, 2).slice(0, 3000)}
+          </pre>
+        </details>
+      )}
 
       {/* ── Filter bar ── */}
       <div className="bg-white rounded-xl border border-slate-200 p-4 mb-4">
@@ -191,17 +269,21 @@ export default function StockActivityPage() {
             <label className="text-xs font-semibold text-slate-500 mb-1 block">Warehouse</label>
             <input
               value={warehouseCode} onChange={e => setWarehouseCode(e.target.value.toUpperCase())}
-              className="px-3 py-2 text-sm border border-slate-200 rounded-lg w-32 focus:outline-none focus:ring-2 focus:ring-blue-200"
+              className="px-3 py-2 text-sm border border-slate-200 rounded-lg w-28 focus:outline-none focus:ring-2 focus:ring-blue-200"
               placeholder="STOO1"
             />
           </div>
           <div>
-            <label className="text-xs font-semibold text-slate-500 mb-1 block">Customer Code *</label>
-            <input
-              value={customerCode} onChange={e => setCustomerCode(e.target.value.toUpperCase())}
-              className="px-3 py-2 text-sm border border-slate-200 rounded-lg w-36 focus:outline-none focus:ring-2 focus:ring-blue-200"
-              placeholder="FCOUS"
-            />
+            <label className="text-xs font-semibold text-slate-500 mb-1 block">Customer (optional)</label>
+            <select
+              value={customerCode} onChange={e => setCustomerCode(e.target.value)}
+              className="px-3 py-2 text-sm border border-slate-200 rounded-lg w-44 focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white"
+            >
+              <option value="">All Customers</option>
+              {customers.map(c => (
+                <option key={c.code} value={c.code}>{c.name} ({c.code})</option>
+              ))}
+            </select>
           </div>
           <div className="flex-1 min-w-48">
             <label className="text-xs font-semibold text-slate-500 mb-1 block">SKU (optional)</label>
@@ -211,7 +293,7 @@ export default function StockActivityPage() {
                 value={skuInput} onChange={e => setSkuInput(e.target.value)}
                 onKeyDown={e => e.key === "Enter" && fetchAll()}
                 className="pl-8 pr-8 py-2 text-sm border border-slate-200 rounded-lg w-full focus:outline-none focus:ring-2 focus:ring-blue-200"
-                placeholder="Leave empty for all transactions"
+                placeholder="Leave empty for all"
               />
               {skuInput && (
                 <button onClick={() => setSkuInput("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500">
@@ -222,11 +304,11 @@ export default function StockActivityPage() {
           </div>
           <button
             onClick={fetchAll}
-            disabled={loading || !customerCode}
+            disabled={loading || !warehouseCode}
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-500 disabled:opacity-50 transition-colors"
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-            {loading ? `Fetching… (${progress.fetched}${progress.total ? `/${progress.total}` : ""})` : "Fetch All"}
+            {loading ? `${progress.fetched}${progress.total ? `/${progress.total}` : ""} records…` : "Fetch All"}
           </button>
           {loading && (
             <button onClick={() => { abortRef.current = true; }} className="px-3 py-2 text-sm text-red-600 border border-red-200 rounded-lg hover:bg-red-50">
@@ -237,25 +319,31 @@ export default function StockActivityPage() {
         {error && <p className="mt-3 text-sm text-red-600 font-medium">{error}</p>}
       </div>
 
-      {/* ── Results summary + type filter ── */}
+      {/* ── Results summary + filters ── */}
       {rows.length > 0 && (
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           <span className="text-sm text-slate-500 font-medium">{displayed.length.toLocaleString()} records</span>
           <span className="text-slate-300">·</span>
           {types.map(t => (
-            <button
-              key={t}
-              onClick={() => setTypeFilter(t)}
+            <button key={t} onClick={() => setTypeFilter(t)}
               className={`px-2.5 py-0.5 rounded-full text-xs font-bold border transition-colors ${
-                typeFilter === t
-                  ? "bg-slate-800 text-white border-slate-800"
-                  : t === "ALL" ? "bg-white text-slate-500 border-slate-200 hover:border-slate-400"
-                  : `${typeColor(t)} hover:opacity-80`
+                typeFilter === t ? "bg-slate-800 text-white border-slate-800"
+                : t === "ALL" ? "bg-white text-slate-500 border-slate-200 hover:border-slate-400"
+                : `${typeColor(t)} hover:opacity-80`
               }`}
             >
               {t === "ALL" ? `All (${rows.length})` : `${t} (${rows.filter(r => r.type.toUpperCase() === t).length})`}
             </button>
           ))}
+          {custCodes.length > 2 && (
+            <>
+              <span className="text-slate-300">·</span>
+              <select value={custFilter} onChange={e => setCustFilter(e.target.value)}
+                className="px-2 py-0.5 text-xs border border-slate-200 rounded-lg bg-white text-slate-600">
+                {custCodes.map(c => <option key={c} value={c}>{c === "ALL" ? "All Customers" : c}</option>)}
+              </select>
+            </>
+          )}
         </div>
       )}
 
@@ -267,22 +355,13 @@ export default function StockActivityPage() {
               <thead className="bg-slate-50 border-b border-slate-200">
                 <tr className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
                   {([
-                    ["date",      "Date"],
-                    ["type",      "Type"],
-                    ["location",  "Location"],
-                    ["qty",       "Qty"],
-                    ["reference", "Reference"],
-                    ["sku",       "SKU"],
-                    ["productName","Product"],
-                    ["condition", "Condition"],
-                    ["lot",       "Lot"],
-                    ["remark",    "Remark"],
+                    ["date","Date"], ["type","Type"], ["location","Location"],
+                    ["qty","Qty"], ["reference","Reference"], ["sku","SKU"],
+                    ["productName","Product"], ["condition","Condition"],
+                    ["lot","Lot"], ["remark","Remark"],
                   ] as [keyof TxRow, string][]).map(([col, label]) => (
-                    <th
-                      key={col}
-                      onClick={() => toggleSort(col)}
-                      className="px-3 py-3 text-left cursor-pointer hover:text-slate-800 select-none whitespace-nowrap"
-                    >
+                    <th key={col} onClick={() => toggleSort(col)}
+                      className="px-3 py-3 text-left cursor-pointer hover:text-slate-800 select-none whitespace-nowrap">
                       {label}<SortIcon col={col} />
                     </th>
                   ))}
@@ -293,11 +372,14 @@ export default function StockActivityPage() {
                   <tr key={i} className="hover:bg-slate-50 transition-colors">
                     <td className="px-3 py-2.5 font-mono text-xs text-slate-500 whitespace-nowrap">{r.date}</td>
                     <td className="px-3 py-2.5">
-                      <span className={`px-1.5 py-0.5 rounded text-xs font-bold border ${typeColor(r.type)}`}>{r.type}</span>
+                      {r.type
+                        ? <span className={`px-1.5 py-0.5 rounded text-xs font-bold border ${typeColor(r.type)}`}>{r.type}</span>
+                        : <span className="text-slate-300 text-xs">—</span>
+                      }
                     </td>
                     <td className="px-3 py-2.5 font-mono text-xs text-slate-700">{r.location}</td>
-                    <td className={`px-3 py-2.5 font-mono text-xs font-bold text-right ${r.qty < 0 ? "text-red-600" : r.qty > 0 ? "text-green-600" : "text-slate-400"}`}>
-                      {r.qty > 0 ? `+${r.qty}` : r.qty}
+                    <td className={`px-3 py-2.5 font-mono text-xs font-bold text-right ${r.qty < 0 ? "text-red-600" : r.qty > 0 ? "text-green-600" : "text-slate-300"}`}>
+                      {r.qty !== 0 ? (r.qty > 0 ? `+${r.qty}` : r.qty) : "—"}
                     </td>
                     <td className="px-3 py-2.5 text-xs text-slate-600 font-mono whitespace-nowrap">{r.reference}</td>
                     <td className="px-3 py-2.5 text-xs text-slate-500 font-mono">{r.sku}</td>
@@ -319,9 +401,10 @@ export default function StockActivityPage() {
       )}
 
       {!loading && rows.length === 0 && !error && (
-        <div className="text-center py-24 text-slate-300">
-          <Search className="w-10 h-10 mx-auto mb-3" />
-          <p className="text-slate-400 font-medium">Enter warehouse + customer and click Fetch All</p>
+        <div className="text-center py-24">
+          <Search className="w-10 h-10 mx-auto mb-3 text-slate-200" />
+          <p className="text-slate-400 font-medium">Enter warehouse and click Fetch All</p>
+          <p className="text-slate-300 text-sm mt-1">Customer and SKU are optional filters</p>
         </div>
       )}
     </div>
