@@ -19,14 +19,14 @@ interface TxRow {
   customerCode: string;
 }
 
+const TYPE_LABEL: Record<string, string> = {
+  S: "SHIP", R: "RECV", M: "MOVE", A: "ADJ",
+};
 const TYPE_COLOR: Record<string, string> = {
-  SHIP:   "bg-red-100 text-red-700 border-red-200",
-  RECV:   "bg-green-100 text-green-700 border-green-200",
-  ADJ:    "bg-yellow-100 text-yellow-700 border-yellow-200",
-  MOVE:   "bg-blue-100 text-blue-700 border-blue-200",
-  RETURN: "bg-purple-100 text-purple-700 border-purple-200",
-  IN:     "bg-green-100 text-green-700 border-green-200",
-  OUT:    "bg-red-100 text-red-700 border-red-200",
+  SHIP: "bg-red-100 text-red-700 border-red-200",
+  RECV: "bg-green-100 text-green-700 border-green-200",
+  ADJ:  "bg-yellow-100 text-yellow-700 border-yellow-200",
+  MOVE: "bg-blue-100 text-blue-700 border-blue-200",
 };
 const typeColor = (t: string) => TYPE_COLOR[t?.toUpperCase()] ?? "bg-slate-100 text-slate-600 border-slate-200";
 
@@ -50,9 +50,7 @@ function pickNum(r: Record<string, unknown>, ...keys: string[]): number {
 }
 
 function parseTxRow(r: Record<string, unknown>): TxRow {
-  const dateRaw = pick(r,
-    "transactionDate","txDate","date","workDate","createdAt","created_at","regDate","processDate"
-  );
+  const dateRaw = pick(r, "inventoryDate", "transactionDate", "txDate", "date", "workDate", "regDate");
   let date = dateRaw;
   if (dateRaw.length === 8 && /^\d{8}$/.test(dateRaw)) {
     date = `${dateRaw.slice(0,4)}-${dateRaw.slice(4,6)}-${dateRaw.slice(6,8)}`;
@@ -60,32 +58,25 @@ function parseTxRow(r: Record<string, unknown>): TxRow {
     date = dateRaw.slice(0, 10);
   }
 
-  const qty = pickNum(r,
-    "qty","quantity","transQty","changeQty","inoutQty","moveQty",
-    "inQty","outQty","stockQty","adjustQty"
-  );
+  const rawType = pick(r, "inventoryType", "transactionType", "transType", "txType", "type", "moveType");
+  const typeLabel = TYPE_LABEL[rawType.toUpperCase()] ?? rawType.toUpperCase();
+
+  const rawQty = pickNum(r, "inventoryQty", "qty", "quantity", "transQty", "changeQty", "inQty", "outQty");
+  // Ship is always outbound → force negative
+  const qty = rawType.toUpperCase() === "S" ? -Math.abs(rawQty) : rawQty;
 
   return {
     date,
-    type: pick(r,
-      "transactionType","transType","txType","type","moveType","inOutType",
-      "inOutGbn","stockMoveType","transTypeName","moveTypeName","typeName"
-    ),
-    location: pick(r,
-      "locationCode","location","inKey","outKey","fromLocation","toLocation",
-      "locCd","locationId","locationNm"
-    ),
+    type: typeLabel,
+    location: pick(r, "location", "locationCode", "inKey", "outKey", "locCd"),
     qty,
-    reference: pick(r,
-      "shippingOrderCode","reference","referenceCode","orderCode","refCode",
-      "outboundCode","inboundCode","receiptCode","adjustCode","txNo"
-    ),
-    condition: pick(r, "itemCondition","condition","conditionCode","goodsBadGbn"),
-    lot:       pick(r, "lotNo","lot","lotNumber","lotCd"),
-    remark:    pick(r, "remark","memo","note","remarks","description"),
-    sku:       pick(r, "productSku","sku","itemCode","skuCode","barcode","productCode"),
-    productName: pick(r, "productName","skuName","itemName","productNm","itemNm","goodsName"),
-    customerCode: pick(r, "customerCode","custCode","clientCode"),
+    reference: pick(r, "referenceId", "shippingOrderCode", "reference", "referenceCode", "orderCode", "refCode"),
+    condition: pick(r, "itemCondition", "condition", "conditionCode"),
+    lot:       pick(r, "lotNo", "lot", "lotNumber"),
+    remark:    pick(r, "remark1", "remark", "memo", "note"),
+    sku:       pick(r, "productSku", "sku", "itemCode", "skuCode"),
+    productName: pick(r, "productName", "skuName", "itemName", "productNm"),
+    customerCode: pick(r, "customerCode", "custCode"),
   };
 }
 
