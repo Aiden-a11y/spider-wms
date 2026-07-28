@@ -209,6 +209,7 @@ export default function CycleCountPage() {
   const [modalAction, setModalAction] = useState<"adjust" | "keep">("adjust");
   const [modalStep, setModalStep] = useState<"confirm" | "passcode">("confirm");
   const [adjustQtyInput, setAdjustQtyInput] = useState("");
+  const [modalCustCode, setModalCustCode] = useState("");
   const [passcode, setPasscode] = useState("");
   const [passcodeError, setPasscodeError] = useState(false);
 
@@ -282,6 +283,7 @@ export default function CycleCountPage() {
     setModalAction("adjust");
     setModalStep("confirm");
     setAdjustQtyInput(String(rec.difference));
+    setModalCustCode(rec.customer_code ?? "");
     setPasscode("");
     setPasscodeError(false);
   }
@@ -291,6 +293,7 @@ export default function CycleCountPage() {
     setModalAction("keep");
     setModalStep("confirm");
     setAdjustQtyInput("");
+    setModalCustCode(rec.customer_code ?? "");
     setPasscode("");
     setPasscodeError(false);
   }
@@ -298,6 +301,7 @@ export default function CycleCountPage() {
   function closeModal() {
     setConfirmRec(null);
     setAdjustQtyInput("");
+    setModalCustCode("");
     setPasscode("");
     setPasscodeError(false);
   }
@@ -306,9 +310,10 @@ export default function CycleCountPage() {
     if (passcode === "2025") {
       const id = confirmRec!.id;
       const qty = modalAction === "adjust" ? (parseInt(adjustQtyInput) || confirmRec!.difference) : 0;
+      const custCode = modalCustCode.trim() || confirmRec!.customer_code || "";
       closeModal();
       if (modalAction === "keep") keepAsIs(id);
-      else markAdjusted(id, qty);
+      else markAdjusted(id, qty, custCode);
     } else {
       setPasscodeError(true);
       setPasscode("");
@@ -316,7 +321,7 @@ export default function CycleCountPage() {
   }
 
   /* ── Mark adjusted (+ WMS inventory adjust) ── */
-  async function markAdjusted(id: string, adjustQty?: number) {
+  async function markAdjusted(id: string, adjustQty?: number, overrideCustCode?: string) {
     const rec = records.find((r) => r.id === id);
     if (!rec || !user?.token) return;
     setAdjustingIds((prev) => new Set(prev).add(id));
@@ -349,10 +354,11 @@ export default function CycleCountPage() {
         }
       } catch { /* non-fatal */ }
 
-      // Step 2: inventory/adjust with user-specified qty (defaults to difference)
+      // Step 2: inventory/adjust with user-specified qty and customer
       const finalQty = adjustQty !== undefined ? adjustQty : rec.difference;
+      const finalCust = overrideCustCode ?? rec.customer_code ?? "";
       const adjustPayload: Record<string, unknown> = {
-        customerCode:  rec.customer_code ?? "",
+        customerCode:  finalCust,
         warehouseCode: rec.warehouse_code,
         adjustQty:     finalQty,
         adjustType:    "N",
@@ -667,15 +673,8 @@ export default function CycleCountPage() {
                       ? "This will mark the record as OK without adjusting inventory."
                       : "Set the adjustment quantity and confirm."}
                   </p>
+                  {/* Info row */}
                   <div className="bg-slate-50 rounded-xl p-3 space-y-1.5 text-xs mb-4">
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Customer</span>
-                      <span className="font-semibold text-slate-800">
-                        {confirmRec.customer_code
-                          ? (custNames[confirmRec.customer_code] ?? confirmRec.customer_code)
-                          : "—"}
-                      </span>
-                    </div>
                     <div className="flex justify-between">
                       <span className="text-slate-500">SKU</span>
                       <span className="font-mono font-semibold text-slate-800">{confirmRec.sku}</span>
@@ -686,9 +685,7 @@ export default function CycleCountPage() {
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-500">System / Counted</span>
-                      <span className="text-slate-700">
-                        {confirmRec.system_qty} → {confirmRec.counted_qty}
-                      </span>
+                      <span className="text-slate-700">{confirmRec.system_qty} → {confirmRec.counted_qty}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-slate-500">Difference</span>
@@ -701,24 +698,58 @@ export default function CycleCountPage() {
                       <StatusBadge status={confirmRec.status} />
                     </div>
                   </div>
-                  {modalAction === "adjust" && (
+
+                  {/* Editable fields */}
+                  <div className="space-y-3">
+                    {/* Customer selector */}
                     <div>
-                      <label className="text-xs font-semibold text-slate-600 mb-1.5 block">
-                        Adjust Qty
-                        <span className="text-slate-400 font-normal ml-1">(pre-filled with difference — edit if needed)</span>
+                      <label className="text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1.5 block">
+                        Customer
+                        {modalCustCode !== (confirmRec.customer_code ?? "") && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-100 text-amber-700 font-bold">Changed</span>
+                        )}
                       </label>
-                      <input
-                        type="number"
-                        value={adjustQtyInput}
-                        onChange={e => setAdjustQtyInput(e.target.value)}
-                        className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-mono font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-200"
-                        placeholder="e.g. -3 or +5"
-                      />
-                      <p className="text-[11px] text-slate-400 mt-1">
-                        Positive = add stock &nbsp;·&nbsp; Negative = remove stock
-                      </p>
+                      <select
+                        value={modalCustCode}
+                        onChange={e => setModalCustCode(e.target.value)}
+                        className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      >
+                        {Object.keys(custNames).length === 0 && (
+                          <option value={modalCustCode}>{modalCustCode || "—"}</option>
+                        )}
+                        {Object.entries(custNames).map(([code, name]) => (
+                          <option key={code} value={code}>{name} ({code})</option>
+                        ))}
+                      </select>
+                      {modalCustCode !== (confirmRec.customer_code ?? "") && (
+                        <p className="text-[11px] text-amber-600 mt-1">
+                          Original: {confirmRec.customer_code
+                            ? `${custNames[confirmRec.customer_code] ?? confirmRec.customer_code} (${confirmRec.customer_code})`
+                            : "—"}
+                        </p>
+                      )}
                     </div>
-                  )}
+
+                    {/* Qty input — adjust only */}
+                    {modalAction === "adjust" && (
+                      <div>
+                        <label className="text-xs font-semibold text-slate-600 mb-1.5 block">
+                          Adjust Qty
+                          <span className="text-slate-400 font-normal ml-1">— edit if different from difference</span>
+                        </label>
+                        <input
+                          type="number"
+                          value={adjustQtyInput}
+                          onChange={e => setAdjustQtyInput(e.target.value)}
+                          className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-mono font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                          placeholder="e.g. -3 or +5"
+                        />
+                        <p className="text-[11px] text-slate-400 mt-1">
+                          Positive = add stock &nbsp;·&nbsp; Negative = remove stock
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div className="px-6 pb-6 flex gap-3">
                   <button
