@@ -36,9 +36,9 @@ export function generateBinZPL(
   const totalSkus = new Set(items.map((i) => i.sku)).size;
 
   const W = 812;  // 4" @ 203 dpi
-  const M = 12;   // left/right margin
+  const M = 16;   // left/right margin
   const z: string[] = [];
-  let y = 8;
+  let y = 10;
   const LL_IDX = 2; // splice ^LL here after computing height
 
   z.push("^XA");
@@ -48,55 +48,53 @@ export function generateBinZPL(
   z.push("^CI28"); // UTF-8
 
   // ── HEADER ──────────────────────────────────────────────
-  z.push(`^FO${M},${y}^GB${W - M * 2},3,3^FS`); // top border
-  y += 5;
+  z.push(`^FO${M},${y}^GB${W - M * 2},4,4^FS`); // top border
+  y += 6;
 
-  // BIN badge (solid black rect, white text)
-  const bX = W - 122;
+  // BIN badge (solid black rect, white text) — 145×145
+  const bX = W - 158;
   const bY = y;
-  z.push(`^FO${bX},${bY}^GB110,110,110^FS`);
-  z.push(`^FO${bX + 4},${bY + 8}^A0N,24,24^FR^FDBIN^FS`);
+  z.push(`^FO${bX},${bY}^GB142,142,142^FS`);
+  z.push(`^FO${bX + 5},${bY + 10}^A0N,30,30^FR^FDBIN^FS`);
   const bn = String(bin.binNo);
   const [bfH, bfW] =
-    bn.length >= 3 ? [40, 34] : bn.length === 2 ? [52, 46] : [62, 54];
-  z.push(`^FO${bX + 4},${bY + 36}^A0N,${bfH},${bfW}^FR^FD${bn}^FS`);
+    bn.length >= 3 ? [52, 44] : bn.length === 2 ? [68, 58] : [82, 70];
+  z.push(`^FO${bX + 5},${bY + 46}^A0N,${bfH},${bfW}^FR^FD${bn}^FS`);
 
   // Titles
-  z.push(`^FO${M},${y + 6}^A0N,28,26^FDB2C CLUSTER PICK^FS`);
+  z.push(`^FO${M},${y + 8}^A0N,38,34^FDB2C CLUSTER PICK^FS`);
   const clLabel =
     clusterNo != null
       ? `Cluster #${String(clusterNo).padStart(4, "0")}`
       : "Cluster Pick";
-  z.push(`^FO${M},${y + 38}^A0N,22,20^FD${ze(clLabel)}^FS`);
+  z.push(`^FO${M},${y + 52}^A0N,28,24^FD${ze(clLabel)}^FS`);
   z.push(
-    `^FO${M},${y + 64}^A0N,20,18^FDClient: ${ze(bin.customerCode || "ALL")}   SKUs: ${totalSkus}   Total: ${totalQty} EA^FS`
+    `^FO${M},${y + 86}^A0N,24,20^FDClient: ${ze(bin.customerCode || "ALL")}   SKUs: ${totalSkus}   Total: ${totalQty} EA^FS`
   );
-  z.push(`^FO${M},${y + 90}^A0N,22,20^FDBin ${bin.binNo} of ${totalBins}^FS`);
+  z.push(`^FO${M},${y + 118}^A0N,28,24^FDBin ${bin.binNo} of ${totalBins}^FS`);
 
-  y += 118;
-  z.push(`^FO${M},${y}^GB${W - M * 2},3,3^FS`);
-  y += 6;
+  y += 158;
+  z.push(`^FO${M},${y}^GB${W - M * 2},4,4^FS`);
+  y += 8;
 
   // ── ORDER INFO + QR CODE ─────────────────────────────────
   const orderSecY = y;
-  // QR code — placed on right
-  z.push(
-    `^FO${W - 148},${y + 4}^BQN,2,4^FDQA,${ze(bin.orderCode)}^FS`
-  );
+  // QR — magnification 5 → ~130 dots wide/tall
+  z.push(`^FO${W - 160},${y + 4}^BQN,2,5^FDQA,${ze(bin.orderCode)}^FS`);
 
-  z.push(`^FO${M},${y}^A0N,18,16^FDORDER NO.^FS`);
-  y += 22;
-  z.push(`^FO${M},${y}^A0N,26,24^FD${zt(bin.orderCode, 26)}^FS`);
-  y += 32;
+  z.push(`^FO${M},${y}^A0N,22,18^FDORDER NO.^FS`);
+  y += 28;
+  z.push(`^FO${M},${y}^A0N,34,30^FD${zt(bin.orderCode, 22)}^FS`);
+  y += 44;
 
   if (bin.orderNo) {
-    z.push(`^FO${M},${y}^A0N,18,16^FDShipping: ${zt(bin.orderNo, 22)}^FS`);
-    y += 24;
+    z.push(`^FO${M},${y}^A0N,22,18^FDShipping: ${zt(bin.orderNo, 20)}^FS`);
+    y += 30;
   }
 
   if (bin.consigneeName) {
-    z.push(`^FO${M},${y}^A0N,22,20^FD${zt(bin.consigneeName, 25)}^FS`);
-    y += 28;
+    z.push(`^FO${M},${y}^A0N,30,26^FD${zt(bin.consigneeName, 22)}^FS`);
+    y += 38;
   }
 
   const addr1 = ze(bin.consigneeAddress1);
@@ -106,48 +104,45 @@ export function generateBinZPL(
   const zip   = ze(bin.consigneeZipCode);
 
   if (addr1) {
-    z.push(`^FO${M},${y}^A0N,20,18^FD${zt(addr1, 28)}^FS`);
-    y += 24;
+    z.push(`^FO${M},${y}^A0N,24,20^FD${zt(addr1, 26)}^FS`);
+    y += 30;
   }
   if (addr2) {
-    z.push(`^FO${M},${y}^A0N,20,18^FD${zt(addr2, 28)}^FS`);
-    y += 24;
+    z.push(`^FO${M},${y}^A0N,24,20^FD${zt(addr2, 26)}^FS`);
+    y += 30;
   }
-  const cityLine = [
-    [city, state].filter(Boolean).join(", "),
-    zip,
-  ]
+  const cityLine = [[city, state].filter(Boolean).join(", "), zip]
     .filter(Boolean)
     .join(" ");
   if (cityLine) {
-    z.push(`^FO${M},${y}^A0N,20,18^FD${zt(cityLine, 28)}^FS`);
-    y += 24;
+    z.push(`^FO${M},${y}^A0N,24,20^FD${zt(cityLine, 26)}^FS`);
+    y += 30;
   }
 
-  // QR code at magnification 4 is ~110 dots tall — ensure clearance
-  y = Math.max(y, orderSecY + 118);
+  // QR at mag 5 is ~130 dots tall — ensure clearance
+  y = Math.max(y, orderSecY + 145);
 
-  z.push(`^FO${M},${y}^GB${W - M * 2},3,3^FS`);
-  y += 6;
+  z.push(`^FO${M},${y}^GB${W - M * 2},4,4^FS`);
+  y += 8;
 
   // ── ITEMS TABLE ──────────────────────────────────────────
   // Column headers
-  z.push(`^FO${M},${y}^A0N,20,16^FD#^FS`);
-  z.push(`^FO42,${y}^A0N,20,16^FDLOCATION^FS`);
-  z.push(`^FO300,${y}^A0N,20,16^FDSKU^FS`);
-  z.push(`^FO672,${y}^A0N,20,16^FDQTY^FS`);
-  y += 26;
-  z.push(`^FO${M},${y}^GB${W - M * 2},2,2^FS`);
-  y += 4;
+  z.push(`^FO${M},${y}^A0N,24,18^FD#^FS`);
+  z.push(`^FO55,${y}^A0N,24,18^FDLOCATION^FS`);
+  z.push(`^FO310,${y}^A0N,24,18^FDSKU^FS`);
+  z.push(`^FO680,${y}^A0N,24,18^FDQTY^FS`);
+  y += 32;
+  z.push(`^FO${M},${y}^GB${W - M * 2},3,3^FS`);
+  y += 5;
 
   // Rows
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
-    z.push(`^FO${M},${y}^A0N,20,15^FD${i + 1}^FS`);
-    z.push(`^FO42,${y}^A0N,20,15^FD${zt(item.locationCode || "—", 16)}^FS`);
-    z.push(`^FO300,${y}^A0N,20,15^FD${zt(item.sku, 16)}^FS`);
-    z.push(`^FO672,${y}^A0N,22,18^FD${item.qty}^FS`);
-    y += 24;
+    z.push(`^FO${M},${y}^A0N,24,18^FD${i + 1}^FS`);
+    z.push(`^FO55,${y}^A0N,24,18^FD${zt(item.locationCode || "—", 15)}^FS`);
+    z.push(`^FO310,${y}^A0N,24,18^FD${zt(item.sku, 15)}^FS`);
+    z.push(`^FO680,${y}^A0N,26,22^FD${item.qty}^FS`);
+    y += 32;
 
     if (item.lotNo || item.expireDate) {
       const sub = [
@@ -156,35 +151,35 @@ export function generateBinZPL(
       ]
         .filter(Boolean)
         .join("  ");
-      z.push(`^FO42,${y}^A0N,16,14^FD${zt(sub, 38)}^FS`);
-      y += 20;
+      z.push(`^FO55,${y}^A0N,20,16^FD${zt(sub, 36)}^FS`);
+      y += 26;
     }
 
     z.push(`^FO${M},${y}^GB${W - M * 2},1,1^FS`); // thin row divider
-    y += 3;
+    y += 4;
   }
 
   // ── TOTAL ────────────────────────────────────────────────
-  y += 3;
-  z.push(`^FO${M},${y}^GB${W - M * 2},3,3^FS`);
-  y += 6;
-  z.push(`^FO${M},${y}^A0N,24,22^FDTOTAL^FS`);
-  z.push(`^FO590,${y}^A0N,24,22^FD${totalQty} EA^FS`);
-  y += 34;
+  y += 4;
+  z.push(`^FO${M},${y}^GB${W - M * 2},4,4^FS`);
+  y += 8;
+  z.push(`^FO${M},${y}^A0N,32,28^FDTOTAL^FS`);
+  z.push(`^FO580,${y}^A0N,32,28^FD${totalQty} EA^FS`);
+  y += 44;
 
   // ── FOOTER ───────────────────────────────────────────────
-  z.push(`^FO${M},${y}^GB${W - M * 2},3,3^FS`);
-  y += 8;
+  z.push(`^FO${M},${y}^GB${W - M * 2},4,4^FS`);
+  y += 10;
 
-  z.push(`^FO${M},${y}^A0N,20,18^FDPicker:^FS`);
-  z.push(`^FO82,${y + 22}^GB285,2,2^FS`);
-  z.push(`^FO400,${y}^A0N,20,18^FDChecked:^FS`);
-  z.push(`^FO476,${y + 22}^GB316,2,2^FS`);
-  y += 34;
+  z.push(`^FO${M},${y}^A0N,24,20^FDPicker:^FS`);
+  z.push(`^FO96,${y + 28}^GB270,3,3^FS`);
+  z.push(`^FO400,${y}^A0N,24,20^FDChecked:^FS`);
+  z.push(`^FO488,${y + 28}^GB300,3,3^FS`);
+  y += 44;
 
-  z.push(`^FO${M},${y}^A0N,20,18^FDDate/Time:^FS`);
-  z.push(`^FO110,${y + 22}^GB680,2,2^FS`);
-  y += 34;
+  z.push(`^FO${M},${y}^A0N,24,20^FDDate/Time:^FS`);
+  z.push(`^FO120,${y + 28}^GB668,3,3^FS`);
+  y += 44;
 
   const nowStr = new Date().toLocaleString("en-US", {
     month: "short",
@@ -193,11 +188,11 @@ export function generateBinZPL(
     hour: "2-digit",
     minute: "2-digit",
   });
-  z.push(`^FO${M},${y}^A0N,16,14^FDGenerated: ${ze(nowStr)}^FS`);
-  y += 22;
+  z.push(`^FO${M},${y}^A0N,20,16^FDGenerated: ${ze(nowStr)}^FS`);
+  y += 28;
 
-  z.push(`^FO${M},${y}^GB${W - M * 2},3,3^FS`);
-  y += 10;
+  z.push(`^FO${M},${y}^GB${W - M * 2},4,4^FS`);
+  y += 12;
 
   // Splice in the computed label length
   z.splice(LL_IDX, 0, `^LL${y}`);
