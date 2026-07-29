@@ -860,6 +860,16 @@ export default function ClustersPage() {
         }
       }
 
+      // Block cluster creation if any bin still needs replenishment.
+      // Replenishment must be completed before creating a cluster.
+      if (replenishmentBins.length > 0) {
+        const binList = replenishmentBins.join(", ");
+        throw new Error(
+          `Cluster creation blocked — Bin${replenishmentBins.length > 1 ? "s" : ""} ${binList} still have unresolved items. ` +
+          `Complete replenishment and re-verify before creating the cluster.`
+        );
+      }
+
       setCreateStep("Building cluster…");
       const locationGroups: B2CClusterLocationGroup[] = sortLocationGroups(
         Array.from(locMap.values())
