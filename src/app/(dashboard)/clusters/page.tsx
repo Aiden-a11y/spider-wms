@@ -675,7 +675,7 @@ export default function ClustersPage() {
 
             anyShelfStockFound = true;
             setCreateStep(`[${binNo}/${selected.length}] ${code} — assigning ${sku}…`);
-            await fetch("/api/wms/shipping/assign", {
+            const assignRes = await fetch("/api/wms/shipping/assign", {
               method: "POST", headers,
               body: JSON.stringify({
                 shippingOrderCode: code, shippingItemId: item.shippingItemId,
@@ -685,7 +685,22 @@ export default function ClustersPage() {
                 qty: unassignedQty,
               }),
             });
-            shelfAssignments.push({ ...item, ...best, locationCode: readableLocation(best), productSku: sku });
+            const assignJson = await assignRes.json().catch(() => ({})) as Record<string, unknown>;
+            if (assignRes.ok && assignJson?.isSuccess !== false) {
+              shelfAssignments.push({ ...item, ...best, locationCode: readableLocation(best), productSku: sku });
+            } else {
+              needsReplenishment = true;
+              replenishmentItems.push({
+                sku, name: String(item.productName ?? item.skuName ?? item.itemName ?? ""),
+                qty: unassignedQty,
+                locationCode: readableLocation(best),
+                locationId: String(best.inKey ?? best.locationId ?? ""),
+                lotNo: String(best.lotNo ?? ""),
+                expireDate: String(best.expireDate ?? ""),
+                itemCondition: String(best.itemCondition ?? "GOOD"),
+                shippingItemId: Number(item.shippingItemId ?? 0) || undefined,
+              });
+            }
           }
 
           if (!anyShelfStockFound && shelfAssignments.length === 0) {
@@ -710,12 +725,12 @@ export default function ClustersPage() {
           }
         }
 
-        // Mixed: some shelf assignments exist but other SKUs still unassigned
+        // Mixed: some shelf assignments exist but other items still unassigned
         if (shelfAssignments.length > 0 && rawItems.length > 0) {
-          const assignedSkuSet = new Set(shelfAssignments.map((a) => String(a.productSku ?? a.sku ?? "")));
+          // Include same-SKU items if they have remaining unassigned qty (partial assignment case)
           const unassignedMixed = rawItems.filter((item) => {
             const sku = String(item.productSku ?? item.sku ?? "");
-            return sku && !assignedSkuSet.has(sku) && Number(item.remainQty ?? item.unassignedQty ?? item.remainingQty ?? 0) > 0;
+            return sku && Number(item.remainQty ?? item.unassignedQty ?? item.remainingQty ?? 0) > 0;
           });
 
           if (unassignedMixed.length > 0) {
@@ -734,7 +749,7 @@ export default function ClustersPage() {
 
               if (best) {
                 setCreateStep(`[${binNo}/${selected.length}] ${code} — assigning ${sku}…`);
-                await fetch("/api/wms/shipping/assign", {
+                const mixedAssignRes = await fetch("/api/wms/shipping/assign", {
                   method: "POST", headers,
                   body: JSON.stringify({
                     shippingOrderCode: code, shippingItemId: item.shippingItemId,
@@ -744,7 +759,22 @@ export default function ClustersPage() {
                     qty: unassignedQty,
                   }),
                 });
-                shelfAssignments.push({ ...item, ...best, locationCode: readableLocation(best), productSku: sku });
+                const mixedAssignJson = await mixedAssignRes.json().catch(() => ({})) as Record<string, unknown>;
+                if (mixedAssignRes.ok && mixedAssignJson?.isSuccess !== false) {
+                  shelfAssignments.push({ ...item, ...best, locationCode: readableLocation(best), productSku: sku });
+                } else {
+                  needsReplenishment = true;
+                  replenishmentItems.push({
+                    sku, name: String(item.productName ?? item.skuName ?? item.itemName ?? ""),
+                    qty: unassignedQty,
+                    locationCode: readableLocation(best),
+                    locationId: String(best.inKey ?? best.locationId ?? ""),
+                    lotNo: String(best.lotNo ?? ""),
+                    expireDate: String(best.expireDate ?? ""),
+                    itemCondition: String(best.itemCondition ?? "GOOD"),
+                    shippingItemId: Number(item.shippingItemId ?? 0) || undefined,
+                  });
+                }
               } else {
                 needsReplenishment = true;
                 const anyBest = allStock.filter((s) => Number(s.availQty ?? 0) > 0).sort(byFefo)[0];
