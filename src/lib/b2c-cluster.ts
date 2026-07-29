@@ -60,6 +60,7 @@ export interface B2CCluster {
   createdBy: string;
   status: "active" | "completed";
   completedAt?: string;
+  completedBy?: string;
   bins: B2CClusterBin[];
   locationGroups: B2CClusterLocationGroup[];
   replenishmentBins?: number[];

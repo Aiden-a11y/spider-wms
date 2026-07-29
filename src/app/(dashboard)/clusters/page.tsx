@@ -1789,9 +1789,15 @@ export default function ClustersPage() {
                         <CheckCircle2 className="w-3 h-3" /> Completed
                       </span>
                     </div>
-                    <p className="text-xs text-slate-400">Created: {new Date(cluster.createdAt).toLocaleString()}</p>
+                    <p className="text-xs text-slate-400">
+                      Created by <span className="font-medium text-slate-500">{cluster.createdBy || "—"}</span>
+                      {" · "}{new Date(cluster.createdAt).toLocaleString()}
+                    </p>
                     {cluster.completedAt && (
-                      <p className="text-xs text-emerald-600">Completed: {new Date(cluster.completedAt).toLocaleString()}</p>
+                      <p className="text-xs text-emerald-600">
+                        Picked by <span className="font-bold">{cluster.completedBy || "—"}</span>
+                        {" · "}{new Date(cluster.completedAt).toLocaleString()}
+                      </p>
                     )}
                   </div>
 
