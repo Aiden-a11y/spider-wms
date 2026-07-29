@@ -733,10 +733,17 @@ export default function ClustersPage() {
 
         // Mixed: some shelf assignments exist but other items still unassigned
         if (shelfAssignments.length > 0 && rawItems.length > 0) {
-          // Include same-SKU items if they have remaining unassigned qty (partial assignment case)
+          // Dedup by shippingItemId (not sku) — allows same-SKU with different line items,
+          // but prevents re-assigning items already shelf-assigned (e.g. after re-cluster).
+          const assignedItemIds = new Set(
+            shelfAssignments.map((a) => String(a.shippingItemId ?? "")).filter(Boolean)
+          );
           const unassignedMixed = rawItems.filter((item) => {
             const sku = String(item.productSku ?? item.sku ?? "");
-            return sku && Number(item.remainQty ?? item.unassignedQty ?? item.remainingQty ?? 0) > 0;
+            if (!sku) return false;
+            const itemId = String(item.shippingItemId ?? "");
+            if (itemId && assignedItemIds.has(itemId)) return false;
+            return Number(item.remainQty ?? item.unassignedQty ?? item.remainingQty ?? 0) > 0;
           });
 
           if (unassignedMixed.length > 0) {
