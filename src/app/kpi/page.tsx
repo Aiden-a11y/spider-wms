@@ -486,7 +486,7 @@ export default function KpiPage() {
                 <table style={{ width:"100%", borderCollapse:"collapse" }}>
                   <thead>
                     <tr style={{ borderBottom:`1px solid ${BRDR}` }}>
-                      {["Cluster #","Orders","Units","Duration","Units / hr","Orders / hr"].map(h=>(
+                      {["Cluster #","Picker","Orders","Units","Duration","Units / hr","Orders / hr"].map(h=>(
                         <th key={h} style={{ padding:"9px 16px", textAlign:"left", fontSize:11, fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", color:LBL, whiteSpace:"nowrap" }}>{h}</th>
                       ))}
                     </tr>
@@ -495,6 +495,7 @@ export default function KpiPage() {
                     {todayC.map(({c,s})=>(
                       <tr key={c.id} style={{ borderBottom:`1px solid ${BRDR}` }}>
                         <td style={{ padding:"9px 16px", fontWeight:800, color:"#60a5fa", fontSize:14, fontVariantNumeric:"tabular-nums" }}>#{String(c.clusterNo??"").padStart(4,"0")}</td>
+                        <td style={{ padding:"9px 16px", fontSize:13, color: c.completedBy ? "#e2e8f0" : "#475569", fontStyle: c.completedBy ? "normal" : "italic" }}>{c.completedBy || "—"}</td>
                         <td style={{ padding:"9px 16px", fontWeight:700, color:"#fff", fontSize:15, fontVariantNumeric:"tabular-nums" }}>{s.orders}</td>
                         <td style={{ padding:"9px 16px", fontWeight:700, color:"#fff", fontSize:15, fontVariantNumeric:"tabular-nums" }}>{s.units}</td>
                         <td style={{ padding:"9px 16px", color:"#fff", fontSize:14, fontVariantNumeric:"tabular-nums" }}>
