@@ -13,6 +13,7 @@ import type {
 } from "@/lib/b2c-cluster";
 import { binColor, sortLocationGroups } from "@/lib/b2c-cluster";
 import { buildLocationOccupancyLookup, getLocationOccupancyInfo, classifyOccupancy } from "@/lib/wms";
+import { generateBinZPL, zebraDiscoverPrinters, zebraSend, type ZebraPrinter } from "@/lib/zpl";
 
 const MAX_BINS = 25;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -68,6 +69,14 @@ export default function ClustersPage() {
   const [expandedCluster, setExpandedCluster] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [selectedPrintIds, setSelectedPrintIds] = useState<Set<string>>(new Set());
+
+  // ── Zebra Browser Print ────────────────────────────────────────────────────
+  const [zebraCluster, setZebraCluster] = useState<B2CCluster | null>(null);
+  const [zebraPrinters, setZebraPrinters] = useState<ZebraPrinter[]>([]);
+  const [zebraSelected, setZebraSelected] = useState<ZebraPrinter | null>(null);
+  const [zebraDiscovering, setZebraDiscovering] = useState(false);
+  const [zebraStatus, setZebraStatus] = useState("");
+  const [zebraProgress, setZebraProgress] = useState<{ done: number; total: number } | null>(null);
 
   // ── Occupancy map (all pages) ─────────────────────────────────────────────
   const [occupancyMap, setOccupancyMap] = useState<Map<string, string>>(new Map());
@@ -921,6 +930,46 @@ export default function ClustersPage() {
     setDeletingId(null);
   }
 
+  // ── Zebra Browser Print ────────────────────────────────────────────────────
+  async function openZebraModal(cluster: B2CCluster) {
+    setZebraCluster(cluster);
+    setZebraPrinters([]);
+    setZebraSelected(null);
+    setZebraStatus("");
+    setZebraProgress(null);
+    setZebraDiscovering(true);
+    try {
+      const list = await zebraDiscoverPrinters();
+      setZebraPrinters(list);
+      if (list.length > 0) setZebraSelected(list[0]);
+      setZebraStatus(list.length === 0 ? "No printers found. Is Zebra Browser Print running?" : "");
+    } catch {
+      setZebraStatus("Cannot reach Zebra Browser Print (localhost:9100). Make sure the app is running.");
+    } finally {
+      setZebraDiscovering(false);
+    }
+  }
+
+  async function runZebraPrint() {
+    if (!zebraCluster || !zebraSelected) return;
+    const bins = zebraCluster.bins;
+    setZebraProgress({ done: 0, total: bins.length });
+    setZebraStatus("");
+    try {
+      for (let i = 0; i < bins.length; i++) {
+        setZebraProgress({ done: i, total: bins.length });
+        const zpl = generateBinZPL(bins[i], zebraCluster.clusterNo, bins.length);
+        await zebraSend(zebraSelected, zpl);
+        await new Promise<void>((r) => setTimeout(r, 300)); // small gap between labels
+      }
+      setZebraProgress({ done: bins.length, total: bins.length });
+      setZebraStatus(`✓ Sent ${bins.length} label${bins.length !== 1 ? "s" : ""} to ${zebraSelected.name}`);
+    } catch (e) {
+      setZebraStatus(`Error: ${e instanceof Error ? e.message : "Print failed"}`);
+      setZebraProgress(null);
+    }
+  }
+
   // ── Reopen / history UI state ─────────────────────────────────────────────
   const [reopeningId, setReopeningId] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
@@ -1218,6 +1267,108 @@ export default function ClustersPage() {
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="p-6 max-w-7xl space-y-6">
+
+      {/* ── Zebra Browser Print Modal ───────────────────────────────────────── */}
+      {zebraCluster && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+              <div>
+                <h2 className="text-base font-bold text-slate-800">Send to Zebra Printer</h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Cluster #{String(zebraCluster.clusterNo ?? "").padStart(4, "0")} · {zebraCluster.bins.length} bins
+                </p>
+              </div>
+              <button onClick={() => setZebraCluster(null)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="px-6 py-5 space-y-4">
+              {/* Printer selection */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Printer</label>
+                {zebraDiscovering ? (
+                  <div className="flex items-center gap-2 text-slate-500 text-sm">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Discovering printers…
+                  </div>
+                ) : zebraPrinters.length > 0 ? (
+                  <select
+                    value={zebraSelected?.uid ?? ""}
+                    onChange={(e) => {
+                      const p = zebraPrinters.find((p) => p.uid === e.target.value) ?? null;
+                      setZebraSelected(p);
+                    }}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {zebraPrinters.map((p) => (
+                      <option key={p.uid} value={p.uid}>{p.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="flex items-center gap-2 text-amber-600 text-sm bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                    <span>No printers found</span>
+                  </div>
+                )}
+                <button
+                  onClick={() => openZebraModal(zebraCluster)}
+                  className="mt-1.5 text-xs text-blue-600 hover:underline"
+                >
+                  Refresh printers
+                </button>
+              </div>
+
+              {/* Status / progress */}
+              {zebraProgress && (
+                <div>
+                  <div className="flex justify-between text-xs text-slate-500 mb-1">
+                    <span>Sending labels…</span>
+                    <span>{zebraProgress.done}/{zebraProgress.total}</span>
+                  </div>
+                  <div className="w-full bg-slate-100 rounded-full h-2">
+                    <div
+                      className="bg-emerald-500 h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${(zebraProgress.done / zebraProgress.total) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+              {zebraStatus && (
+                <p className={`text-sm ${zebraStatus.startsWith("✓") ? "text-emerald-600" : "text-red-500"}`}>
+                  {zebraStatus}
+                </p>
+              )}
+
+              {/* Note */}
+              <p className="text-xs text-slate-400 bg-slate-50 rounded-lg px-3 py-2">
+                Requires <strong>Zebra Browser Print</strong> app running locally.
+                Each bin prints as a separate 4&quot; label.
+              </p>
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-4 border-t border-slate-100 flex justify-end gap-2">
+              <button onClick={() => setZebraCluster(null)} className="px-4 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">
+                Close
+              </button>
+              <button
+                onClick={runZebraPrint}
+                disabled={!zebraSelected || zebraDiscovering || (zebraProgress !== null && zebraProgress.done < zebraProgress.total)}
+                className="px-4 py-2 text-sm rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              >
+                {zebraProgress !== null && zebraProgress.done < zebraProgress.total ? (
+                  <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Printing…</>
+                ) : (
+                  <>Print {zebraCluster.bins.length} Labels</>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -1307,9 +1458,20 @@ export default function ClustersPage() {
 
                   <div className="flex items-center gap-1.5 flex-shrink-0">
                     <button
+                      onClick={() => openZebraModal(cluster)}
+                      className="p-2 rounded-lg text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
+                      title="Send to Zebra Printer"
+                    >
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="2" y="6" width="20" height="12" rx="2" />
+                        <path d="M6 12h2m4 0h2m4 0h0" />
+                        <path d="M6 16h12" strokeDasharray="2 2" />
+                      </svg>
+                    </button>
+                    <button
                       onClick={() => router.push(`/clusters-print?id=${encodeURIComponent(cluster.id)}`)}
                       className="p-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
-                      title="Print Pick Tickets"
+                      title="Print Pick Tickets (Browser)"
                     >
                       <Printer className="w-4 h-4" />
                     </button>

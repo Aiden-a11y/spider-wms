@@ -1,0 +1,244 @@
+import type { B2CClusterBin, B2CClusterItem } from "./b2c-cluster";
+
+// ── ZPL helpers ──────────────────────────────────────────────────────────────
+
+/** Strip ZPL control characters from user data */
+function ze(v: unknown): string {
+  return String(v ?? "").replace(/[\\^~]/g, "").trim();
+}
+
+/** Truncate after stripping */
+function zt(v: unknown, max: number): string {
+  const s = ze(v);
+  return s.length > max ? s.slice(0, max) : s;
+}
+
+/** Format YYYYMMDD → YYYY-MM-DD */
+function zDate(s: string | undefined): string {
+  if (!s) return "";
+  const d = s.replace(/\D/g, "");
+  if (d.length === 8) return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+  return s.slice(0, 10);
+}
+
+// ── ZPL Bin Ticket ────────────────────────────────────────────────────────────
+//   4" × auto at 203 DPI  (PW = 812 dots)
+
+export function generateBinZPL(
+  bin: B2CClusterBin,
+  clusterNo: number | undefined,
+  totalBins: number
+): string {
+  const items: B2CClusterItem[] = [...bin.items].sort((a, b) =>
+    (a.locationCode ?? "").localeCompare(b.locationCode ?? "")
+  );
+  const totalQty = items.reduce((s, i) => s + i.qty, 0);
+  const totalSkus = new Set(items.map((i) => i.sku)).size;
+
+  const W = 812;  // 4" @ 203 dpi
+  const M = 12;   // left/right margin
+  const z: string[] = [];
+  let y = 8;
+  const LL_IDX = 2; // splice ^LL here after computing height
+
+  z.push("^XA");
+  z.push(`^PW${W}`);
+  // ^LL spliced in at LL_IDX after final y is known
+  z.push("^LH0,0");
+  z.push("^CI28"); // UTF-8
+
+  // ── HEADER ──────────────────────────────────────────────
+  z.push(`^FO${M},${y}^GB${W - M * 2},3,3^FS`); // top border
+  y += 5;
+
+  // BIN badge (solid black rect, white text)
+  const bX = W - 122;
+  const bY = y;
+  z.push(`^FO${bX},${bY}^GB110,110,110^FS`);
+  z.push(`^FO${bX + 4},${bY + 8}^A0N,24,24^FR^FDBIN^FS`);
+  const bn = String(bin.binNo);
+  const [bfH, bfW] =
+    bn.length >= 3 ? [40, 34] : bn.length === 2 ? [52, 46] : [62, 54];
+  z.push(`^FO${bX + 4},${bY + 36}^A0N,${bfH},${bfW}^FR^FD${bn}^FS`);
+
+  // Titles
+  z.push(`^FO${M},${y + 6}^A0N,28,26^FDB2C CLUSTER PICK^FS`);
+  const clLabel =
+    clusterNo != null
+      ? `Cluster #${String(clusterNo).padStart(4, "0")}`
+      : "Cluster Pick";
+  z.push(`^FO${M},${y + 38}^A0N,22,20^FD${ze(clLabel)}^FS`);
+  z.push(
+    `^FO${M},${y + 64}^A0N,20,18^FDClient: ${ze(bin.customerCode || "ALL")}   SKUs: ${totalSkus}   Total: ${totalQty} EA^FS`
+  );
+  z.push(`^FO${M},${y + 90}^A0N,22,20^FDBin ${bin.binNo} of ${totalBins}^FS`);
+
+  y += 118;
+  z.push(`^FO${M},${y}^GB${W - M * 2},3,3^FS`);
+  y += 6;
+
+  // ── ORDER INFO + QR CODE ─────────────────────────────────
+  const orderSecY = y;
+  // QR code — placed on right
+  z.push(
+    `^FO${W - 148},${y + 4}^BQN,2,4^FDQA,${ze(bin.orderCode)}^FS`
+  );
+
+  z.push(`^FO${M},${y}^A0N,18,16^FDORDER NO.^FS`);
+  y += 22;
+  z.push(`^FO${M},${y}^A0N,26,24^FD${zt(bin.orderCode, 26)}^FS`);
+  y += 32;
+
+  if (bin.orderNo) {
+    z.push(`^FO${M},${y}^A0N,18,16^FDShipping: ${zt(bin.orderNo, 22)}^FS`);
+    y += 24;
+  }
+
+  if (bin.consigneeName) {
+    z.push(`^FO${M},${y}^A0N,22,20^FD${zt(bin.consigneeName, 25)}^FS`);
+    y += 28;
+  }
+
+  const addr1 = ze(bin.consigneeAddress1);
+  const addr2 = ze(bin.consigneeAddress2);
+  const city  = ze(bin.consigneeCity);
+  const state = ze(bin.consigneeState);
+  const zip   = ze(bin.consigneeZipCode);
+
+  if (addr1) {
+    z.push(`^FO${M},${y}^A0N,20,18^FD${zt(addr1, 28)}^FS`);
+    y += 24;
+  }
+  if (addr2) {
+    z.push(`^FO${M},${y}^A0N,20,18^FD${zt(addr2, 28)}^FS`);
+    y += 24;
+  }
+  const cityLine = [
+    [city, state].filter(Boolean).join(", "),
+    zip,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  if (cityLine) {
+    z.push(`^FO${M},${y}^A0N,20,18^FD${zt(cityLine, 28)}^FS`);
+    y += 24;
+  }
+
+  // QR code at magnification 4 is ~110 dots tall — ensure clearance
+  y = Math.max(y, orderSecY + 118);
+
+  z.push(`^FO${M},${y}^GB${W - M * 2},3,3^FS`);
+  y += 6;
+
+  // ── ITEMS TABLE ──────────────────────────────────────────
+  // Column headers
+  z.push(`^FO${M},${y}^A0N,20,16^FD#^FS`);
+  z.push(`^FO42,${y}^A0N,20,16^FDLOCATION^FS`);
+  z.push(`^FO300,${y}^A0N,20,16^FDSKU^FS`);
+  z.push(`^FO672,${y}^A0N,20,16^FDQTY^FS`);
+  y += 26;
+  z.push(`^FO${M},${y}^GB${W - M * 2},2,2^FS`);
+  y += 4;
+
+  // Rows
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    z.push(`^FO${M},${y}^A0N,20,15^FD${i + 1}^FS`);
+    z.push(`^FO42,${y}^A0N,20,15^FD${zt(item.locationCode || "—", 16)}^FS`);
+    z.push(`^FO300,${y}^A0N,20,15^FD${zt(item.sku, 16)}^FS`);
+    z.push(`^FO672,${y}^A0N,22,18^FD${item.qty}^FS`);
+    y += 24;
+
+    if (item.lotNo || item.expireDate) {
+      const sub = [
+        item.lotNo ? `Lot: ${item.lotNo}` : "",
+        item.expireDate ? `Exp: ${zDate(item.expireDate)}` : "",
+      ]
+        .filter(Boolean)
+        .join("  ");
+      z.push(`^FO42,${y}^A0N,16,14^FD${zt(sub, 38)}^FS`);
+      y += 20;
+    }
+
+    z.push(`^FO${M},${y}^GB${W - M * 2},1,1^FS`); // thin row divider
+    y += 3;
+  }
+
+  // ── TOTAL ────────────────────────────────────────────────
+  y += 3;
+  z.push(`^FO${M},${y}^GB${W - M * 2},3,3^FS`);
+  y += 6;
+  z.push(`^FO${M},${y}^A0N,24,22^FDTOTAL^FS`);
+  z.push(`^FO590,${y}^A0N,24,22^FD${totalQty} EA^FS`);
+  y += 34;
+
+  // ── FOOTER ───────────────────────────────────────────────
+  z.push(`^FO${M},${y}^GB${W - M * 2},3,3^FS`);
+  y += 8;
+
+  z.push(`^FO${M},${y}^A0N,20,18^FDPicker:^FS`);
+  z.push(`^FO82,${y + 22}^GB285,2,2^FS`);
+  z.push(`^FO400,${y}^A0N,20,18^FDChecked:^FS`);
+  z.push(`^FO476,${y + 22}^GB316,2,2^FS`);
+  y += 34;
+
+  z.push(`^FO${M},${y}^A0N,20,18^FDDate/Time:^FS`);
+  z.push(`^FO110,${y + 22}^GB680,2,2^FS`);
+  y += 34;
+
+  const nowStr = new Date().toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  z.push(`^FO${M},${y}^A0N,16,14^FDGenerated: ${ze(nowStr)}^FS`);
+  y += 22;
+
+  z.push(`^FO${M},${y}^GB${W - M * 2},3,3^FS`);
+  y += 10;
+
+  // Splice in the computed label length
+  z.splice(LL_IDX, 0, `^LL${y}`);
+  z.push("^XZ");
+
+  return z.join("\n");
+}
+
+// ── Zebra Browser Print API ───────────────────────────────────────────────────
+
+export interface ZebraPrinter {
+  name: string;
+  uid: string;
+  connection?: string;
+  provider?: string;
+}
+
+/** Discover printers from local Zebra Browser Print app (port 9100) */
+export async function zebraDiscoverPrinters(): Promise<ZebraPrinter[]> {
+  const res = await fetch("http://localhost:9100/available", {
+    signal: AbortSignal.timeout(4000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = (await res.json()) as { printer?: ZebraPrinter[] };
+  return data.printer ?? [];
+}
+
+/** Send raw ZPL to a discovered Zebra printer */
+export async function zebraSend(
+  printer: ZebraPrinter,
+  zpl: string
+): Promise<void> {
+  const params = new URLSearchParams();
+  params.set("device", JSON.stringify(printer));
+  params.set("data", zpl);
+  const res = await fetch("http://localhost:9100/write", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+    },
+    body: params.toString(),
+  });
+  if (!res.ok) throw new Error(`Write failed: HTTP ${res.status}`);
+}
