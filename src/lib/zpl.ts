@@ -208,12 +208,9 @@ export function generateBinZPL(
 
 // ── Zebra Browser Print API ───────────────────────────────────────────────────
 
-export interface ZebraPrinter {
-  name: string;
-  uid: string;
-  connection?: string;
-  provider?: string;
-}
+// Keep the full device object exactly as returned by /available so Browser Print
+// can match it back to the physical device.
+export type ZebraPrinter = Record<string, unknown> & { name: string; uid: string };
 
 /** Discover printers from local Zebra Browser Print app (port 9100) */
 export async function zebraDiscoverPrinters(): Promise<ZebraPrinter[]> {
@@ -225,20 +222,39 @@ export async function zebraDiscoverPrinters(): Promise<ZebraPrinter[]> {
   return data.printer ?? [];
 }
 
-/** Send raw ZPL to a discovered Zebra printer */
+/** Send raw ZPL to a discovered Zebra printer.
+ *  Tries JSON body first; falls back to URL-encoded if the server rejects it.
+ */
 export async function zebraSend(
   printer: ZebraPrinter,
   zpl: string
 ): Promise<void> {
+  // ZPL must be a single blob — remove newlines so URL-encoding can't fragment it
+  const zplFlat = zpl.replace(/\r?\n/g, "");
+
+  // ── Attempt 1: JSON body (Browser Print v3.1+) ──────────────────────────
+  let res = await fetch("http://localhost:9100/write", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ device: printer, data: zplFlat }),
+  });
+
+  if (res.ok) return;
+
+  const status1 = res.status;
+
+  // ── Attempt 2: URL-encoded body (older Browser Print) ───────────────────
   const params = new URLSearchParams();
   params.set("device", JSON.stringify(printer));
-  params.set("data", zpl);
-  const res = await fetch("http://localhost:9100/write", {
+  params.set("data", zplFlat);
+  res = await fetch("http://localhost:9100/write", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-    },
+    headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
     body: params.toString(),
   });
-  if (!res.ok) throw new Error(`Write failed: HTTP ${res.status}`);
+
+  if (res.ok) return;
+
+  const errText = await res.text().catch(() => "");
+  throw new Error(`Write failed (JSON:${status1}, form:${res.status})${errText ? ` — ${errText.slice(0, 120)}` : ""}`);
 }
