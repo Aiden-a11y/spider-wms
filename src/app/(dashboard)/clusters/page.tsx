@@ -104,12 +104,18 @@ export default function ClustersPage() {
   }, [warehouseCode, headers]);
 
   const isShelfLoc = (s: Record<string, unknown>) => {
+    // RE zone (replenishment staging) is never a valid shelf pick location
+    const zoneNm = String(s.zoneNm ?? s.zoneName ?? s.zone ?? "").trim();
+    if (/^RE$/i.test(zoneNm)) return false;
+    const locCode = String(s.location ?? s.locationCode ?? s.locationCd ?? "");
+    if (/^RE-/i.test(locCode)) return false;
+
     const occupancy = getLocationOccupancyInfo(occupancyMap, s);
     if (occupancy) return classifyOccupancy(occupancy) === "shelf";
-    // OccupancyMap is loaded — location not found means non-shelf (avoid false positives from zone name text)
+    // OccupancyMap is loaded — location not found means non-shelf
     if (occupancyMap.size > 0) return false;
     // OccupancyMap not yet loaded: fall back to zone name text
-    return String(s.zoneNm ?? s.zoneName ?? s.zone ?? "").toLowerCase().includes("shelf");
+    return zoneNm.toLowerCase().includes("shelf");
   };
 
   // ── Replenishment assign ──────────────────────────────────────────────────
