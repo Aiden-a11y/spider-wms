@@ -79,16 +79,17 @@ export function generateBinZPL(
 
   // ── ORDER INFO + QR CODE ─────────────────────────────────
   const orderSecY = y;
+  const qrValue = ze(bin.orderNo ?? bin.orderCode);
   // QR — magnification 5 → ~130 dots wide/tall
-  z.push(`^FO${W - 160},${y + 4}^BQN,2,5^FDQA,${ze(bin.orderCode)}^FS`);
+  z.push(`^FO${W - 160},${y + 4}^BQN,2,5^FDQA,${qrValue}^FS`);
 
   z.push(`^FO${M},${y}^A0N,22,18^FDORDER NO.^FS`);
   y += 28;
-  z.push(`^FO${M},${y}^A0N,34,30^FD${zt(bin.orderCode, 22)}^FS`);
+  z.push(`^FO${M},${y}^A0N,34,30^FD${zt(bin.orderNo ?? bin.orderCode, 22)}^FS`);
   y += 44;
 
-  if (bin.orderNo) {
-    z.push(`^FO${M},${y}^A0N,22,18^FDShipping: ${zt(bin.orderNo, 20)}^FS`);
+  if (bin.orderCode) {
+    z.push(`^FO${M},${y}^A0N,22,18^FDCode: ${zt(bin.orderCode, 22)}^FS`);
     y += 30;
   }
 

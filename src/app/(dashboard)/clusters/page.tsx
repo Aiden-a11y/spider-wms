@@ -71,6 +71,10 @@ export default function ClustersPage() {
   const [selectedPrintIds, setSelectedPrintIds] = useState<Set<string>>(new Set());
 
   // ── Zebra Browser Print ────────────────────────────────────────────────────
+  const zebraDefaultPrinter = useRef<ZebraPrinter | null>(null);
+  // per-cluster print status: "printing" | "done" | "error:msg"
+  const [zebraCardStatus, setZebraCardStatus] = useState<Record<string, string>>({});
+  // modal (only shown for printer selection / troubleshooting)
   const [zebraCluster, setZebraCluster] = useState<B2CCluster | null>(null);
   const [zebraPrinters, setZebraPrinters] = useState<ZebraPrinter[]>([]);
   const [zebraSelected, setZebraSelected] = useState<ZebraPrinter | null>(null);
@@ -931,6 +935,33 @@ export default function ClustersPage() {
   }
 
   // ── Zebra Browser Print ────────────────────────────────────────────────────
+
+  /** Direct print — no modal. Discovers printer on first use, remembers it. */
+  async function zebraPrintDirect(cluster: B2CCluster) {
+    const cid = cluster.id;
+    setZebraCardStatus((p) => ({ ...p, [cid]: "printing" }));
+    try {
+      let printer = zebraDefaultPrinter.current;
+      if (!printer) {
+        const list = await zebraDiscoverPrinters();
+        if (list.length === 0) throw new Error("No Zebra printers found. Is Browser Print running?");
+        printer = list[0];
+        zebraDefaultPrinter.current = printer;
+      }
+      for (let i = 0; i < cluster.bins.length; i++) {
+        const zpl = generateBinZPL(cluster.bins[i], cluster.clusterNo, cluster.bins.length);
+        await zebraSend(printer, zpl);
+        if (i < cluster.bins.length - 1) await new Promise<void>((r) => setTimeout(r, 250));
+      }
+      setZebraCardStatus((p) => ({ ...p, [cid]: "done" }));
+      setTimeout(() => setZebraCardStatus((p) => { const n = { ...p }; delete n[cid]; return n; }), 3000);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Print failed";
+      setZebraCardStatus((p) => ({ ...p, [cid]: `error:${msg}` }));
+    }
+  }
+
+  /** Modal — only for printer selection / troubleshooting */
   async function openZebraModal(cluster: B2CCluster) {
     setZebraCluster(cluster);
     setZebraPrinters([]);
@@ -941,7 +972,7 @@ export default function ClustersPage() {
     try {
       const list = await zebraDiscoverPrinters();
       setZebraPrinters(list);
-      if (list.length > 0) setZebraSelected(list[0]);
+      if (list.length > 0) setZebraSelected(zebraDefaultPrinter.current ?? list[0]);
       setZebraStatus(list.length === 0 ? "No printers found. Is Zebra Browser Print running?" : "");
     } catch {
       setZebraStatus("Cannot reach Zebra Browser Print (localhost:9100). Make sure the app is running.");
@@ -952,6 +983,7 @@ export default function ClustersPage() {
 
   async function runZebraPrint() {
     if (!zebraCluster || !zebraSelected) return;
+    zebraDefaultPrinter.current = zebraSelected;
     const bins = zebraCluster.bins;
     setZebraProgress({ done: 0, total: bins.length });
     setZebraStatus("");
@@ -960,7 +992,7 @@ export default function ClustersPage() {
         setZebraProgress({ done: i, total: bins.length });
         const zpl = generateBinZPL(bins[i], zebraCluster.clusterNo, bins.length);
         await zebraSend(zebraSelected, zpl);
-        await new Promise<void>((r) => setTimeout(r, 300)); // small gap between labels
+        if (i < bins.length - 1) await new Promise<void>((r) => setTimeout(r, 250));
       }
       setZebraProgress({ done: bins.length, total: bins.length });
       setZebraStatus(`✓ Sent ${bins.length} label${bins.length !== 1 ? "s" : ""} to ${zebraSelected.name}`);
@@ -1457,9 +1489,25 @@ export default function ClustersPage() {
                   </div>
 
                   <div className="flex items-center gap-1.5 flex-shrink-0">
+                    {zebraCardStatus[cluster.id] && (
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                        zebraCardStatus[cluster.id] === "printing"
+                          ? "bg-amber-100 text-amber-700"
+                          : zebraCardStatus[cluster.id] === "done"
+                          ? "bg-emerald-100 text-emerald-700"
+                          : "bg-red-100 text-red-700"
+                      }`}>
+                        {zebraCardStatus[cluster.id] === "printing"
+                          ? "Printing…"
+                          : zebraCardStatus[cluster.id] === "done"
+                          ? "✓ Printed"
+                          : "Error"}
+                      </span>
+                    )}
                     <button
-                      onClick={() => openZebraModal(cluster)}
-                      className="p-2 rounded-lg text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
+                      onClick={() => zebraPrintDirect(cluster)}
+                      disabled={zebraCardStatus[cluster.id] === "printing"}
+                      className="p-2 rounded-lg text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       title="Send to Zebra Printer"
                     >
                       <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
