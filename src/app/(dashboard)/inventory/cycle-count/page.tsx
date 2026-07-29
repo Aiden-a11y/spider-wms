@@ -4,8 +4,9 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import {
   CheckCircle2, AlertCircle, TrendingUp, ClipboardList,
-  RefreshCw, Filter, ChevronDown, Loader2,
+  RefreshCw, Filter, ChevronDown, Loader2, Download,
 } from "lucide-react";
+import * as XLSX from "xlsx";
 
 /* ─── types ─────────────────────────────────────────────────── */
 type Status = "OK" | "OVER" | "SHORT";
@@ -422,6 +423,34 @@ export default function CycleCountPage() {
     setKeepingIds((prev) => { const s = new Set(prev); s.delete(id); return s; });
   }
 
+  /* ── Excel download ── */
+  function downloadExcel() {
+    const rows = records.map((r) => ({
+      "Date/Time": fmt(r.counted_at),
+      "Customer Code": r.customer_code ?? "",
+      "Customer Name": r.customer_code ? (custNames[r.customer_code] ?? "") : "",
+      "Warehouse": r.warehouse_code,
+      "Location": r.location,
+      "SKU": r.sku,
+      "Product": r.product_name ?? "",
+      "LOT": r.lot ?? "",
+      "Expire Date": r.expire_date ?? "",
+      "System Qty": r.system_qty,
+      "Counted Qty": r.counted_qty,
+      "Difference": r.difference,
+      "Status": r.status,
+      "Adjusted": r.adjusted ? "Yes" : "No",
+      "Adjusted By": r.adjusted_by ?? "",
+      "Adjusted At": r.adjusted_at ? fmt(r.adjusted_at) : "",
+      "Counted By": r.counted_by,
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Cycle Count");
+    const date = new Date().toLocaleDateString("en-CA");
+    XLSX.writeFile(wb, `cycle-count-${date}.xlsx`);
+  }
+
   /* ── Warehouses from records ── */
   const warehouses = useMemo(
     () => Array.from(new Set(records.map((r) => r.warehouse_code))).sort(),
@@ -544,12 +573,21 @@ export default function CycleCountPage() {
             >
               Clear
             </button>
-            <button
-              onClick={fetchHistory}
-              className="ml-auto flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-sm text-slate-600 transition-colors"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />Refresh
-            </button>
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                onClick={downloadExcel}
+                disabled={records.length === 0}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 hover:bg-emerald-50 hover:border-emerald-300 hover:text-emerald-700 text-sm text-slate-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Download className="w-3.5 h-3.5" />Download
+              </button>
+              <button
+                onClick={fetchHistory}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-sm text-slate-600 transition-colors"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />Refresh
+              </button>
+            </div>
           </div>
 
           {/* Table */}
