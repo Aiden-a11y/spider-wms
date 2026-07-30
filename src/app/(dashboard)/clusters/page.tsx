@@ -13,7 +13,10 @@ import type {
 } from "@/lib/b2c-cluster";
 import { binColor, sortLocationGroups } from "@/lib/b2c-cluster";
 import { buildLocationOccupancyLookup, getLocationOccupancyInfo, classifyOccupancy } from "@/lib/wms";
-import { generateBinZPL, zebraDiscoverPrinters, zebraSend, type ZebraPrinter } from "@/lib/zpl";
+import {
+  generateBinZPL, zebraDiscoverPrinters, zebraSend, type ZebraPrinter,
+  buildReplenLabels, generateReplenLabelZPL, generateReplenPlanZPL, type ReplenPlanEntry,
+} from "@/lib/zpl";
 
 const MAX_BINS = 25;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -81,6 +84,12 @@ export default function ClustersPage() {
   const [zebraDiscovering, setZebraDiscovering] = useState(false);
   const [zebraStatus, setZebraStatus] = useState("");
   const [zebraProgress, setZebraProgress] = useState<{ done: number; total: number } | null>(null);
+  // per-cluster replen print status
+  const [zebraReplenStatus, setZebraReplenStatus] = useState<Record<string, string>>({});
+  // replen plan (pre-cluster) print status
+  const [zebraPlanStatus, setZebraPlanStatus] = useState("");
+  // multi-cluster Zebra print status
+  const [zebraMultiStatus, setZebraMultiStatus] = useState("");
 
   // ── Occupancy map (all pages) ─────────────────────────────────────────────
   const [occupancyMap, setOccupancyMap] = useState<Map<string, string>>(new Map());
@@ -1010,6 +1019,99 @@ export default function ClustersPage() {
     }
   }
 
+  /** Send replenishment location labels for a cluster directly to Zebra. */
+  async function zebraPrintReplen(cluster: B2CCluster) {
+    const cid = cluster.id;
+    setZebraReplenStatus((p) => ({ ...p, [cid]: "printing" }));
+    try {
+      let printer = zebraDefaultPrinter.current;
+      if (!printer) {
+        const list = await zebraDiscoverPrinters();
+        if (list.length === 0) throw new Error("No Zebra printers found. Is Browser Print running?");
+        printer = list[0];
+        zebraDefaultPrinter.current = printer;
+      }
+      const labels = buildReplenLabels(cluster);
+      if (labels.length === 0) throw new Error("No replenishment items in this cluster");
+      for (let i = 0; i < labels.length; i++) {
+        const zpl = generateReplenLabelZPL(labels[i], i, labels.length, cluster.warehouseCode, cluster.createdAt);
+        await zebraSend(printer, zpl);
+        if (i < labels.length - 1) await sleep(250);
+      }
+      setZebraReplenStatus((p) => ({ ...p, [cid]: "done" }));
+      setTimeout(() => setZebraReplenStatus((p) => { const n = { ...p }; delete n[cid]; return n; }), 3000);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Print failed";
+      setZebraReplenStatus((p) => ({ ...p, [cid]: `error:${msg}` }));
+    }
+  }
+
+  /** Send replen plan tickets (pre-cluster panel) directly to Zebra. */
+  async function zebraPrintPlan() {
+    if (replenSkus.length === 0) return;
+    setZebraPlanStatus("printing");
+    try {
+      let printer = zebraDefaultPrinter.current;
+      if (!printer) {
+        const list = await zebraDiscoverPrinters();
+        if (list.length === 0) throw new Error("No Zebra printers found. Is Browser Print running?");
+        printer = list[0];
+        zebraDefaultPrinter.current = printer;
+      }
+      const createdAt = new Date().toISOString();
+      const entries: ReplenPlanEntry[] = replenSkus.map((r) => {
+        const sel = replenSelectedLocs[r.sku];
+        return {
+          sku: r.sku,
+          name: r.name,
+          locationCode: sel ? readableLocation(sel.stock) : r.location,
+          lotNo: sel ? String(sel.stock.lotNo ?? "") : "",
+          expireDate: sel ? String(sel.stock.expireDate ?? "") : "",
+          availQty: sel ? Number(sel.stock.availQty ?? 0) : 0,
+          orderCount: r.orderCount,
+        };
+      });
+      for (let i = 0; i < entries.length; i++) {
+        const zpl = generateReplenPlanZPL(entries[i], warehouseCode, createdAt);
+        await zebraSend(printer, zpl);
+        if (i < entries.length - 1) await sleep(250);
+      }
+      setZebraPlanStatus("done");
+      setTimeout(() => setZebraPlanStatus(""), 3000);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Print failed";
+      setZebraPlanStatus(`error:${msg}`);
+    }
+  }
+
+  /** Send bin pick tickets for all selected clusters directly to Zebra. */
+  async function zebraPrintMulti() {
+    if (selectedPrintIds.size === 0) return;
+    setZebraMultiStatus("printing");
+    try {
+      let printer = zebraDefaultPrinter.current;
+      if (!printer) {
+        const list = await zebraDiscoverPrinters();
+        if (list.length === 0) throw new Error("No Zebra printers found. Is Browser Print running?");
+        printer = list[0];
+        zebraDefaultPrinter.current = printer;
+      }
+      const selectedClusters = clusters.filter((c) => selectedPrintIds.has(c.id));
+      const allJobs = selectedClusters.flatMap((c) => c.bins.map((bin) => ({ bin, cluster: c })));
+      for (let i = 0; i < allJobs.length; i++) {
+        const { bin, cluster } = allJobs[i];
+        const zpl = generateBinZPL(bin, cluster.clusterNo, cluster.bins.length);
+        await zebraSend(printer, zpl);
+        if (i < allJobs.length - 1) await sleep(250);
+      }
+      setZebraMultiStatus("done");
+      setTimeout(() => setZebraMultiStatus(""), 3000);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Print failed";
+      setZebraMultiStatus(`error:${msg}`);
+    }
+  }
+
   // ── Reopen / history UI state ─────────────────────────────────────────────
   const [reopeningId, setReopeningId] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
@@ -1445,15 +1547,39 @@ export default function ClustersPage() {
               <h2 className="text-sm font-bold text-slate-500 uppercase tracking-wide">Active Clusters</h2>
             </div>
             {selectedPrintIds.size > 0 && (
-              <button
-                onClick={() => {
-                  const ids = Array.from(selectedPrintIds).join(",");
-                  window.open(`/clusters-print?ids=${encodeURIComponent(ids)}`, "_blank");
-                }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors"
-              >
-                <Printer className="w-3.5 h-3.5" /> Print Selected ({selectedPrintIds.size})
-              </button>
+              <div className="flex items-center gap-2">
+                {zebraMultiStatus && (
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                    zebraMultiStatus === "printing" ? "bg-amber-100 text-amber-700"
+                    : zebraMultiStatus === "done" ? "bg-emerald-100 text-emerald-700"
+                    : "bg-red-100 text-red-700"
+                  }`}>
+                    {zebraMultiStatus === "printing" ? "Printing…" : zebraMultiStatus === "done" ? "✓ Printed" : "Error"}
+                  </span>
+                )}
+                <button
+                  onClick={zebraPrintMulti}
+                  disabled={zebraMultiStatus === "printing"}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                  title="Send all bins to Zebra printer"
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="6" width="20" height="12" rx="2" />
+                    <path d="M6 12h2m4 0h2m4 0h0" />
+                    <path d="M6 16h12" strokeDasharray="2 2" />
+                  </svg>
+                  Zebra ({selectedPrintIds.size})
+                </button>
+                <button
+                  onClick={() => {
+                    const ids = Array.from(selectedPrintIds).join(",");
+                    window.open(`/clusters-print?ids=${encodeURIComponent(ids)}`, "_blank");
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+                >
+                  <Printer className="w-3.5 h-3.5" /> Browser ({selectedPrintIds.size})
+                </button>
+              </div>
             )}
           </div>
           {clusters.filter((c) => c.status !== "completed").map((cluster) => {
@@ -1583,6 +1709,28 @@ export default function ClustersPage() {
                                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-amber-300 text-amber-700 hover:bg-amber-50 transition-colors"
                               >
                                 <Tag className="w-3.5 h-3.5" /> Print Labels
+                              </button>
+                              {zebraReplenStatus[cluster.id] && (
+                                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                                  zebraReplenStatus[cluster.id] === "printing" ? "bg-amber-100 text-amber-700"
+                                  : zebraReplenStatus[cluster.id] === "done" ? "bg-emerald-100 text-emerald-700"
+                                  : "bg-red-100 text-red-700"
+                                }`}>
+                                  {zebraReplenStatus[cluster.id] === "printing" ? "Printing…" : zebraReplenStatus[cluster.id] === "done" ? "✓ Printed" : "Error"}
+                                </span>
+                              )}
+                              <button
+                                onClick={() => zebraPrintReplen(cluster)}
+                                disabled={zebraReplenStatus[cluster.id] === "printing"}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 transition-colors"
+                                title="Send replenishment labels to Zebra printer"
+                              >
+                                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                                  <rect x="2" y="6" width="20" height="12" rx="2" />
+                                  <path d="M6 12h2m4 0h2m4 0h0" />
+                                  <path d="M6 16h12" strokeDasharray="2 2" />
+                                </svg>
+                                Zebra Labels
                               </button>
                               <button
                                 onClick={() => downloadReplenishment(cluster)}
@@ -2315,12 +2463,36 @@ export default function ClustersPage() {
                   Replenishment Required — {replenSkus.length} SKU{replenSkus.length !== 1 ? "s" : ""} blocking cluster eligibility
                 </span>
               </div>
-              <button
-                onClick={printReplenPlan}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors flex-shrink-0"
-              >
-                <Tag className="w-3.5 h-3.5" /> Print Tickets ({replenSkus.length})
-              </button>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {zebraPlanStatus && (
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                    zebraPlanStatus === "printing" ? "bg-amber-100 text-amber-700"
+                    : zebraPlanStatus === "done" ? "bg-emerald-100 text-emerald-700"
+                    : "bg-red-100 text-red-700"
+                  }`}>
+                    {zebraPlanStatus === "printing" ? "Printing…" : zebraPlanStatus === "done" ? "✓ Printed" : "Error"}
+                  </span>
+                )}
+                <button
+                  onClick={zebraPrintPlan}
+                  disabled={zebraPlanStatus === "printing"}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                  title="Send replen plan tickets to Zebra printer"
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="6" width="20" height="12" rx="2" />
+                    <path d="M6 12h2m4 0h2m4 0h0" />
+                    <path d="M6 16h12" strokeDasharray="2 2" />
+                  </svg>
+                  Zebra ({replenSkus.length})
+                </button>
+                <button
+                  onClick={printReplenPlan}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+                >
+                  <Tag className="w-3.5 h-3.5" /> Browser ({replenSkus.length})
+                </button>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-xs border-collapse">

@@ -1,4 +1,4 @@
-import type { B2CClusterBin, B2CClusterItem } from "./b2c-cluster";
+import type { B2CCluster, B2CClusterBin, B2CClusterItem } from "./b2c-cluster";
 
 // ── ZPL helpers ──────────────────────────────────────────────────────────────
 
@@ -198,6 +198,257 @@ export function generateBinZPL(
   z.splice(LL_IDX, 0, `^LL${y}`);
   z.push("^XZ");
 
+  return z.join("\n");
+}
+
+// ── Replenishment Label ───────────────────────────────────────────────────────
+
+export interface ReplenLocationLabel {
+  locationCode: string;
+  entries: Array<{ sku: string; name: string; qty: number; lotNo?: string; expireDate?: string }>;
+  totalQty: number;
+  bins: number[];
+}
+
+export interface ReplenPlanEntry {
+  sku: string;
+  name: string;
+  locationCode: string;
+  lotNo?: string;
+  expireDate?: string;
+  availQty?: number;
+  orderCount?: number;
+}
+
+/** Build per-location replenishment labels from a cluster (same logic as clusters-replen-print page) */
+export function buildReplenLabels(cluster: B2CCluster): ReplenLocationLabel[] {
+  const map = new Map<string, Map<string, { sku: string; name: string; qty: number; lotNo?: string; expireDate?: string; bins: Set<number> }>>();
+
+  cluster.bins.forEach((bin) => {
+    if (!bin.needsReplenishment || !bin.replenishmentItems?.length) return;
+    bin.replenishmentItems.forEach((ri) => {
+      const loc = ri.locationCode || "UNKNOWN";
+      if (!map.has(loc)) map.set(loc, new Map());
+      const skuMap = map.get(loc)!;
+      if (!skuMap.has(ri.sku)) {
+        skuMap.set(ri.sku, { sku: ri.sku, name: ri.name, qty: 0, lotNo: ri.lotNo, expireDate: ri.expireDate, bins: new Set() });
+      }
+      const entry = skuMap.get(ri.sku)!;
+      entry.qty += ri.qty;
+      entry.bins.add(bin.binNo);
+    });
+  });
+
+  const labels: ReplenLocationLabel[] = [];
+  map.forEach((skuMap, locationCode) => {
+    const entries = Array.from(skuMap.values())
+      .sort((a, b) => a.sku.localeCompare(b.sku))
+      .map((e) => ({ sku: e.sku, name: e.name, qty: e.qty, lotNo: e.lotNo, expireDate: e.expireDate }));
+    const allBins = Array.from(new Set(Array.from(skuMap.values()).flatMap((e) => Array.from(e.bins)))).sort((a, b) => a - b);
+    labels.push({ locationCode, entries, totalQty: entries.reduce((s, e) => s + e.qty, 0), bins: allBins });
+  });
+
+  return labels.sort((a, b) => a.locationCode.localeCompare(b.locationCode, undefined, { numeric: true }));
+}
+
+/**
+ * Generate ZPL for one replenishment location label (4" × auto @ 203 DPI).
+ * idx/total are 0-based index and total label count.
+ */
+export function generateReplenLabelZPL(
+  label: ReplenLocationLabel,
+  idx: number,
+  total: number,
+  warehouseCode: string,
+  createdAt: string,
+): string {
+  const W = 812;
+  const M = 16;
+  const z: string[] = [];
+  let y = 10;
+  const LL_IDX = 2;
+
+  const dateStr = new Date(createdAt).toLocaleDateString("en-US", {
+    month: "short", day: "numeric", year: "numeric",
+  });
+
+  z.push("^XA");
+  z.push(`^PW${W}`);
+  z.push("^LH0,0");
+  z.push("^CI28");
+
+  // ── HEADER ──
+  z.push(`^FO${M},${y}^GB${W - M * 2},4,4^FS`);
+  y += 8;
+
+  z.push(`^FO${M},${y}^A0N,44,38^FDREPLENISHMENT^FS`);
+  z.push(`^FO${M},${y + 50}^A0N,22,18^FDMove to Shelf - Pick for Cluster^FS`);
+
+  // Page num, date, warehouse (right-aligned)
+  z.push(`^FO${W - 200},${y}^A0N,24,20^FD${ze(idx + 1)} / ${ze(total)}^FS`);
+  z.push(`^FO${W - 200},${y + 30}^A0N,20,16^FD${ze(dateStr)}^FS`);
+  z.push(`^FO${W - 200},${y + 52}^A0N,20,16^FD${ze(warehouseCode)}^FS`);
+
+  y += 82;
+  z.push(`^FO${M},${y}^GB${W - M * 2},4,4^FS`);
+  y += 8;
+
+  // ── FROM LOCATION (inverted block) ──
+  z.push(`^FO${M},${y}^GB${W - M * 2},90,90^FS`);
+  z.push(`^FO${M + 8},${y + 6}^A0N,20,16^FR^FDFROM LOCATION^FS`);
+  const locLen = label.locationCode.length;
+  const [locH, locW] = locLen <= 10 ? [64, 54] : locLen <= 16 ? [52, 44] : [42, 36];
+  z.push(`^FO${M + 8},${y + 30}^A0N,${locH},${locW}^FR^FD${zt(label.locationCode, 20)}^FS`);
+  y += 100;
+
+  // ── BINS ──
+  z.push(`^FO${M},${y}^A0N,24,20^FDBINS:^FS`);
+  z.push(`^FO${M + 80},${y}^A0N,24,20^FD${zt(label.bins.join(", "), 44)}^FS`);
+  y += 34;
+
+  // Divider
+  z.push(`^FO${M},${y}^GB${W - M * 2},2,2^FS`);
+  y += 6;
+
+  // ── ITEMS TABLE HEADER ──
+  z.push(`^FO${M},${y}^A0N,22,18^FD#^FS`);
+  z.push(`^FO50,${y}^A0N,22,18^FDSKU^FS`);
+  z.push(`^FO300,${y}^A0N,22,18^FDPRODUCT^FS`);
+  z.push(`^FO760,${y}^A0N,22,18^FDQTY^FS`);
+  y += 28;
+  z.push(`^FO${M},${y}^GB${W - M * 2},3,3^FS`);
+  y += 5;
+
+  // ── ROWS ──
+  for (let i = 0; i < label.entries.length; i++) {
+    const e = label.entries[i];
+    z.push(`^FO${M},${y}^A0N,22,18^FD${i + 1}^FS`);
+    z.push(`^FO50,${y}^A0N,22,18^FD${zt(e.sku, 16)}^FS`);
+    z.push(`^FO300,${y}^A0N,22,18^FD${zt(e.name || "—", 24)}^FS`);
+    z.push(`^FO760,${y}^A0N,26,22^FD${e.qty}^FS`);
+    y += 30;
+
+    if (e.lotNo || e.expireDate) {
+      const sub = [e.lotNo ? `Lot:${e.lotNo}` : "", e.expireDate ? `Exp:${zDate(e.expireDate)}` : ""]
+        .filter(Boolean)
+        .join("  ");
+      z.push(`^FO50,${y}^A0N,18,14^FD${zt(sub, 40)}^FS`);
+      y += 22;
+    }
+
+    z.push(`^FO${M},${y}^GB${W - M * 2},1,1^FS`);
+    y += 4;
+  }
+
+  // ── TOTAL ──
+  y += 4;
+  z.push(`^FO${M},${y}^GB${W - M * 2},4,4^FS`);
+  y += 8;
+  z.push(`^FO${M},${y}^A0N,28,24^FDTOTAL QTY^FS`);
+  z.push(`^FO700,${y}^A0N,32,28^FD${label.totalQty}^FS`);
+  y += 44;
+
+  // ── FOOTER ──
+  z.push(`^FO${M},${y}^GB${W - M * 2},4,4^FS`);
+  y += 10;
+  z.push(`^FO${M},${y}^A0N,22,18^FDPicker:^FS`);
+  z.push(`^FO90,${y + 28}^GB240,3,3^FS`);
+  z.push(`^FO370,${y}^A0N,22,18^FDChecked:^FS`);
+  z.push(`^FO452,${y + 28}^GB330,3,3^FS`);
+  y += 44;
+  z.push(`^FO${M},${y}^A0N,22,18^FDTime:^FS`);
+  z.push(`^FO72,${y + 28}^GB710,3,3^FS`);
+  y += 44;
+
+  z.splice(LL_IDX, 0, `^LL${y + 12}`);
+  z.push("^XZ");
+  return z.join("\n");
+}
+
+/** Generate ZPL for one replen plan entry (SKU pick ticket, 4" × auto @ 203 DPI). */
+export function generateReplenPlanZPL(
+  entry: ReplenPlanEntry,
+  warehouseCode: string,
+  createdAt: string,
+): string {
+  const W = 812;
+  const M = 16;
+  const z: string[] = [];
+  let y = 10;
+  const LL_IDX = 2;
+
+  const dateStr = new Date(createdAt).toLocaleDateString("en-US", {
+    month: "short", day: "numeric", year: "numeric",
+  });
+
+  z.push("^XA");
+  z.push(`^PW${W}`);
+  z.push("^LH0,0");
+  z.push("^CI28");
+
+  // ── BANNER (inverted) ──
+  z.push(`^FO${M},${y}^GB${W - M * 2},90,90^FS`);
+  z.push(`^FO${M + 8},${y + 8}^A0N,22,18^FR^FDREPLENISHMENT PICK^FS`);
+  z.push(`^FO${M + 8},${y + 36}^A0N,48,42^FR^FDMOVE TO SHELF^FS`);
+  y += 102;
+
+  // ── SKU ──
+  z.push(`^FO${M},${y}^A0N,20,16^FDSKU^FS`);
+  y += 24;
+  const skuStr = ze(entry.sku);
+  const [skuH, skuW] = skuStr.length <= 12 ? [52, 44] : skuStr.length <= 18 ? [42, 36] : [32, 28];
+  z.push(`^FO${M},${y}^A0N,${skuH},${skuW}^FD${zt(entry.sku, 24)}^FS`);
+  y += skuH + 10;
+  z.push(`^FO${M},${y}^A0N,26,22^FD${zt(entry.name || "—", 32)}^FS`);
+  y += 36;
+
+  // ── PICK FROM ──
+  z.push(`^FO${M},${y}^A0N,20,16^FDPICK FROM^FS`);
+  y += 24;
+  z.push(`^FO${M},${y}^GB${W - M * 2},80,80^FS`);
+  z.push(`^FO${M + 8},${y + 6}^A0N,18,14^FR^FDLOCATION^FS`);
+  const locStr = ze(entry.locationCode || "—");
+  const [plH, plW] = locStr.length <= 10 ? [56, 48] : locStr.length <= 16 ? [46, 38] : [38, 30];
+  z.push(`^FO${M + 8},${y + 28}^A0N,${plH},${plW}^FR^FD${zt(entry.locationCode || "—", 20)}^FS`);
+  y += 90;
+
+  // ── META ──
+  if (entry.lotNo) {
+    z.push(`^FO${M},${y}^A0N,24,20^FDLot: ${zt(entry.lotNo, 22)}^FS`);
+    y += 30;
+  }
+  if (entry.expireDate) {
+    z.push(`^FO${M},${y}^A0N,24,20^FDExp: ${zt(entry.expireDate, 22)}^FS`);
+    y += 30;
+  }
+  if (entry.availQty && entry.availQty > 0) {
+    z.push(`^FO${M},${y}^A0N,24,20^FDAvail Qty: ${entry.availQty}^FS`);
+    y += 30;
+  }
+
+  // ── ORDER COUNT WARNING ──
+  if (entry.orderCount && entry.orderCount > 0) {
+    z.push(`^FO${M},${y}^A0N,24,20^FD! ${entry.orderCount} order${entry.orderCount !== 1 ? "s" : ""} blocked - replenish to shelf^FS`);
+    y += 36;
+  }
+
+  // ── CHECKBOXES ──
+  z.push(`^FO${M},${y}^GB${W - M * 2},2,2^FS`);
+  y += 8;
+  z.push(`^FO${M},${y}^A0N,24,20^FD[ ] Picked from location^FS`);
+  y += 34;
+  z.push(`^FO${M},${y}^A0N,24,20^FD[ ] Moved to shelf^FS`);
+  y += 36;
+
+  // ── FOOTER ──
+  z.push(`^FO${M},${y}^GB${W - M * 2},3,3^FS`);
+  y += 8;
+  z.push(`^FO${M},${y}^A0N,20,16^FD${ze(warehouseCode)}^FS`);
+  z.push(`^FO580,${y}^A0N,20,16^FD${ze(dateStr)}^FS`);
+  y += 28;
+
+  z.splice(LL_IDX, 0, `^LL${y + 12}`);
+  z.push("^XZ");
   return z.join("\n");
 }
 
