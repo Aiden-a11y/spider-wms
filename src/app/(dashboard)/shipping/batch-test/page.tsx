@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import { useRouter } from "next/navigation";
 import {
@@ -8,6 +8,7 @@ import {
   Package, Calendar, Warehouse, Users, CheckCircle2, Clock, AlertCircle, Truck,
   MapPin, Printer, X, Tag,
 } from "lucide-react";
+import { generateBatchZPL, zebraDiscoverPrinters, zebraSend, type ZebraPrinter, type BatchZPLData } from "@/lib/zpl";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -125,6 +126,11 @@ export default function BatchTestPage() {
   const [labelRequesting, setLabelRequesting] = useState<Record<string, boolean>>({});
   const [labelResult, setLabelResult] = useState<Record<string, { ok: boolean; msg: string }>>({});
 
+  // Zebra Browser Print
+  const zebraDefaultPrinter = useRef<ZebraPrinter | null>(null);
+  const [zebraBatchStatus, setZebraBatchStatus] = useState<Record<string, string>>({});
+  const [zebraMultiBatchStatus, setZebraMultiBatchStatus] = useState("");
+
   // ── Load customer list ────────────────────────────────────────────────────
   const loadCustomers = useCallback(async (whCode: string) => {
     setLoadingCustomers(true);
@@ -218,6 +224,96 @@ export default function BatchTestPage() {
       }));
     } catch { setBatchSkus((p) => ({ ...p, [batch.batchCode]: [] })); }
     finally { setLoadingSkus((p) => ({ ...p, [batch.batchCode]: false })); }
+  }
+
+  // ── Helpers shared by Zebra functions ─────────────────────────────────────
+  async function fetchSkusForZebra(batch: WmsBatch): Promise<SkuEntry[]> {
+    const cached = batchSkus[batch.batchCode];
+    if (cached) return cached;
+    try {
+      const ordRes = await fetch("/api/wms/batch/orders", { method: "POST", headers, body: JSON.stringify([batch.batchCode]) });
+      const ordJson = await ordRes.json();
+      const bOrders: WmsOrder[] = Array.isArray(ordJson?.data) ? ordJson.data : [];
+      setOrders((p) => ({ ...p, [batch.batchCode]: bOrders }));
+      if (!bOrders.length) return [];
+      const itemRes = await fetch(`/api/wms/shipping/items/${encodeURIComponent(bOrders[0].shippingOrderCode)}`, { headers });
+      const itemJson = await itemRes.json();
+      const items: Record<string, unknown>[] = Array.isArray(itemJson?.data?.items) ? itemJson.data.items : [];
+      const skus: SkuEntry[] = items
+        .map((it) => ({
+          sku: String(it.productSku ?? ""),
+          name: String(it.productName ?? ""),
+          qtyPerOrder: Number(it.qty ?? 0),
+          totalQty: Number(it.qty ?? 0) * batch.orderCount,
+        }))
+        .filter((s) => s.sku);
+      setBatchSkus((p) => ({ ...p, [batch.batchCode]: skus }));
+      return skus;
+    } catch { return []; }
+  }
+
+  function buildBatchZPLData(batch: WmsBatch, skus: SkuEntry[]): BatchZPLData {
+    const d = batch.batchDate;
+    const dateDisplay = d.length === 8 ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}` : d;
+    return {
+      batchCode: batch.batchCode,
+      batchName: batch.batchName,
+      dateDisplay,
+      whCode: batch.warehouseCode,
+      custCode: batch.customerCode,
+      orderCount: batch.orderCount,
+      skus: skus.map((s) => ({ sku: s.sku, name: s.name, totalQty: s.totalQty })),
+      totalQty: skus.reduce((s, r) => s + r.totalQty, 0),
+    };
+  }
+
+  async function zebraPrintBatch(batch: WmsBatch) {
+    const code = batch.batchCode;
+    setZebraBatchStatus((p) => ({ ...p, [code]: "printing" }));
+    try {
+      let printer = zebraDefaultPrinter.current;
+      if (!printer) {
+        const list = await zebraDiscoverPrinters();
+        if (list.length === 0) throw new Error("No Zebra printers found. Is Browser Print running?");
+        printer = list[0];
+        zebraDefaultPrinter.current = printer;
+      }
+      const skus = await fetchSkusForZebra(batch);
+      const zpl = generateBatchZPL(buildBatchZPLData(batch, skus));
+      await zebraSend(printer, zpl);
+      setZebraBatchStatus((p) => ({ ...p, [code]: "done" }));
+      setTimeout(() => setZebraBatchStatus((p) => { const n = { ...p }; delete n[code]; return n; }), 3000);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Print failed";
+      setZebraBatchStatus((p) => ({ ...p, [code]: `error:${msg}` }));
+    }
+  }
+
+  async function zebraPrintMultiBatch() {
+    if (selectedBatchCodes.size === 0) return;
+    setZebraMultiBatchStatus("printing");
+    try {
+      let printer = zebraDefaultPrinter.current;
+      if (!printer) {
+        const list = await zebraDiscoverPrinters();
+        if (list.length === 0) throw new Error("No Zebra printers found. Is Browser Print running?");
+        printer = list[0];
+        zebraDefaultPrinter.current = printer;
+      }
+      const selectedBatches = filtered.filter((b) => selectedBatchCodes.has(b.batchCode));
+      for (let i = 0; i < selectedBatches.length; i++) {
+        const batch = selectedBatches[i];
+        const skus = await fetchSkusForZebra(batch);
+        const zpl = generateBatchZPL(buildBatchZPLData(batch, skus));
+        await zebraSend(printer, zpl);
+        if (i < selectedBatches.length - 1) await sleep(250);
+      }
+      setZebraMultiBatchStatus("done");
+      setTimeout(() => setZebraMultiBatchStatus(""), 3000);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Print failed";
+      setZebraMultiBatchStatus(`error:${msg}`);
+    }
   }
 
   function toggleAssignPanel(batch: WmsBatch) {
@@ -483,21 +579,45 @@ export default function BatchTestPage() {
             <span>Showing <span className="font-semibold text-slate-900">{filtered.length}</span>{filtered.length !== batches.length && <> of {batches.length} total</>} batch{filtered.length !== 1 ? "es" : ""}</span>
             {filterDate && <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-full px-2 py-0.5">{filterDate === today ? "Today" : filterDate}</span>}
             {selectedBatchCodes.size > 0 && (
-              <button
-                onClick={() => {
-                  const codes = Array.from(selectedBatchCodes);
-                  const base = filtered.find((b) => selectedBatchCodes.has(b.batchCode));
-                  const params = new URLSearchParams({
-                    batchCodes: codes.join(","),
-                    warehouseCode: base?.warehouseCode ?? warehouseCode,
-                    customerCode: base?.customerCode ?? customerCode,
-                  });
-                  window.open(`/wms-batch-print?${params.toString()}`, "_blank");
-                }}
-                className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors"
-              >
-                <Printer className="w-3.5 h-3.5" /> Print Selected ({selectedBatchCodes.size})
-              </button>
+              <div className="flex items-center gap-2">
+                {zebraMultiBatchStatus && (
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                    zebraMultiBatchStatus === "printing" ? "bg-amber-100 text-amber-700"
+                    : zebraMultiBatchStatus === "done" ? "bg-emerald-100 text-emerald-700"
+                    : "bg-red-100 text-red-700"
+                  }`}>
+                    {zebraMultiBatchStatus === "printing" ? "Printing…" : zebraMultiBatchStatus === "done" ? "✓ Printed" : "Error"}
+                  </span>
+                )}
+                <button
+                  onClick={zebraPrintMultiBatch}
+                  disabled={zebraMultiBatchStatus === "printing"}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                  title="Send to Zebra printer"
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="6" width="20" height="12" rx="2" />
+                    <path d="M6 12h2m4 0h2m4 0h0" />
+                    <path d="M6 16h12" strokeDasharray="2 2" />
+                  </svg>
+                  Zebra ({selectedBatchCodes.size})
+                </button>
+                <button
+                  onClick={() => {
+                    const codes = Array.from(selectedBatchCodes);
+                    const base = filtered.find((b) => selectedBatchCodes.has(b.batchCode));
+                    const params = new URLSearchParams({
+                      batchCodes: codes.join(","),
+                      warehouseCode: base?.warehouseCode ?? warehouseCode,
+                      customerCode: base?.customerCode ?? customerCode,
+                    });
+                    window.open(`/wms-batch-print?${params.toString()}`, "_blank");
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+                >
+                  <Printer className="w-3.5 h-3.5" /> Browser ({selectedBatchCodes.size})
+                </button>
+              </div>
             )}
             {availableDates.length > 1 && (
               <div className="flex items-center gap-1 ml-auto text-xs text-slate-400">
@@ -557,6 +677,27 @@ export default function BatchTestPage() {
 
                     {/* Actions */}
                     <div className="flex items-center gap-1.5 flex-shrink-0">
+                      {zebraBatchStatus[batch.batchCode] && (
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                          zebraBatchStatus[batch.batchCode] === "printing" ? "bg-amber-100 text-amber-700"
+                          : zebraBatchStatus[batch.batchCode] === "done" ? "bg-emerald-100 text-emerald-700"
+                          : "bg-red-100 text-red-700"
+                        }`}>
+                          {zebraBatchStatus[batch.batchCode] === "printing" ? "Printing…" : zebraBatchStatus[batch.batchCode] === "done" ? "✓ Printed" : "Error"}
+                        </span>
+                      )}
+                      <button
+                        onClick={() => zebraPrintBatch(batch)}
+                        disabled={zebraBatchStatus[batch.batchCode] === "printing"}
+                        className="p-2 rounded-lg text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 disabled:opacity-50 transition-colors"
+                        title="Send to Zebra printer"
+                      >
+                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="2" y="6" width="20" height="12" rx="2" />
+                          <path d="M6 12h2m4 0h2m4 0h0" />
+                          <path d="M6 16h12" strokeDasharray="2 2" />
+                        </svg>
+                      </button>
                       <button onClick={() => window.open(printUrl, "_blank")}
                         className="p-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors" title="Print Pick Ticket (4×6)">
                         <Printer className="w-4 h-4" />

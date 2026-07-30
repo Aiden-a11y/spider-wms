@@ -452,6 +452,125 @@ export function generateReplenPlanZPL(
   return z.join("\n");
 }
 
+// ── Batch Pick Ticket ─────────────────────────────────────────────────────────
+
+export interface BatchZPLData {
+  batchCode: string;
+  batchName: string;
+  dateDisplay: string;
+  whCode: string;
+  custCode: string;
+  orderCount: number;
+  skus: Array<{ sku: string; name: string; totalQty: number }>;
+  totalQty: number;
+}
+
+/** Generate ZPL for a batch pick ticket (4" × auto @ 203 DPI). */
+export function generateBatchZPL(data: BatchZPLData): string {
+  const W = 812;
+  const M = 16;
+  const z: string[] = [];
+  let y = 10;
+  const LL_IDX = 2;
+
+  z.push("^XA");
+  z.push(`^PW${W}`);
+  z.push("^LH0,0");
+  z.push("^CI28");
+
+  // ── HEADER: title + QR (mag 5 ≈ 130 dots) ──
+  z.push(`^FO${W - 155},${y}^BQN,2,5^FDQA,${ze(data.batchCode)}^FS`);
+  z.push(`^FO${M},${y}^GB${W - M * 2},4,4^FS`);
+  y += 8;
+  z.push(`^FO${M},${y}^A0N,22,18^FD▌ BATCH PICK TICKET^FS`);
+  y += 28;
+  z.push(`^FO${M},${y}^A0N,36,30^FD${zt(data.batchName, 20)}^FS`);
+  y += 46;
+
+  // Ensure we clear the QR region (starts at y=10, mag5 ≈ 130 tall)
+  y = Math.max(y, 150);
+  z.push(`^FO${M},${y}^GB${W - M * 2},4,4^FS`);
+  y += 8;
+
+  // ── INFO GRID (2 cols × 2 rows) ──
+  const HALF = Math.floor((W - M * 2) / 2);
+  const BOX_H = 108;
+  z.push(`^FO${M},${y}^GB${W - M * 2},${BOX_H},2^FS`);             // outer box
+  z.push(`^FO${M + HALF},${y}^GB2,${BOX_H},2^FS`);                  // vertical divider
+  z.push(`^FO${M},${y + BOX_H / 2}^GB${W - M * 2},2,2^FS`);        // horizontal divider
+  const C1 = M + 4;
+  const C2 = M + HALF + 4;
+  // Row 1 left: Batch No.
+  z.push(`^FO${C1},${y + 4}^A0N,20,16^FDBatch No.^FS`);
+  z.push(`^FO${C1},${y + 26}^A0N,28,24^FD${zt(data.batchCode, 18)}^FS`);
+  // Row 1 right: Client / WH
+  z.push(`^FO${C2},${y + 4}^A0N,20,16^FDClient: ${zt(data.custCode || "ALL", 12)}^FS`);
+  z.push(`^FO${C2},${y + 28}^A0N,20,16^FDWH: ${zt(data.whCode, 12)}^FS`);
+  // Row 2 left: Date / Orders
+  const R2Y = y + BOX_H / 2 + 2;
+  z.push(`^FO${C1},${R2Y + 4}^A0N,20,16^FDDate: ${zt(data.dateDisplay, 12)}^FS`);
+  z.push(`^FO${C1},${R2Y + 28}^A0N,20,16^FDOrders: ${data.orderCount}^FS`);
+  // Row 2 right: SKU count / Total
+  z.push(`^FO${C2},${R2Y + 4}^A0N,20,16^FDTotal SKU: ${data.skus.length}^FS`);
+  z.push(`^FO${C2},${R2Y + 28}^A0N,20,16^FDTotal Qty: ${data.totalQty} EA^FS`);
+  y += BOX_H + 6;
+
+  // ── ITEMS TABLE ──
+  z.push(`^FO${M},${y}^A0N,20,16^FD#^FS`);
+  z.push(`^FO52,${y}^A0N,20,16^FDSKU / ITEM^FS`);
+  z.push(`^FO636,${y}^A0N,20,16^FDQTY^FS`);
+  z.push(`^FO762,${y}^A0N,20,16^FD✓^FS`);
+  y += 24;
+  z.push(`^FO${M},${y}^GB${W - M * 2},3,3^FS`);
+  y += 5;
+
+  for (let i = 0; i < data.skus.length; i++) {
+    const s = data.skus[i];
+    const rowY = y;
+    z.push(`^FO${M},${rowY}^A0N,24,20^FD${i + 1}^FS`);
+    z.push(`^FO52,${rowY}^A0N,24,20^FD${zt(s.sku, 16)}^FS`);
+    z.push(`^FO52,${rowY + 28}^A0N,18,14^FD${zt(s.name || "—", 28)}^FS`);
+    z.push(`^FO630,${rowY + 6}^A0N,30,26^FD${s.totalQty}^FS`);
+    z.push(`^FO762,${rowY + 4}^GB28,28,2^FS`); // check box
+    y += 54;
+    z.push(`^FO${M},${y}^GB${W - M * 2},1,1^FS`);
+    y += 4;
+  }
+
+  // Total row
+  y += 4;
+  z.push(`^FO${M},${y}^GB${W - M * 2},4,4^FS`);
+  y += 8;
+  z.push(`^FO520,${y}^A0N,28,24^FDTOTAL^FS`);
+  z.push(`^FO630,${y}^A0N,32,28^FD${data.totalQty}^FS`);
+  y += 44;
+
+  // ── FOOTER ──
+  z.push(`^FO${M},${y}^GB${W - M * 2},4,4^FS`);
+  y += 10;
+  z.push(`^FO${M},${y}^A0N,22,18^FDPicker:^FS`);
+  z.push(`^FO90,${y + 28}^GB240,3,3^FS`);
+  z.push(`^FO370,${y}^A0N,22,18^FDChecked:^FS`);
+  z.push(`^FO452,${y + 28}^GB330,3,3^FS`);
+  y += 44;
+  z.push(`^FO${M},${y}^A0N,22,18^FDDate / Time:^FS`);
+  z.push(`^FO130,${y + 28}^GB650,3,3^FS`);
+  y += 44;
+
+  const nowStr = new Date().toLocaleString("en-US", {
+    month: "short", day: "numeric", year: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
+  z.push(`^FO${M},${y}^A0N,18,14^FDGenerated: ${ze(nowStr)}^FS`);
+  y += 26;
+  z.push(`^FO${M},${y}^GB${W - M * 2},4,4^FS`);
+  y += 12;
+
+  z.splice(LL_IDX, 0, `^LL${y}`);
+  z.push("^XZ");
+  return z.join("\n");
+}
+
 // ── Zebra Browser Print API ───────────────────────────────────────────────────
 
 // Keep the full device object exactly as returned by /available so Browser Print
