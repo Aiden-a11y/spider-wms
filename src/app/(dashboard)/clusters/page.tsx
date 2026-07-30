@@ -294,7 +294,7 @@ export default function ClustersPage() {
   // ── Selection helpers ─────────────────────────────────────────────────────
   const clusteredCodes = useMemo(() => {
     const set: Record<string, true> = {};
-    clusters.forEach((c) => c.bins.forEach((b) => { set[b.orderCode] = true; }));
+    clusters.forEach((c) => (c.bins ?? []).forEach((b) => { set[b.orderCode] = true; }));
     return set;
   }, [clusters]);
 
