@@ -284,11 +284,9 @@ export default function ClustersPage() {
       const res = await fetch("/api/cluster");
       const data = await res.json();
       if (Array.isArray(data)) setClusters(
-        (data as B2CCluster[]).map((c) => ({
-          ...c,
-          bins: c.bins ?? [],
-          locationGroups: c.locationGroups ?? [],
-        }))
+        (data as B2CCluster[])
+          .map((c) => ({ ...c, bins: c.bins ?? [], locationGroups: c.locationGroups ?? [] }))
+          .filter((c) => c.bins.length > 0 && c.createdAt && !isNaN(new Date(c.createdAt).getTime()))
       );
     } finally {
       setLoadingClusters(false);
