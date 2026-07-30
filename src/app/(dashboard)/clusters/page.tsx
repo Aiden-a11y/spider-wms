@@ -283,7 +283,13 @@ export default function ClustersPage() {
     try {
       const res = await fetch("/api/cluster");
       const data = await res.json();
-      if (Array.isArray(data)) setClusters(data);
+      if (Array.isArray(data)) setClusters(
+        (data as B2CCluster[]).map((c) => ({
+          ...c,
+          bins: c.bins ?? [],
+          locationGroups: c.locationGroups ?? [],
+        }))
+      );
     } finally {
       setLoadingClusters(false);
     }
