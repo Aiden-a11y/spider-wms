@@ -212,6 +212,8 @@ export default function ClustersPage() {
     const baseBody = {
       limit: PAGE_SIZE, pageSize: PAGE_SIZE,
       orderType: "B2C",
+      status: "AA",
+      orderStatus: "AA",
       warehouseCode,
       ...(selectedCustomer ? { customerCode: selectedCustomer } : {}),
     };
@@ -219,30 +221,32 @@ export default function ClustersPage() {
       const list = (j?.data as Record<string, unknown>)?.list ?? (j?.data as Record<string, unknown>)?.items ?? j?.data ?? j?.list ?? (Array.isArray(j) ? j : []);
       return Array.isArray(list) ? list : [];
     };
-    for (const ep of ["/api/wms/shipping/b2c/list", "/api/wms/shipping/list"]) {
-      try {
-        const all: Record<string, unknown>[] = [];
-        let page = 1;
-        while (true) {
-          const res = await fetch(ep, { method: "POST", headers, body: JSON.stringify({ ...baseBody, page }) });
-          if (!res.ok) break;
-          const j = await res.json().catch(() => null);
-          const rows = extractList(j);
-          all.push(...rows);
-          if (rows.length < PAGE_SIZE) break;
-          page++;
-        }
-        if (all.length > 0) {
-          // Only show Out-Bound Request orders (AA), excluding ones already grouped into a WMS batch
-          setOrders(all.filter((o) =>
-            ["AA", "Out-Bound Request"].includes(String(o.status ?? o.orderStatus ?? "AA")) &&
-            !String(o.batchCode ?? "").trim()
-          ));
-          setLoadingOrders(false);
-          return;
-        }
-      } catch { /* try next */ }
-    }
+    const tryEndpoint = async (ep: string): Promise<Record<string, unknown>[]> => {
+      const all: Record<string, unknown>[] = [];
+      let page = 1;
+      while (true) {
+        const res = await fetch(ep, { method: "POST", headers, body: JSON.stringify({ ...baseBody, page }) });
+        if (!res.ok) return [];
+        const j = await res.json().catch(() => null);
+        const rows = extractList(j);
+        all.push(...rows);
+        if (rows.length < PAGE_SIZE) break;
+        page++;
+      }
+      return all;
+    };
+    try {
+      // Race both endpoints in parallel — use whichever returns data first
+      const [b2c, generic] = await Promise.all([
+        tryEndpoint("/api/wms/shipping/b2c/list").catch(() => [] as Record<string, unknown>[]),
+        tryEndpoint("/api/wms/shipping/list").catch(() => [] as Record<string, unknown>[]),
+      ]);
+      const all = b2c.length > 0 ? b2c : generic;
+      setOrders(all.filter((o) =>
+        ["AA", "Out-Bound Request"].includes(String(o.status ?? o.orderStatus ?? "AA")) &&
+        !String(o.batchCode ?? "").trim()
+      ));
+    } catch { /* silent */ }
     setLoadingOrders(false);
   }, [warehouseCode, selectedCustomer, headers]);
 
