@@ -3425,20 +3425,26 @@ export default function BillingPage() {
     const source: WmsSource = { receiving: [], b2b: [], b2c: [], returns: [] };
 
     try {
-      const j = await fetch("/api/wms/receiving/list", {
-        method: "POST", headers,
-        body: JSON.stringify({
-          page: 1, limit: 2000,
-          customerCode: customer,
-          // try all common param names
-          startDate: startDash, endDate: endDash,
-          fromDate: startDash,  toDate: endDash,
-          orderDateFrom: startDash, orderDateTo: endDash,
-          startOrderDate: startCompact, endOrderDate: endCompact,
-        }),
-      }).then((r) => r.json());
-      const raw: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
-      const list = Array.isArray(raw) ? raw.filter(isInboundInPeriod) : [];
+      const PAGE_SIZE_IB = 500;
+      const rawIB: Record<string, unknown>[] = [];
+      for (let page = 1; page <= 20; page++) {
+        const j = await fetch("/api/wms/receiving/list", {
+          method: "POST", headers,
+          body: JSON.stringify({
+            page, limit: PAGE_SIZE_IB, pageSize: PAGE_SIZE_IB,
+            customerCode: customer,
+            startDate: startDash, endDate: endDash,
+            fromDate: startDash,  toDate: endDash,
+            orderDateFrom: startDash, orderDateTo: endDash,
+            startOrderDate: startCompact, endOrderDate: endCompact,
+          }),
+        }).then((r) => r.json()).catch(() => null);
+        const rows: Record<string, unknown>[] = j?.data?.list ?? j?.data ?? j?.list ?? [];
+        if (!Array.isArray(rows) || rows.length === 0) break;
+        rawIB.push(...rows);
+        if (rows.length < PAGE_SIZE_IB) break;
+      }
+      const list = rawIB.filter(isInboundInPeriod);
       if (list.length > 0) {
         source.receiving = list;
         let cartons = 0;

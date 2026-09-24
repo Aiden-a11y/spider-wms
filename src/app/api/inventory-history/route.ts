@@ -50,5 +50,26 @@ export async function GET(req: NextRequest) {
     from += PAGE;
   }
 
-  return NextResponse.json({ date, warehouseCode, rows: allRows.length, data: allRows });
+  // Debug: what's the most recent row on file for this warehouse, regardless of date?
+  const { data: latestRows } = await sb
+    .from("inventory_history")
+    .select("id, captured_date, captured_at, warehouse_code")
+    .eq("warehouse_code", warehouseCode)
+    .order("id", { ascending: false })
+    .limit(3);
+
+  // Debug: identical two-filter query via raw PostgREST, bypassing the supabase-js client,
+  // to isolate whether the client chain or the data itself is the problem.
+  let rawRestCount: number | string = "n/a";
+  try {
+    const rawUrl = `${supabaseUrl}/rest/v1/inventory_history?warehouse_code=eq.${encodeURIComponent(warehouseCode)}&captured_date=eq.${encodeURIComponent(date)}&select=id&limit=5`;
+    const rawRes = await fetch(rawUrl, { headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` } });
+    const rawJson = await rawRes.json();
+    rawRestCount = Array.isArray(rawJson) ? rawJson.length : JSON.stringify(rawJson).slice(0, 200);
+  } catch (e) {
+    rawRestCount = `error: ${(e as Error).message}`;
+  }
+
+  const supabaseHost = (() => { try { return new URL(supabaseUrl).host; } catch { return null; } })();
+  return NextResponse.json({ date, warehouseCode, rows: allRows.length, data: allRows, supabaseHost, latestRows, rawRestCount });
 }

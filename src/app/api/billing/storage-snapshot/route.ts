@@ -26,11 +26,11 @@ export type InventoryHistoryRow = {
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
   const warehouseCode = searchParams.get("warehouseCode");
-  const customerCode  = searchParams.get("customerCode");
+  const customerCode  = searchParams.get("customerCode"); // optional — omit to get all customers for the date
   const date          = searchParams.get("date");
 
-  if (!warehouseCode || !customerCode || !date) {
-    return NextResponse.json({ error: "warehouseCode, customerCode, date are required" }, { status: 400 });
+  if (!warehouseCode || !date) {
+    return NextResponse.json({ error: "warehouseCode, date are required" }, { status: 400 });
   }
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -45,13 +45,16 @@ export async function GET(req: NextRequest) {
 
   const sb = createClient(supabaseUrl, supabaseKey);
 
-  const { data, error } = await sb
+  let query = sb
     .from("inventory_history")
     .select("location, sku, product_name, qty, available_qty, lot, expire_date, customer_code, warehouse_code, captured_date")
     .eq("captured_date", date)
     .eq("warehouse_code", warehouseCode)
-    .eq("customer_code", customerCode)
     .order("location", { ascending: true });
+
+  if (customerCode) query = query.eq("customer_code", customerCode);
+
+  const { data, error } = await query;
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });

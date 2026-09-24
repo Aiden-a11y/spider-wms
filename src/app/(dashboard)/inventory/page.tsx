@@ -23,14 +23,38 @@ import {
   Loader2,
 } from "lucide-react";
 
+/** Runs `worker` over `items` with at most `concurrency` in flight at once.
+ *  Results are returned in the same order as `items`, so a failed item is
+ *  never silently dropped — it just comes back as whatever `worker` returns for it. */
+async function runWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, idx: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIdx = 0;
+  async function runner() {
+    while (true) {
+      const idx = nextIdx++;
+      if (idx >= items.length) return;
+      results[idx] = await worker(items[idx], idx);
+    }
+  }
+  const runners = Array.from({ length: Math.max(1, Math.min(concurrency, items.length)) }, () => runner());
+  await Promise.all(runners);
+  return results;
+}
+
 // ────────────────────────────────────────────────
 // Adjust / Batch-upload types
 // ────────────────────────────────────────────────
 
 const CONDITIONS = [
-  { code: "GOOD", label: "GOOD - GOOD" },
-  { code: "DMG",  label: "DMG - DAMAGE" },
-  { code: "RTRN", label: "RTRN - RETURN" },
+  { code: "GOOD",      label: "GOOD - GOOD" },
+  { code: "HOLD",      label: "HOLD - HOLD" },
+  { code: "DMG",       label: "DMG - DAMAGE" },
+  { code: "RETURN(G)", label: "RETURN(G) - RTRN (GOOD CONDITION)" },
+  { code: "RTRN",      label: "RTRN - RTRN (BAD CONDITION)" },
 ];
 
 type AdjustForm = {
@@ -82,6 +106,8 @@ export default function InventoryPage() {
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [locFilter, setLocFilter] = useState({ zone: "", aisle: "", bay: "", level: "", slot: "" });
+  const [pageSize, setPageSize] = useState(100);
+  const [page, setPage] = useState(1);
   const [debugInfo, setDebugInfo] = useState<{
     comboRaw?: unknown;
     customerRaw?: unknown;
@@ -210,6 +236,7 @@ export default function InventoryPage() {
       Customer: item.customerCode ?? "",
       SKU: item.sku,
       "Product Name": item.productName,
+      Condition: item.condition ?? "",
       Qty: item.qty,
       Available: item.availableQty ?? "",
       LOT: item.lot ?? "",
@@ -333,24 +360,40 @@ export default function InventoryPage() {
         setProgress({ total: pairs.length, loaded: 0 });
         let loaded = 0;
 
-        // Sequential with retry — no concurrent requests = no silent drops
-        for (const { custCode: cc, sku } of pairs) {
-          let rows: ReturnType<typeof normalizeInventory> = [];
+        // Fetch one SKU's inventory detail, retrying a few times before giving up.
+        const fetchPair = async (p: { custCode: string; sku: string }): Promise<{ rows: ReturnType<typeof normalizeInventory>; ok: boolean }> => {
           for (let attempt = 0; attempt < 3; attempt++) {
             try {
               const res = await fetch("/api/wms/inventory/detail", {
                 method: "POST",
                 headers,
-                body: JSON.stringify({ warehouseCode: whCode, customerCode: cc, productSku: sku }),
+                body: JSON.stringify({ warehouseCode: whCode, customerCode: p.custCode, productSku: p.sku }),
               });
-              if (res.ok) { rows = normalizeInventory(await res.json()); break; }
+              if (res.ok) return { rows: normalizeInventory(await res.json()), ok: true };
             } catch { /* retry */ }
             await new Promise((r) => setTimeout(r, 200));
           }
-          allItems.push(...rows);
+          return { rows: [], ok: false };
+        };
+
+        // Bounded concurrency (5 in flight) — much faster than fully sequential,
+        // while staying far short of the unbounded-parallel load that caused drops before.
+        const PAIR_CONCURRENCY = 5;
+        const results = await runWithConcurrency(pairs, PAIR_CONCURRENCY, async (p) => {
+          const r = await fetchPair(p);
           loaded++;
           setProgress({ total: pairs.length, loaded });
+          return r;
+        });
+
+        // Verification pass: anything that still failed after 3 attempts gets retried
+        // strictly sequentially (the safest mode) so nothing is silently missing.
+        const failedIdx = results.map((r, i) => (r.ok ? -1 : i)).filter((i) => i >= 0);
+        for (const i of failedIdx) {
+          results[i] = await fetchPair(pairs[i]);
         }
+
+        allItems.push(...results.flatMap((r) => r.rows));
       }
 
       setDebugInfo((d) => ({
@@ -428,7 +471,7 @@ export default function InventoryPage() {
     loc: string; zone: string; aisle: string; bay: string; level: string; position: string;
     occupancyInfo: string; customerCode: string; sku: string; productName: string;
     lot: string; expireDate: string;
-    good: number; hold: number; dmg: number; rtrn: number; other: number;
+    good: number; hold: number; dmg: number; rtrnGood: number; rtrn: number; other: number;
     total: number; available: number;
   };
 
@@ -444,15 +487,19 @@ export default function InventoryPage() {
           customerCode: item.customerCode ?? "",
           sku: item.sku, productName: item.productName,
           lot: item.lot ?? "", expireDate: item.expireDate ?? "",
-          good: 0, hold: 0, dmg: 0, rtrn: 0, other: 0, total: 0, available: 0,
+          good: 0, hold: 0, dmg: 0, rtrnGood: 0, rtrn: 0, other: 0, total: 0, available: 0,
         });
       }
       const row = map.get(key)!;
       const cond = (item.condition ?? "").toUpperCase();
       const qty = item.qty;
+      // WMS distinguishes RETURN(G) (good-condition return, restockable) from
+      // RTRN (bad-condition return, headed for disposal) — keep them separate,
+      // matching the Item Condition codes configured in WMS itself.
       if      (cond === "GOOD" || cond === "NOR")  row.good  += qty;
       else if (cond === "HOLD")                    row.hold  += qty;
       else if (cond === "DMG"  || cond === "DAMAGE") row.dmg += qty;
+      else if (cond === "RETURN(G)" || cond === "RTRN(G)" || cond === "RETURN_G") row.rtrnGood += qty;
       else if (cond === "RTRN" || cond === "RETURN") row.rtrn += qty;
       else                                          row.other += qty;
       row.total += qty;
@@ -464,6 +511,15 @@ export default function InventoryPage() {
   const totalQty = useMemo(
     () => groupedRows.reduce((s, r) => s + r.total, 0),
     [groupedRows]
+  );
+
+  // Reset to page 1 whenever the underlying result set or page size changes
+  useEffect(() => { setPage(1); }, [groupedRows.length, pageSize, customerCode, search, locFilter]);
+
+  const pageCount = Math.max(1, Math.ceil(groupedRows.length / pageSize));
+  const pagedRows = useMemo(
+    () => groupedRows.slice((page - 1) * pageSize, page * pageSize),
+    [groupedRows, page, pageSize]
   );
 
   // ── Location search ──
@@ -852,6 +908,9 @@ export default function InventoryPage() {
           <span className="text-emerald-700">GOOD <b>{groupedRows.reduce((s,r)=>s+r.good,0).toLocaleString()}</b></span>
           <span className="text-amber-600">HOLD <b>{groupedRows.reduce((s,r)=>s+r.hold,0).toLocaleString()}</b></span>
           <span className="text-red-600">DMG <b>{groupedRows.reduce((s,r)=>s+r.dmg,0).toLocaleString()}</b></span>
+          {groupedRows.reduce((s,r)=>s+r.rtrnGood,0) > 0 && (
+            <span className="text-sky-600">RTRN(G) <b>{groupedRows.reduce((s,r)=>s+r.rtrnGood,0).toLocaleString()}</b></span>
+          )}
           {groupedRows.reduce((s,r)=>s+r.rtrn,0) > 0 && (
             <span className="text-orange-600">RTRN <b>{groupedRows.reduce((s,r)=>s+r.rtrn,0).toLocaleString()}</b></span>
           )}
@@ -1393,6 +1452,40 @@ export default function InventoryPage() {
       {/* Grouped table */}
       {!loading && groupedRows.length > 0 && (
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+          {/* Pagination toolbar (top) */}
+          <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-slate-100 bg-slate-50/60 text-xs flex-wrap">
+            <div className="flex items-center gap-2 text-slate-500">
+              <span>
+                Showing {groupedRows.length === 0 ? 0 : (page - 1) * pageSize + 1}–{Math.min(page * pageSize, groupedRows.length)} of {groupedRows.length.toLocaleString()}
+              </span>
+              <select
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value))}
+                className="ml-2 border border-slate-200 rounded-md px-2 py-1 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"
+              >
+                <option value={100}>100 / page</option>
+                <option value={200}>200 / page</option>
+                <option value={500}>500 / page</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                className="px-2.5 py-1 rounded-md border border-slate-200 text-slate-500 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Prev
+              </button>
+              <span className="text-slate-500 px-1">Page {page} / {pageCount}</span>
+              <button
+                onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+                disabled={page >= pageCount}
+                className="px-2.5 py-1 rounded-md border border-slate-200 text-slate-500 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
+            </div>
+          </div>
           <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
@@ -1405,6 +1498,7 @@ export default function InventoryPage() {
                 <th className="px-4 py-2.5 text-right text-slate-500 font-medium whitespace-nowrap">GOOD</th>
                 <th className="px-4 py-2.5 text-right text-slate-500 font-medium whitespace-nowrap">HOLD</th>
                 <th className="px-4 py-2.5 text-right text-slate-500 font-medium whitespace-nowrap">DMG</th>
+                <th className="px-4 py-2.5 text-right text-slate-500 font-medium whitespace-nowrap">RTRN(G)</th>
                 <th className="px-4 py-2.5 text-right text-slate-500 font-medium whitespace-nowrap">RTRN</th>
                 <th className="px-4 py-2.5 text-right text-slate-800 font-semibold whitespace-nowrap">Total</th>
                 <th className="px-4 py-2.5 text-right text-slate-500 font-medium whitespace-nowrap">Available</th>
@@ -1413,7 +1507,7 @@ export default function InventoryPage() {
               </tr>
             </thead>
             <tbody>
-              {groupedRows.map((row, idx) => {
+              {pagedRows.map((row, idx) => {
                 const exp = row.expireDate?.length === 8
                   ? `${row.expireDate.slice(4,6)}-${row.expireDate.slice(6,8)}-${row.expireDate.slice(0,4)}`
                   : row.expireDate || "-";
@@ -1429,6 +1523,7 @@ export default function InventoryPage() {
                     <td className="px-4 py-2.5 text-right font-semibold text-emerald-700">{row.good > 0 ? row.good.toLocaleString() : <span className="text-slate-300">—</span>}</td>
                     <td className="px-4 py-2.5 text-right font-semibold text-amber-600">{row.hold > 0 ? row.hold.toLocaleString() : <span className="text-slate-300">—</span>}</td>
                     <td className="px-4 py-2.5 text-right font-semibold text-red-600">{row.dmg  > 0 ? row.dmg.toLocaleString()  : <span className="text-slate-300">—</span>}</td>
+                    <td className="px-4 py-2.5 text-right font-semibold text-sky-600">{row.rtrnGood > 0 ? row.rtrnGood.toLocaleString() : <span className="text-slate-300">—</span>}</td>
                     <td className="px-4 py-2.5 text-right font-semibold text-orange-600">{row.rtrn > 0 ? row.rtrn.toLocaleString() : <span className="text-slate-300">—</span>}</td>
                     <td className="px-4 py-2.5 text-right font-bold text-slate-900">{row.total.toLocaleString()}</td>
                     <td className="px-4 py-2.5 text-right text-slate-500">{row.available.toLocaleString()}</td>
@@ -1439,6 +1534,24 @@ export default function InventoryPage() {
               })}
             </tbody>
           </table>
+          </div>
+          {/* Pagination toolbar (bottom) */}
+          <div className="flex items-center justify-center gap-1.5 px-4 py-2.5 border-t border-slate-100 bg-slate-50/60 text-xs">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              className="px-2.5 py-1 rounded-md border border-slate-200 text-slate-500 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Prev
+            </button>
+            <span className="text-slate-500 px-1">Page {page} / {pageCount}</span>
+            <button
+              onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+              disabled={page >= pageCount}
+              className="px-2.5 py-1 rounded-md border border-slate-200 text-slate-500 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
           </div>
         </div>
       )}

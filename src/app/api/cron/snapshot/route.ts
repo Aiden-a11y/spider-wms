@@ -98,6 +98,7 @@ export async function GET(req: NextRequest) {
 
   let totalInserted = 0;
   const errors: string[] = [];
+  const perWarehouse: Record<string, number> = {}; // debug: rows inserted per warehouse code
 
   // ── Warehouses ───────────────────────────────────────────────────────────────
   const whJson = await wmsGet("combo/warehouse", token);
@@ -218,7 +219,9 @@ export async function GET(req: NextRequest) {
               if (insertErr) {
                 errors.push(`${wh.id}/${cust.code}: ${insertErr.message}`);
               } else {
-                totalInserted += Math.min(500, rows.length - i);
+                const n = Math.min(500, rows.length - i);
+                totalInserted += n;
+                perWarehouse[wh.id] = (perWarehouse[wh.id] ?? 0) + n;
               }
             }
           }
@@ -249,6 +252,9 @@ export async function GET(req: NextRequest) {
     captured_at: capturedAt,
     inserted: totalInserted,
     warehouses: warehouses.length,
+    warehouseIds: warehouses.map((w) => w.id), // debug
+    perWarehouse, // debug: rows inserted per warehouse code
+    supabaseHost: (() => { try { return new URL(supabaseUrl).host; } catch { return null; } })(), // debug
     purged_before: cutoffStr,
     purged_rows: purgedRows,
     supabase_key_type: usingServiceKey ? "service_role" : "anon",

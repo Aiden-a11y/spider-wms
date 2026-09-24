@@ -36,6 +36,8 @@ import {
   ClipboardCheck,
   CalendarDays,
   Activity,
+  BarChart2,
+  TrendingUp,
 } from "lucide-react";
 
 type NavChild = { href: string; label: string; icon: React.ElementType };
@@ -73,8 +75,11 @@ const nav: NavItem[] = [
       { href: "/shipping/b2s", label: "B2S Shipping", icon: Store },
       { href: "/shipping/b2e", label: "B2E Shipping", icon: Globe },
       { href: "/packing", label: "Packing", icon: PackageCheck },
+      { href: "/shipping/scan-gaylord", label: "Scan to Gaylord", icon: ScanLine },
       { href: "/clusters", label: "Cluster Pick", icon: ShoppingCart },
       { href: "/clusters/history", label: "Cluster History", icon: History },
+      { href: "/clusters/performance", label: "Pick Performance", icon: BarChart2 },
+      { href: "/clusters/analytics", label: "Pick Analytics", icon: TrendingUp },
       { href: "/shipping/batch-test", label: "Batch Test", icon: Layers },
     ],
   },
