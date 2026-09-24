@@ -5,7 +5,8 @@ import { useAuth } from "@/contexts/auth-context";
 import { useRouter } from "next/navigation";
 import {
   Layers, RefreshCw, Trash2, Loader2, CheckCircle2, AlertCircle,
-  Printer, Plus, Search, ChevronDown, ChevronUp, X, Download, PackageCheck, Tag, MapPin,
+  Printer, Plus, Search, ChevronDown, ChevronUp, X, Download, PackageCheck, Tag, MapPin, Bot,
+  Siren, CheckSquare2, StickyNote,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import type {
@@ -71,12 +72,15 @@ export default function ClustersPage() {
   const [loadingClusters, setLoadingClusters] = useState(false);
   const [expandedCluster, setExpandedCluster] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [completingId, setCompletingId] = useState<string | null>(null);
+  const [completingMulti, setCompletingMulti] = useState(false);
   const [selectedPrintIds, setSelectedPrintIds] = useState<Set<string>>(new Set());
 
   // ── Zebra Browser Print ────────────────────────────────────────────────────
   const zebraDefaultPrinter = useRef<ZebraPrinter | null>(null);
   // per-cluster print status: "printing" | "done" | "error:msg"
   const [zebraCardStatus, setZebraCardStatus] = useState<Record<string, string>>({});
+  const [robotSendStatus, setRobotSendStatus] = useState<Record<string, string>>({});
   // modal (only shown for printer selection / troubleshooting)
   const [zebraCluster, setZebraCluster] = useState<B2CCluster | null>(null);
   const [zebraPrinters, setZebraPrinters] = useState<ZebraPrinter[]>([]);
@@ -164,8 +168,14 @@ export default function ClustersPage() {
   const [checkedAt, setCheckedAt] = useState<string | null>(null);
   const checkAbortRef = useRef(false);
   const checkAbortCtrlRef = useRef<AbortController | null>(null);
-  const stockCacheRef     = useRef<Map<string, Record<string, unknown>[]>>(new Map());
-  const stockRemainingRef = useRef<Map<string, number>>(new Map());
+  const stockCacheRef = useRef<Map<string, Record<string, unknown>[]>>(new Map());
+  // Per-lot remaining qty, FEFO-sorted — mirrors createCluster's real assignment behavior:
+  // each order draws its FULL requirement from a single best (soonest-expiring) shelf lot,
+  // never splitting across lots. If that lot doesn't have enough, the order fails even if
+  // OTHER lots for the same SKU have stock — so eligibility must simulate the same way,
+  // not just compare against the pooled total.
+  type LotStock = { lotNo: string; expireDate: string; remaining: number; raw: Record<string, unknown> };
+  const lotStockRef = useRef<Map<string, LotStock[]>>(new Map());
   const [replenSkus, setReplenSkus] = useState<Array<{
     sku: string; name: string; orderCount: number; location: string; custCode: string;
   }>>([]);
@@ -180,6 +190,56 @@ export default function ClustersPage() {
   const [replenPickerLoading, setReplenPickerLoading] = useState(false);
   const [replenPickerSelectedIdx, setReplenPickerSelectedIdx] = useState(0);
   const [replenSelectedLocs, setReplenSelectedLocs] = useState<Record<string, { stock: Record<string, unknown>; orderCount: number; name: string }>>({});
+
+  // ── TS (Trouble Shoot) exceptions tab ────────────────────────────────────
+  const [mainTab, setMainTab] = useState<"clusters" | "ts">("clusters");
+  const [tsExceptions, setTsExceptions] = useState<Record<string, unknown>[]>([]);
+  const [tsLoading, setTsLoading] = useState(false);
+  const [tsShowResolved, setTsShowResolved] = useState(false);
+  const [tsNotes, setTsNotes] = useState<Record<string, string>>({});
+  const [tsSaving, setTsSaving] = useState<Record<string, boolean>>({});
+
+  async function loadTsExceptions() {
+    setTsLoading(true);
+    try {
+      const params = new URLSearchParams({ warehouseCode, resolved: tsShowResolved ? "true" : "false" });
+      const res = await fetch(`/api/cluster-exceptions?${params}`, { headers });
+      const j = await res.json();
+      const list: Record<string, unknown>[] = j.exceptions ?? [];
+      setTsExceptions(list);
+      const n: Record<string, string> = {};
+      list.forEach((e) => { if (e.notes) n[String(e.id)] = String(e.notes); });
+      setTsNotes(n);
+    } catch {} finally {
+      setTsLoading(false);
+    }
+  }
+
+  async function saveNote(id: string) {
+    setTsSaving((p) => ({ ...p, [id]: true }));
+    try {
+      await fetch(`/api/cluster-exceptions?id=${encodeURIComponent(id)}`, {
+        method: "PATCH", headers,
+        body: JSON.stringify({ notes: tsNotes[id] ?? "" }),
+      });
+    } catch {} finally {
+      setTsSaving((p) => ({ ...p, [id]: false }));
+    }
+  }
+
+  async function toggleResolved(ex: Record<string, unknown>) {
+    const id = String(ex.id);
+    const nowResolved = !ex.resolved;
+    await fetch(`/api/cluster-exceptions?id=${encodeURIComponent(id)}`, {
+      method: "PATCH", headers,
+      body: JSON.stringify({ resolved: nowResolved, resolvedBy: user?.name ?? user?.userId ?? "" }),
+    });
+    loadTsExceptions();
+  }
+
+  useEffect(() => {
+    if (mainTab === "ts") loadTsExceptions();
+  }, [mainTab, warehouseCode, tsShowResolved]); // eslint-disable-line
 
   // ── Creating ──────────────────────────────────────────────────────────────
   const [creating, setCreating] = useState(false);
@@ -395,7 +455,7 @@ export default function ClustersPage() {
     checkAbortRef.current = false;
     checkAbortCtrlRef.current = new AbortController();
     stockCacheRef.current.clear();
-    stockRemainingRef.current.clear();
+    lotStockRef.current.clear();
     setCheckRunning(true);
     setCheckResults({});
     setReplenSkus([]);
@@ -496,18 +556,25 @@ export default function ClustersPage() {
           stockCacheRef.current.set(cacheKey, allStock);
           await sleep(100);
         }
-        // Initialize remaining stock on first encounter for this SKU
-        if (!stockRemainingRef.current.has(cacheKey)) {
-          const totalShelfQty = allStock
-            .filter((s) => isShelfLoc(s))
-            .reduce((sum, s) => sum + Number(s.availQty ?? 0), 0);
-          stockRemainingRef.current.set(cacheKey, totalShelfQty);
+        // Initialize per-lot remaining stock on first encounter for this SKU,
+        // FEFO-sorted (soonest expiry first) — matches createCluster's `byFefo`.
+        if (!lotStockRef.current.has(cacheKey)) {
+          const byFefo = (a: Record<string, unknown>, b: Record<string, unknown>) =>
+            (String(a.expireDate ?? "") || "99999999").localeCompare(String(b.expireDate ?? "") || "99999999");
+          const lots: LotStock[] = allStock
+            .filter((s) => isShelfLoc(s) && Number(s.availQty ?? 0) > 0)
+            .sort(byFefo)
+            .map((s) => ({ lotNo: String(s.lotNo ?? ""), expireDate: String(s.expireDate ?? ""), remaining: Number(s.availQty ?? 0), raw: s }));
+          lotStockRef.current.set(cacheKey, lots);
         }
-        const remaining = stockRemainingRef.current.get(cacheKey)!;
-        const hasShelf = remaining >= requiredQty;
-        if (hasShelf) {
-          // Deduct this order's consumption from the running total
-          stockRemainingRef.current.set(cacheKey, remaining - requiredQty);
+        const lots = lotStockRef.current.get(cacheKey)!;
+        // WMS picks the soonest-expiring lot that has ENOUGH qty for the full order.
+        // If the earliest lot is partially exhausted by prior orders, skip it and try
+        // the next lot — never splits a single order across multiple lots.
+        const best = lots.find((l) => l.remaining >= requiredQty);
+        const hasShelf = !!best;
+        if (best) {
+          best.remaining -= requiredQty;
         } else {
           canCluster = false;
           if (!replenMap[sku]) {
@@ -951,6 +1018,44 @@ export default function ClustersPage() {
     setDeletingId(null);
   }
 
+  // ── Complete cluster (AMR-picked — no WMS status-change here; CA already
+  //    happened when it was sent to the robot) ────────────────────────────────
+  async function completeCluster(id: string) {
+    setCompletingId(id);
+    try {
+      const completedBy = user?.name || user?.userId || "";
+      const res = await fetch(`/api/cluster/complete?id=${encodeURIComponent(id)}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ completedBy }),
+      });
+      if (res.ok) await loadClusters();
+    } finally {
+      setCompletingId(null);
+    }
+  }
+
+  async function completeSelectedClusters() {
+    if (selectedPrintIds.size === 0) return;
+    setCompletingMulti(true);
+    try {
+      const completedBy = user?.name || user?.userId || "";
+      await Promise.all(
+        Array.from(selectedPrintIds).map((id) =>
+          fetch(`/api/cluster/complete?id=${encodeURIComponent(id)}`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ completedBy }),
+          }).catch(() => {}),
+        ),
+      );
+      setSelectedPrintIds(new Set());
+      await loadClusters();
+    } finally {
+      setCompletingMulti(false);
+    }
+  }
+
   // ── Zebra Browser Print ────────────────────────────────────────────────────
 
   /** Direct print — no modal. Discovers printer on first use, remembers it. */
@@ -975,6 +1080,91 @@ export default function ClustersPage() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Print failed";
       setZebraCardStatus((p) => ({ ...p, [cid]: `error:${msg}` }));
+    }
+  }
+
+  /** Send this cluster's orders to the Taras AMR robot for picking.
+   *  The WMS rejects a batch containing mixed customers, so orders are grouped
+   *  by customerCode and sent as one task-batch per customer automatically. */
+  async function sendToRobot(cluster: B2CCluster) {
+    const cid = cluster.id;
+    setRobotSendStatus((p) => ({ ...p, [cid]: "sending" }));
+    try {
+      const byCustomer = new Map<string, string[]>();
+      for (const bin of cluster.bins) {
+        const cust = bin.customerCode || "—";
+        if (!byCustomer.has(cust)) byCustomer.set(cust, []);
+        byCustomer.get(cust)!.push(bin.orderCode);
+      }
+
+      const failures: string[] = [];
+      const caNotes: string[] = [];
+      let sentGroups = 0;
+
+      for (const [custCode, orderCodes] of Array.from(byCustomer.entries())) {
+        try {
+          const res = await fetch("/api/wms/taras/task-batch/send", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ orderCodes, pickingMethod: "Order" }),
+          });
+          const j = await res.json().catch(() => ({})) as Record<string, unknown>;
+          if (!res.ok || j?.isSuccess === false) {
+            const blocked = Array.isArray((j?.data as Record<string, unknown>)?.blocked)
+              ? ((j!.data as Record<string, unknown>).blocked as string[]).join("; ")
+              : "";
+            const msg = String(j?.message ?? `HTTP ${res.status}`) + (blocked ? ` — ${blocked}` : "");
+            failures.push(`${custCode}: ${msg}`);
+            continue; // don't advance status for a batch that wasn't actually sent
+          }
+          sentGroups++;
+
+          // Robot has the pick task now — move these orders to CA (Packing Request)
+          // right away, same safety-checked logic as the Force CA recovery button.
+          try {
+            const caRes = await fetch(
+              `/api/cluster/force-ca?id=${encodeURIComponent(cid)}&customerCode=${encodeURIComponent(custCode)}`,
+              { method: "POST", headers },
+            );
+            const caJson = await caRes.json().catch(() => ({})) as Record<string, unknown>;
+            const caFailedArr = Array.isArray(caJson?.caFailed) ? caJson.caFailed as unknown[] : [];
+            if (!caRes.ok || caFailedArr.length > 0) {
+              caNotes.push(`${custCode}: CA transition failed for ${caFailedArr.length || "some"} order(s)`);
+            }
+          } catch (e) {
+            caNotes.push(`${custCode}: CA transition error — ${e instanceof Error ? e.message : "unknown"}`);
+          }
+        } catch (e) {
+          failures.push(`${custCode}: ${e instanceof Error ? e.message : "Send failed"}`);
+        }
+      }
+
+      if (failures.length > 0) {
+        throw new Error(`${sentGroups}/${byCustomer.size} customer batches sent — ${failures.join(" | ")}`);
+      }
+
+      // Persist a lasting "sent to robot" marker on the cluster itself (not just
+      // transient UI state) so it survives refreshes.
+      const robotSentAt = new Date().toISOString();
+      const robotSentBy = user?.name ?? user?.userId ?? "";
+      fetch("/api/cluster", {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ id: cid, robotSentAt, robotSentBy }),
+      }).catch(() => {});
+      setClusters((prev) => prev.map((c) => (c.id === cid ? { ...c, robotSentAt, robotSentBy } : c)));
+
+      // Robot dispatch succeeded either way — a CA hiccup is a secondary note,
+      // not a failure of the thing the user actually asked for. Use Force CA
+      // on the cluster afterward if a customer's status didn't move.
+      setRobotSendStatus((p) => ({
+        ...p,
+        [cid]: caNotes.length > 0 ? `warn:Sent to robot — ${caNotes.join(" | ")}` : "done",
+      }));
+      setTimeout(() => setRobotSendStatus((p) => { const n = { ...p }; delete n[cid]; return n; }), caNotes.length > 0 ? 8000 : 4000);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Send failed";
+      setRobotSendStatus((p) => ({ ...p, [cid]: `error:${msg}` }));
     }
   }
 
@@ -1115,6 +1305,8 @@ export default function ClustersPage() {
   // ── Reopen / history UI state ─────────────────────────────────────────────
   const [reopeningId, setReopeningId] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [forceCaId, setForceCaId] = useState<string | null>(null);
+  const [forceCaResult, setForceCaResult] = useState<Record<string, { sent: number; skipped: number; failed: number }>>({});
 
   // ── Reopen cluster ────────────────────────────────────────────────────────
   async function reopenCluster(id: string) {
@@ -1126,6 +1318,24 @@ export default function ClustersPage() {
     });
     setReopeningId(null);
     await loadClusters();
+  }
+
+  // ── Force AA→CA (recovery for clusters that completed without the CA transition firing) ──
+  async function forceCA(id: string) {
+    setForceCaId(id);
+    try {
+      const res = await fetch(`/api/cluster/force-ca?id=${encodeURIComponent(id)}`, {
+        method: "POST",
+        headers,
+      });
+      const j = await res.json();
+      const failed: number = j.caFailed?.length ?? 0;
+      setForceCaResult((p) => ({ ...p, [id]: { sent: (j.sent?.length ?? 0) - failed, skipped: j.skipped?.length ?? 0, failed } }));
+    } catch {
+      setForceCaResult((p) => ({ ...p, [id]: { sent: 0, skipped: 0, failed: -1 } }));
+    } finally {
+      setForceCaId(null);
+    }
   }
 
   // ── Shelf location picker ─────────────────────────────────────────────────
@@ -1522,15 +1732,167 @@ export default function ClustersPage() {
             <p className="text-sm text-slate-500">Create up to 25-order clusters with shelf location assignment</p>
           </div>
         </div>
-        <button onClick={loadClusters} disabled={loadingClusters}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 text-sm font-medium transition-colors">
-          <RefreshCw className={`w-4 h-4 ${loadingClusters ? "animate-spin" : ""}`} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Tab switcher */}
+          <div className="flex rounded-lg border border-slate-200 bg-white overflow-hidden text-sm font-medium">
+            <button
+              onClick={() => setMainTab("clusters")}
+              className={`px-4 py-2 transition-colors ${mainTab === "clusters" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-50"}`}>
+              Clusters
+            </button>
+            <button
+              onClick={() => setMainTab("ts")}
+              className={`flex items-center gap-1.5 px-4 py-2 transition-colors ${mainTab === "ts" ? "bg-red-600 text-white" : "text-slate-600 hover:bg-slate-50"}`}>
+              <Siren className="w-3.5 h-3.5" />
+              TS
+              {tsExceptions.filter((e) => !e.resolved).length > 0 && mainTab !== "ts" && (
+                <span className="bg-red-500 text-white text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                  {tsExceptions.filter((e) => !e.resolved).length}
+                </span>
+              )}
+            </button>
+          </div>
+          <button onClick={mainTab === "clusters" ? loadClusters : loadTsExceptions}
+            disabled={mainTab === "clusters" ? loadingClusters : tsLoading}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 text-sm font-medium transition-colors">
+            <RefreshCw className={`w-4 h-4 ${(mainTab === "clusters" ? loadingClusters : tsLoading) ? "animate-spin" : ""}`} />
+            Refresh
+          </button>
+        </div>
       </div>
 
+      {/* ── TS Tab ── */}
+      {mainTab === "ts" && (
+        <div className="space-y-4">
+          {/* Filters */}
+          <div className="flex items-center gap-3 bg-white border border-slate-200 rounded-xl px-4 py-3">
+            <Siren className="w-4 h-4 text-red-500 flex-shrink-0" />
+            <p className="text-sm font-bold text-slate-700">Pick Exceptions</p>
+            <div className="ml-auto flex items-center gap-2">
+              <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer select-none">
+                <input type="checkbox" checked={tsShowResolved} onChange={(e) => setTsShowResolved(e.target.checked)}
+                  className="rounded accent-blue-600" />
+                Show resolved
+              </label>
+            </div>
+          </div>
+
+          {tsLoading && (
+            <div className="flex items-center justify-center py-16 gap-2 text-slate-400">
+              <Loader2 className="w-5 h-5 animate-spin" />
+              <span className="text-sm">Loading…</span>
+            </div>
+          )}
+
+          {!tsLoading && tsExceptions.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-20 gap-3 text-slate-400 bg-white border border-slate-200 rounded-2xl">
+              <CheckCircle2 className="w-10 h-10 text-emerald-400" />
+              <p className="text-sm font-medium">No exceptions {tsShowResolved ? "" : "pending"}</p>
+            </div>
+          )}
+
+          {!tsLoading && tsExceptions.length > 0 && (
+            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-100 text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                      <th className="px-4 py-2.5 text-left">Type</th>
+                      <th className="px-4 py-2.5 text-left">Location</th>
+                      <th className="px-4 py-2.5 text-left">SKU</th>
+                      <th className="px-4 py-2.5 text-left">Order</th>
+                      <th className="px-4 py-2.5 text-center">Short Qty</th>
+                      <th className="px-4 py-2.5 text-left">Cluster</th>
+                      <th className="px-4 py-2.5 text-left">Reporter</th>
+                      <th className="px-4 py-2.5 text-left">Time</th>
+                      <th className="px-4 py-2.5 text-left" style={{ minWidth: 220 }}>Notes</th>
+                      <th className="px-4 py-2.5 text-center">Resolved</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tsExceptions.map((ex) => {
+                      const id = String(ex.id);
+                      const type = String(ex.exception_type ?? "");
+                      const typeMeta: Record<string, { label: string; cls: string }> = {
+                        wrong_sku:  { label: "다른 SKU",  cls: "bg-violet-100 text-violet-700" },
+                        bin_empty:  { label: "Bin Empty", cls: "bg-orange-100 text-orange-700" },
+                        shortage:   { label: "부족",       cls: "bg-red-100 text-red-700" },
+                      };
+                      const meta = typeMeta[type] ?? { label: type, cls: "bg-slate-100 text-slate-600" };
+                      const resolved = Boolean(ex.resolved);
+                      return (
+                        <tr key={id} className={`border-b border-slate-50 ${resolved ? "opacity-50" : ""}`}>
+                          <td className="px-4 py-3">
+                            <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${meta.cls}`}>{meta.label}</span>
+                          </td>
+                          <td className="px-4 py-3 font-mono text-xs font-bold text-slate-700">{String(ex.location_code ?? "—")}</td>
+                          <td className="px-4 py-3">
+                            <p className="font-mono text-xs font-bold text-slate-800">{String(ex.sku ?? "—")}</p>
+                            {ex.product_name != null && <p className="text-xs text-slate-400 truncate max-w-[140px]">{String(ex.product_name)}</p>}
+                          </td>
+                          <td className="px-4 py-3 font-mono text-xs text-slate-600">{String(ex.order_code ?? "—")}</td>
+                          <td className="px-4 py-3 text-center">
+                            {ex.shortage_qty != null
+                              ? <span className="font-bold text-red-600">{String(ex.shortage_qty)}</span>
+                              : <span className="text-slate-300">—</span>}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-slate-500">
+                            {ex.cluster_no != null
+                              ? `#${String(ex.cluster_no).padStart(4, "0")}`
+                              : <span className="text-slate-300">—</span>}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-slate-500">{String(ex.reported_by ?? "—")}</td>
+                          <td className="px-4 py-3 text-xs text-slate-400 whitespace-nowrap">
+                            {new Date(String(ex.reported_at)).toLocaleString("en-US", {
+                              month: "short", day: "numeric",
+                              hour: "2-digit", minute: "2-digit",
+                            })}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="text"
+                                value={tsNotes[id] ?? ""}
+                                onChange={(e) => setTsNotes((p) => ({ ...p, [id]: e.target.value }))}
+                                onKeyDown={(e) => e.key === "Enter" && saveNote(id)}
+                                placeholder="Add note…"
+                                className="flex-1 text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500 min-w-0"
+                                style={{ minWidth: 130 }}
+                              />
+                              <button
+                                onClick={() => saveNote(id)}
+                                disabled={tsSaving[id]}
+                                className="p-1.5 rounded-lg border border-slate-200 text-slate-400 hover:text-blue-600 hover:border-blue-300 transition-colors disabled:opacity-40 flex-shrink-0">
+                                {tsSaving[id]
+                                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  : <StickyNote className="w-3.5 h-3.5" />}
+                              </button>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <button
+                              onClick={() => toggleResolved(ex)}
+                              className={`p-1.5 rounded-lg border transition-colors ${
+                                resolved
+                                  ? "bg-emerald-50 border-emerald-200 text-emerald-600 hover:bg-emerald-100"
+                                  : "border-slate-200 text-slate-300 hover:text-emerald-600 hover:border-emerald-300"
+                              }`}>
+                              <CheckSquare2 className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── Existing clusters ── */}
-      {clusters.filter((c) => c.status !== "completed").length > 0 && (
+      {mainTab === "clusters" && clusters.filter((c) => c.status !== "completed").length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
@@ -1579,12 +1941,24 @@ export default function ClustersPage() {
                 >
                   <Printer className="w-3.5 h-3.5" /> Browser ({selectedPrintIds.size})
                 </button>
+                <button
+                  onClick={completeSelectedClusters}
+                  disabled={completingMulti}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-white hover:bg-slate-900 disabled:opacity-50 transition-colors"
+                  title="Mark selected clusters as completed — no WMS status change"
+                >
+                  {completingMulti
+                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    : <CheckCircle2 className="w-3.5 h-3.5" />}
+                  Complete ({selectedPrintIds.size})
+                </button>
               </div>
             )}
           </div>
           {clusters.filter((c) => c.status !== "completed").map((cluster) => {
             const isExpanded = expandedCluster === cluster.id;
             const isDeleting = deletingId === cluster.id;
+            const isCompleting = completingId === cluster.id;
             const isPrintSelected = selectedPrintIds.has(cluster.id);
             return (
               <div key={cluster.id} className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
@@ -1618,8 +1992,20 @@ export default function ClustersPage() {
                           Replenishment needed: Bin {cluster.replenishmentBins.join(", ")}
                         </span>
                       )}
+                      {cluster.robotSentAt && (
+                        <span
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-indigo-100 text-indigo-700"
+                          title={`Sent by ${cluster.robotSentBy || "—"} at ${new Date(cluster.robotSentAt).toLocaleString()}`}
+                        >
+                          <Bot className="w-3 h-3" />
+                          Sent to Robot
+                        </span>
+                      )}
                     </div>
-                    <p className="text-xs text-slate-400">Created: {new Date(cluster.createdAt).toLocaleString()}</p>
+                    <p className="text-xs text-slate-400">
+                      Created: {new Date(cluster.createdAt).toLocaleString()}
+                      {cluster.robotSentAt && ` · Sent to robot: ${new Date(cluster.robotSentAt).toLocaleString()}`}
+                    </p>
                   </div>
 
                   <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -1650,12 +2036,51 @@ export default function ClustersPage() {
                         <path d="M6 16h12" strokeDasharray="2 2" />
                       </svg>
                     </button>
+                    {robotSendStatus[cluster.id] && (() => {
+                      const s = robotSendStatus[cluster.id];
+                      const isError = s.startsWith("error:");
+                      const isWarn = s.startsWith("warn:");
+                      const text = isError ? s.slice(6) : isWarn ? s.slice(5) : s;
+                      return (
+                        <span
+                          className={`text-xs px-2.5 py-1 rounded-lg font-medium max-w-[360px] leading-snug ${
+                            s === "sending"
+                              ? "bg-amber-100 text-amber-700"
+                              : s === "done"
+                              ? "bg-emerald-100 text-emerald-700"
+                              : isWarn
+                              ? "bg-amber-100 text-amber-800"
+                              : "bg-red-100 text-red-700"
+                          }`}
+                        >
+                          {s === "sending"
+                            ? "Sending…"
+                            : s === "done"
+                            ? "✓ Sent to Robot"
+                            : isWarn
+                            ? `⚠ ${text}`
+                            : `Error: ${text}`}
+                        </span>
+                      );
+                    })()}
                     <button
-                      onClick={() => router.push(`/clusters-print?id=${encodeURIComponent(cluster.id)}`)}
-                      className="p-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
-                      title="Print Pick Tickets (Browser)"
+                      onClick={() => sendToRobot(cluster)}
+                      disabled={robotSendStatus[cluster.id] === "sending"}
+                      className="p-2 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="Send to AMR Robot (Taras)"
                     >
-                      <Printer className="w-4 h-4" />
+                      <Bot className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => completeCluster(cluster.id)}
+                      disabled={isCompleting}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                      title="Mark completed — no WMS status change"
+                    >
+                      {isCompleting
+                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        : <CheckCircle2 className="w-3.5 h-3.5" />}
+                      Complete
                     </button>
                     <button
                       onClick={() => { isDeleting ? null : deleteCluster(cluster.id); }}
@@ -1912,7 +2337,7 @@ export default function ClustersPage() {
       )}
 
       {/* ── Completed clusters (history) ── */}
-      {clusters.filter((c) => c.status === "completed").length > 0 && (
+      {mainTab === "clusters" && clusters.filter((c) => c.status === "completed").length > 0 && (
         <div>
           <button
             onClick={() => setShowHistory((p) => !p)}
@@ -1928,6 +2353,8 @@ export default function ClustersPage() {
             const isExpanded = expandedCluster === cluster.id;
             const isDeleting = deletingId === cluster.id;
             const isReopening = reopeningId === cluster.id;
+            const isForcingCa = forceCaId === cluster.id;
+            const caResult = forceCaResult[cluster.id];
             return (
               <div key={cluster.id} className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden opacity-80 hover:opacity-100 transition-opacity">
                 <div className="px-5 py-4 flex items-start gap-4">
@@ -1955,9 +2382,26 @@ export default function ClustersPage() {
                         {" · "}{new Date(cluster.completedAt).toLocaleString()}
                       </p>
                     )}
+                    {caResult && (
+                      <p className={`text-xs mt-0.5 font-semibold ${caResult.failed === -1 || caResult.failed > 0 ? "text-red-600" : "text-blue-600"}`}>
+                        {caResult.failed === -1
+                          ? "Force CA failed — try again"
+                          : `Force CA: ${caResult.sent} confirmed · ${caResult.skipped} skipped${caResult.failed > 0 ? ` · ${caResult.failed} FAILED (see server logs)` : ""}`}
+                      </p>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <button
+                      onClick={() => forceCA(cluster.id)}
+                      disabled={isForcingCa}
+                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-semibold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                      title="Re-run the AA→CA status change for this cluster's orders (recovery for clusters that completed without it firing)"
+                    >
+                      {isForcingCa
+                        ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Sending…</>
+                        : <><CheckCircle2 className="w-3.5 h-3.5" /> Force CA</>}
+                    </button>
                     <button
                       onClick={() => reopenCluster(cluster.id)}
                       disabled={isReopening}
@@ -2216,26 +2660,36 @@ export default function ClustersPage() {
       )}
 
       {/* ── Creating progress overlay ── */}
-      {creating && (
+      {(creating || createError) && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
           <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full mx-4">
             <div className="flex items-center gap-3 mb-4">
-              <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
-              <h3 className="text-base font-bold text-slate-900">Creating Cluster…</h3>
+              {creating
+                ? <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+                : <AlertCircle className="w-5 h-5 text-red-600" />}
+              <h3 className="text-base font-bold text-slate-900">{creating ? "Creating Cluster…" : "Cluster Creation Failed"}</h3>
             </div>
             <p className="text-sm text-slate-600 min-h-[2.5rem] leading-relaxed">{createStep}</p>
             {createError && (
-              <div className="mt-3 flex items-start gap-2 text-sm text-red-600 bg-red-50 rounded-xl p-3">
-                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                {createError}
-              </div>
+              <>
+                <div className="mt-3 flex items-start gap-2 text-sm text-red-600 bg-red-50 rounded-xl p-3">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  {createError}
+                </div>
+                <button
+                  onClick={() => { setCreateError(""); setCreateStep(""); }}
+                  className="mt-4 w-full py-2.5 rounded-xl text-sm font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
+                >
+                  Close
+                </button>
+              </>
             )}
           </div>
         </div>
       )}
 
       {/* ── Order selection ── */}
-      <div>
+      {mainTab === "clusters" && <div>
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-3">
             <h2 className="text-sm font-bold text-slate-500 uppercase tracking-wide">Select B2C Orders</h2>
@@ -2544,7 +2998,7 @@ export default function ClustersPage() {
             </div>
           </div>
         )}
-      </div>
+      </div>}
 
     </div>
   );
