@@ -59,11 +59,14 @@ export interface B2CCluster {
   createdAt: string;
   createdBy: string;
   status: "active" | "completed";
+  pickStartedAt?: string;
   completedAt?: string;
   completedBy?: string;
   bins: B2CClusterBin[];
   locationGroups: B2CClusterLocationGroup[];
   replenishmentBins?: number[];
+  robotSentAt?: string;
+  robotSentBy?: string;
 }
 
 export const BIN_COLORS = [
