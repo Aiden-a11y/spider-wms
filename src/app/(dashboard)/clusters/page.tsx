@@ -188,8 +188,13 @@ export default function ClustersPage() {
   const [replenPickerOrderCount, setReplenPickerOrderCount] = useState(0);
   const [replenPickerStock, setReplenPickerStock] = useState<Record<string, unknown>[]>([]);
   const [replenPickerLoading, setReplenPickerLoading] = useState(false);
-  const [replenPickerSelectedIdx, setReplenPickerSelectedIdx] = useState(0);
-  const [replenSelectedLocs, setReplenSelectedLocs] = useState<Record<string, { stock: Record<string, unknown>; orderCount: number; name: string }>>({});
+  // idx → qty chosen from that stock row; supports picking from multiple locations
+  const [replenPickerSelections, setReplenPickerSelections] = useState<Record<number, number>>({});
+  const [replenSelectedLocs, setReplenSelectedLocs] = useState<Record<string, {
+    sources: { stock: Record<string, unknown>; qty: number }[];
+    orderCount: number;
+    name: string;
+  }>>({});
 
   // ── TS (Trouble Shoot) exceptions tab ────────────────────────────────────
   const [mainTab, setMainTab] = useState<"clusters" | "ts">("clusters");
@@ -613,9 +618,16 @@ export default function ClustersPage() {
     setReplenPickerCustCode(custCode);
     setReplenPickerOrderCount(orderCount);
     setReplenPickerStock([]);
-    setReplenPickerSelectedIdx(0);
     setReplenPickerLoading(true);
     setReplenPickerOpen(true);
+    // Pre-populate with existing selection so "Change" keeps prior choices
+    const existing = replenSelectedLocs[sku];
+    let initSelections: Record<number, number> = {};
+    if (existing) {
+      // We'll match after stock loads — reset for now, re-apply in the fetch callback
+      initSelections = {};
+    }
+    setReplenPickerSelections(initSelections);
     try {
       const res = await fetch(
         `/api/wms/shipping/available-stock/${encodeURIComponent(warehouseCode)}/${encodeURIComponent(custCode)}?productSku=${encodeURIComponent(sku)}`,
@@ -627,34 +639,51 @@ export default function ClustersPage() {
         .filter((s) => Number(s.availQty ?? 0) > 0)
         .sort((a, b) => (String(a.expireDate ?? "") || "9").localeCompare(String(b.expireDate ?? "") || "9"));
       setReplenPickerStock(available);
+      // Re-apply existing selection if locations still match
+      if (existing) {
+        const restored: Record<number, number> = {};
+        for (const src of existing.sources) {
+          const idx = available.findIndex(
+            (s) => readableLocation(s) === readableLocation(src.stock) && String(s.lotNo ?? "") === String(src.stock.lotNo ?? "")
+          );
+          if (idx >= 0) restored[idx] = src.qty;
+        }
+        setReplenPickerSelections(restored);
+      }
     } finally {
       setReplenPickerLoading(false);
     }
   }
 
   function confirmReplenPicker() {
-    const stock = replenPickerStock[replenPickerSelectedIdx];
-    if (!stock) return;
+    const sources = Object.entries(replenPickerSelections)
+      .filter(([, qty]) => qty > 0)
+      .map(([idxStr, qty]) => ({ stock: replenPickerStock[Number(idxStr)], qty }))
+      .filter((s) => s.stock != null);
+    if (sources.length === 0) return;
     setReplenSelectedLocs((p) => ({
       ...p,
-      [replenPickerSku]: { stock, orderCount: replenPickerOrderCount, name: replenPickerName },
+      [replenPickerSku]: { sources, orderCount: replenPickerOrderCount, name: replenPickerName },
     }));
     setReplenPickerOpen(false);
   }
 
   function printReplenPlan() {
     if (replenSkus.length === 0) return;
-    const entries = replenSkus.map((r) => {
+    const entries = replenSkus.flatMap((r) => {
       const sel = replenSelectedLocs[r.sku];
-      return {
+      if (!sel) {
+        return [{ sku: r.sku, name: r.name, locationCode: r.location, lotNo: "", expireDate: "", availQty: 0, orderCount: r.orderCount }];
+      }
+      return sel.sources.map((src) => ({
         sku: r.sku,
         name: r.name,
-        locationCode: sel ? readableLocation(sel.stock) : r.location,
-        lotNo: sel ? String(sel.stock.lotNo ?? "") : "",
-        expireDate: sel ? String(sel.stock.expireDate ?? "") : "",
-        availQty: sel ? Number(sel.stock.availQty ?? 0) : 0,
+        locationCode: readableLocation(src.stock),
+        lotNo: String(src.stock.lotNo ?? ""),
+        expireDate: String(src.stock.expireDate ?? ""),
+        availQty: src.qty,
         orderCount: r.orderCount,
-      };
+      }));
     });
     localStorage.setItem("replen_plan_print", JSON.stringify({ entries, warehouseCode, createdAt: new Date().toISOString() }));
     window.open("/replen-plan-print", "_blank");
@@ -1249,17 +1278,20 @@ export default function ClustersPage() {
         zebraDefaultPrinter.current = printer;
       }
       const createdAt = new Date().toISOString();
-      const entries: ReplenPlanEntry[] = replenSkus.map((r) => {
+      const entries: ReplenPlanEntry[] = replenSkus.flatMap((r) => {
         const sel = replenSelectedLocs[r.sku];
-        return {
+        if (!sel) {
+          return [{ sku: r.sku, name: r.name, locationCode: r.location, lotNo: "", expireDate: "", availQty: 0, orderCount: r.orderCount }];
+        }
+        return sel.sources.map((src) => ({
           sku: r.sku,
           name: r.name,
-          locationCode: sel ? readableLocation(sel.stock) : r.location,
-          lotNo: sel ? String(sel.stock.lotNo ?? "") : "",
-          expireDate: sel ? String(sel.stock.expireDate ?? "") : "",
-          availQty: sel ? Number(sel.stock.availQty ?? 0) : 0,
+          locationCode: readableLocation(src.stock),
+          lotNo: String(src.stock.lotNo ?? ""),
+          expireDate: String(src.stock.expireDate ?? ""),
+          availQty: src.qty,
           orderCount: r.orderCount,
-        };
+        }));
       });
       for (let i = 0; i < entries.length; i++) {
         const zpl = generateReplenPlanZPL(entries[i], warehouseCode, createdAt);
@@ -2581,83 +2613,152 @@ export default function ClustersPage() {
       )}
 
       {/* ── Pre-cluster replen plan picker modal ── */}
-      {replenPickerOpen && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col max-h-[80vh]">
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
-              <div>
-                <p className="text-sm font-bold text-slate-900">Select Source Location</p>
-                <p className="text-xs text-slate-500 mt-0.5 font-mono">{replenPickerSku}{replenPickerName ? ` · ${replenPickerName}` : ""}</p>
-                <p className="text-xs text-slate-400 mt-0.5">{replenPickerOrderCount} order{replenPickerOrderCount !== 1 ? "s" : ""} need replenishment</p>
+      {replenPickerOpen && (() => {
+        const selectedTotal = Object.values(replenPickerSelections).reduce((s, q) => s + q, 0);
+        const needed = replenPickerOrderCount;
+        const isFulfilled = selectedTotal >= needed;
+        const hasSelection = Object.values(replenPickerSelections).some((q) => q > 0);
+        return (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col max-h-[85vh]">
+              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
+                <div>
+                  <p className="text-sm font-bold text-slate-900">Select Source Location(s)</p>
+                  <p className="text-xs text-slate-500 mt-0.5 font-mono">{replenPickerSku}{replenPickerName ? ` · ${replenPickerName}` : ""}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">{needed} order{needed !== 1 ? "s" : ""} need replenishment</p>
+                </div>
+                <button onClick={() => setReplenPickerOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100">
+                  <X className="w-4 h-4" />
+                </button>
               </div>
-              <button onClick={() => setReplenPickerOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
 
-            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-1.5">
-              {replenPickerLoading ? (
-                <div className="flex items-center justify-center py-12 gap-2 text-slate-400">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span className="text-sm">Loading available stock…</span>
+              {/* Progress bar */}
+              {!replenPickerLoading && replenPickerStock.length > 0 && (
+                <div className="px-6 pt-3 pb-1 flex-shrink-0">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-slate-500">Selected qty</span>
+                    <span className={`text-xs font-bold ${isFulfilled ? "text-emerald-600" : "text-amber-600"}`}>
+                      {selectedTotal} / {needed}
+                    </span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${isFulfilled ? "bg-emerald-500" : "bg-amber-400"}`}
+                      style={{ width: `${Math.min(100, needed > 0 ? (selectedTotal / needed) * 100 : 0)}%` }}
+                    />
+                  </div>
+                  {!isFulfilled && hasSelection && (
+                    <p className="text-[11px] text-amber-600 mt-1">부족 — 아래에서 추가 로케이션을 선택하세요 ({needed - selectedTotal} 더 필요)</p>
+                  )}
                 </div>
-              ) : replenPickerStock.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-12 gap-2 text-slate-400">
-                  <AlertCircle className="w-5 h-5 text-amber-400" />
-                  <p className="text-sm font-medium text-slate-600">No available stock found</p>
-                </div>
-              ) : (
-                replenPickerStock.map((s, idx) => {
-                  const loc = readableLocation(s);
-                  const isSelected = replenPickerSelectedIdx === idx;
-                  const occupancy = getLocationOccupancyInfo(occupancyMap, s);
-                  const zone = classifyOccupancy(occupancy ?? "");
-                  return (
-                    <button key={idx} onClick={() => setReplenPickerSelectedIdx(idx)}
-                      className={`w-full text-left px-4 py-3 rounded-xl border transition-all ${isSelected ? "border-blue-400 bg-blue-50" : "border-slate-200 bg-white hover:bg-slate-50"}`}>
-                      <div className="flex items-center gap-3">
-                        <div className={`w-4 h-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${isSelected ? "border-blue-500" : "border-slate-300"}`}>
-                          {isSelected && <div className="w-2 h-2 rounded-full bg-blue-500" />}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-mono text-sm font-bold text-slate-900">{loc}</span>
-                            {zone === "shelf" && (
-                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Shelf</span>
-                            )}
-                            {zone === "storage" && (
-                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">Storage</span>
-                            )}
+              )}
+
+              <div className="flex-1 overflow-y-auto px-4 py-3 space-y-1.5">
+                {replenPickerLoading ? (
+                  <div className="flex items-center justify-center py-12 gap-2 text-slate-400">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span className="text-sm">Loading available stock…</span>
+                  </div>
+                ) : replenPickerStock.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12 gap-2 text-slate-400">
+                    <AlertCircle className="w-5 h-5 text-amber-400" />
+                    <p className="text-sm font-medium text-slate-600">No available stock found</p>
+                  </div>
+                ) : (
+                  replenPickerStock.map((s, idx) => {
+                    const loc = readableLocation(s);
+                    const isChecked = (replenPickerSelections[idx] ?? 0) > 0;
+                    const availQty = Number(s.availQty ?? 0);
+                    const occupancy = getLocationOccupancyInfo(occupancyMap, s);
+                    const zone = classifyOccupancy(occupancy ?? "");
+                    return (
+                      <div key={idx}
+                        className={`w-full px-4 py-3 rounded-xl border transition-all ${isChecked ? "border-blue-400 bg-blue-50" : "border-slate-200 bg-white hover:bg-slate-50"}`}>
+                        <div className="flex items-start gap-3">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                // Default qty: fill remaining needed, capped at availQty
+                                const remaining = Math.max(0, needed - (selectedTotal - (replenPickerSelections[idx] ?? 0)));
+                                const defaultQty = Math.min(availQty, Math.max(1, remaining));
+                                setReplenPickerSelections((p) => ({ ...p, [idx]: defaultQty }));
+                              } else {
+                                setReplenPickerSelections((p) => { const n = { ...p }; delete n[idx]; return n; });
+                              }
+                            }}
+                            className="mt-0.5 w-4 h-4 rounded border-slate-300 text-blue-600 flex-shrink-0 cursor-pointer"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-mono text-sm font-bold text-slate-900">{loc}</span>
+                              {zone === "shelf" && (
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Shelf</span>
+                              )}
+                              {zone === "storage" && (
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">Storage</span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-3 mt-0.5 text-xs text-slate-500">
+                              {s.lotNo ? <span>Lot: <span className="font-mono">{String(s.lotNo)}</span></span> : null}
+                              {s.expireDate ? <span>Exp: {String(s.expireDate)}</span> : null}
+                              <span className="font-semibold text-slate-700">Avail: {availQty}</span>
+                            </div>
                           </div>
-                          <div className="flex items-center gap-3 mt-0.5 text-xs text-slate-500">
-                            {s.lotNo ? <span>Lot: <span className="font-mono">{String(s.lotNo)}</span></span> : null}
-                            {s.expireDate ? <span>Exp: {String(s.expireDate)}</span> : null}
-                            <span className="font-semibold text-slate-700">Avail: {String(s.availQty ?? 0)}</span>
-                          </div>
+                          {isChecked && (
+                            <div className="flex items-center gap-1 flex-shrink-0">
+                              <button
+                                onClick={() => setReplenPickerSelections((p) => ({ ...p, [idx]: Math.max(1, (p[idx] ?? 1) - 1) }))}
+                                className="w-6 h-6 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 text-sm flex items-center justify-center font-bold"
+                              >−</button>
+                              <input
+                                type="number"
+                                min={1}
+                                max={availQty}
+                                value={replenPickerSelections[idx] ?? 1}
+                                onChange={(e) => {
+                                  const v = Math.max(1, Math.min(availQty, Number(e.target.value) || 1));
+                                  setReplenPickerSelections((p) => ({ ...p, [idx]: v }));
+                                }}
+                                className="w-14 text-center text-sm font-bold border border-slate-200 rounded-md py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                              />
+                              <button
+                                onClick={() => setReplenPickerSelections((p) => ({ ...p, [idx]: Math.min(availQty, (p[idx] ?? 1) + 1) }))}
+                                className="w-6 h-6 rounded-md border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 text-sm flex items-center justify-center font-bold"
+                              >+</button>
+                            </div>
+                          )}
                         </div>
                       </div>
-                    </button>
-                  );
-                })
-              )}
-            </div>
+                    );
+                  })
+                )}
+              </div>
 
-            <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-end gap-3 flex-shrink-0">
-              <button onClick={() => setReplenPickerOpen(false)}
-                className="px-4 py-2 rounded-lg text-sm font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors">
-                Cancel
-              </button>
-              <button
-                onClick={confirmReplenPicker}
-                disabled={replenPickerLoading || replenPickerStock.length === 0}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 transition-colors"
-              >
-                <MapPin className="w-4 h-4" /> Select This Location
-              </button>
+              <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-between gap-3 flex-shrink-0">
+                <div className="text-xs text-slate-400">
+                  {hasSelection && !isFulfilled && <span className="text-amber-500 font-semibold">⚠ 수량 부족 ({selectedTotal}/{needed})</span>}
+                  {isFulfilled && <span className="text-emerald-600 font-semibold">✓ 수량 충족</span>}
+                </div>
+                <div className="flex items-center gap-3">
+                  <button onClick={() => setReplenPickerOpen(false)}
+                    className="px-4 py-2 rounded-lg text-sm font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors">
+                    Cancel
+                  </button>
+                  <button
+                    onClick={confirmReplenPicker}
+                    disabled={replenPickerLoading || !hasSelection}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                  >
+                    <MapPin className="w-4 h-4" /> Confirm
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ── Creating progress overlay ── */}
       {(creating || createError) && (
@@ -2970,13 +3071,25 @@ export default function ClustersPage() {
                         </td>
                         <td className="px-4 py-2">
                           {selected ? (
-                            <div className="flex items-center gap-2">
-                              <span className="font-mono text-xs font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                                {readableLocation(selected.stock)}
-                              </span>
+                            <div className="flex flex-col gap-1">
+                              {selected.sources.map((src, si) => {
+                                const totalQty = selected.sources.reduce((s, x) => s + x.qty, 0);
+                                const short = totalQty < selected.orderCount;
+                                return (
+                                  <span key={si} className={`font-mono text-xs font-bold px-2 py-0.5 rounded border ${short ? "text-amber-700 bg-amber-50 border-amber-200" : "text-emerald-700 bg-emerald-50 border-emerald-200"}`}>
+                                    {readableLocation(src.stock)} <span className="font-normal">× {src.qty}</span>
+                                  </span>
+                                );
+                              })}
+                              {(() => {
+                                const totalQty = selected.sources.reduce((s, x) => s + x.qty, 0);
+                                return totalQty < selected.orderCount ? (
+                                  <span className="text-[10px] text-amber-600 font-semibold">⚠ {totalQty}/{selected.orderCount} 확보</span>
+                                ) : null;
+                              })()}
                               <button
                                 onClick={() => openReplenPicker(r.sku, r.name, r.custCode, r.orderCount)}
-                                className="text-xs text-slate-400 hover:text-slate-600 underline"
+                                className="text-xs text-slate-400 hover:text-slate-600 underline self-start"
                               >
                                 Change
                               </button>
