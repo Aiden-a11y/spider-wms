@@ -52,8 +52,10 @@ type StockOption = {
   zoneNm: string; aisleNm: string; bayNm: string; levelNm: string; positionNm: string;
 };
 
+type SkuSelection = { location: string; qty: number };
+
 type SkuAssignState = {
-  loading: boolean; options: StockOption[]; selected: string | null;
+  loading: boolean; options: StockOption[]; selections: SkuSelection[];
   assigning: boolean; result: "ok" | "error" | null; message: string;
 };
 
@@ -78,7 +80,7 @@ function StatusBadge({ status, name }: { status: string; name: string }) {
   return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200">{label || status}</span>;
 }
 
-const EMPTY_SKU_STATE: SkuAssignState = { loading: false, options: [], selected: null, assigning: false, result: null, message: "" };
+const EMPTY_SKU_STATE: SkuAssignState = { loading: false, options: [], selections: [], assigning: false, result: null, message: "" };
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -333,7 +335,7 @@ export default function BatchTestPage() {
   }
 
   // ── Load locations for SKU ─────────────────────────────────────────────────
-  async function loadLocations(batch: WmsBatch, sku: string) {
+  async function loadLocations(batch: WmsBatch, sku: string, totalQty: number) {
     setSkuField(batch.batchCode, sku, "loading", true);
     setSkuField(batch.batchCode, sku, "result", null);
     setSkuField(batch.batchCode, sku, "message", "");
@@ -349,100 +351,157 @@ export default function BatchTestPage() {
         .filter((s) => String(s.itemCondition ?? "").toUpperCase() === "GOOD" && Number(s.availQty ?? 0) > 0)
         .sort((a, b) => (String(a.expireDate ?? "") || "99999999").localeCompare(String(b.expireDate ?? "") || "99999999"));
       const key = skuKey(batch.batchCode, sku);
-      setSkuState((prev) => ({ ...prev, [key]: { ...(prev[key] ?? EMPTY_SKU_STATE), loading: false, options: good, selected: good[0]?.location ?? null } }));
+      const firstQty = good.length > 0 ? Math.min(Number(good[0].availQty), totalQty) : 0;
+      setSkuState((prev) => ({
+        ...prev,
+        [key]: {
+          ...(prev[key] ?? EMPTY_SKU_STATE),
+          loading: false,
+          options: good,
+          selections: good.length > 0 ? [{ location: good[0].location, qty: firstQty }] : [],
+        },
+      }));
     } catch { setSkuField(batch.batchCode, sku, "loading", false); }
   }
 
-  // ── Assign SKU to all orders (parallel) ───────────────────────────────────
+  // ── Selection helpers ──────────────────────────────────────────────────────
+  function toggleSelection(batchCode: string, sku: string, opt: StockOption, totalQty: number) {
+    const key = skuKey(batchCode, sku);
+    setSkuState((prev) => {
+      const s = prev[key] ?? EMPTY_SKU_STATE;
+      const existing = s.selections.find((sel) => sel.location === opt.location);
+      let newSels: SkuSelection[];
+      if (existing) {
+        newSels = s.selections.filter((sel) => sel.location !== opt.location);
+      } else {
+        const alreadySelected = s.selections.reduce((sum, sel) => sum + sel.qty, 0);
+        const remaining = Math.max(0, totalQty - alreadySelected);
+        const qty = Math.min(Number(opt.availQty), remaining > 0 ? remaining : Number(opt.availQty));
+        newSels = [...s.selections, { location: opt.location, qty }];
+      }
+      return { ...prev, [key]: { ...s, selections: newSels } };
+    });
+  }
+
+  function updateSelectionQty(batchCode: string, sku: string, location: string, delta: number | null, absVal?: number) {
+    const key = skuKey(batchCode, sku);
+    setSkuState((prev) => {
+      const s = prev[key] ?? EMPTY_SKU_STATE;
+      const opt = s.options.find((o) => o.location === location);
+      const maxQty = opt ? Number(opt.availQty) : Infinity;
+      const newSels = s.selections.map((sel) => {
+        if (sel.location !== location) return sel;
+        const newQty = absVal != null ? absVal : sel.qty + (delta ?? 0);
+        return { ...sel, qty: Math.max(0, Math.min(maxQty, newQty)) };
+      });
+      return { ...prev, [key]: { ...s, selections: newSels } };
+    });
+  }
+
+  // ── Assign SKU to all orders (parallel, multi-source) ────────────────────
   async function assignSku(batch: WmsBatch, skuEntry: SkuEntry) {
     const state = getSkuState(batch.batchCode, skuEntry.sku);
-    if (!state.selected) return;
-    const stockOption = state.options.find((o) => o.location === state.selected);
-    if (!stockOption) return;
+    if (state.selections.length === 0) return;
 
     const bOrders = orders[batch.batchCode] ?? [];
     if (!bOrders.length) return;
+
+    const selectionOpts = state.selections
+      .map((sel) => ({ sel, opt: state.options.find((o) => o.location === sel.location) }))
+      .filter((s): s is { sel: SkuSelection; opt: StockOption } => s.opt != null);
+    if (selectionOpts.length === 0) return;
 
     setSkuField(batch.batchCode, skuEntry.sku, "assigning", true);
     setSkuField(batch.batchCode, skuEntry.sku, "result", null);
     setSkuField(batch.batchCode, skuEntry.sku, "message", "");
 
+    const qtyPerOrder = skuEntry.qtyPerOrder;
     const total = bOrders.length;
     let done = 0;
     const issues: string[] = [];
 
-    const FETCH_CONCURRENCY = 10; // parallel items fetches
-    const ASSIGN_CONCURRENCY = 6; // parallel assign calls
+    const FETCH_CONCURRENCY = 10;
+    const ASSIGN_CONCURRENCY = 6;
 
-    // helper: run tasks with concurrency cap
     async function runCapped<T>(tasks: (() => Promise<T>)[], limit: number): Promise<T[]> {
       const results: T[] = [];
       let i = 0;
       async function worker() {
-        while (i < tasks.length) {
-          const idx = i++;
-          results[idx] = await tasks[idx]();
-        }
+        while (i < tasks.length) { const idx = i++; results[idx] = await tasks[idx](); }
       }
       await Promise.all(Array.from({ length: limit }, worker));
       return results;
     }
 
-    // Phase 1: fetch shippingItemId for every order (parallel)
-    setAssignProgress({ batchCode: batch.batchCode, sku: skuEntry.sku, done: 0, total, phase: "fetch" } as typeof assignProgress extends null ? never : NonNullable<typeof assignProgress>);
+    // Distribute orders across sources: each source covers floor(qty/qtyPerOrder) orders;
+    // last source gets all remaining orders.
+    type OrderChunk = { stockOption: StockOption; chunkOrders: WmsOrder[] };
+    const chunks: OrderChunk[] = [];
+    let offset = 0;
+    for (let i = 0; i < selectionOpts.length; i++) {
+      const { sel, opt } = selectionOpts[i];
+      const isLast = i === selectionOpts.length - 1;
+      const count = isLast ? bOrders.length - offset : Math.floor(sel.qty / qtyPerOrder);
+      if (count <= 0) continue;
+      const chunkOrders = bOrders.slice(offset, offset + count);
+      if (chunkOrders.length > 0) chunks.push({ stockOption: opt, chunkOrders });
+      offset += count;
+      if (offset >= bOrders.length) break;
+    }
 
-    type ItemInfo = { orderCode: string; customerCode: string; shippingItemId: unknown; qty: number } | null;
-    const fetchTasks = bOrders.map((order) => async (): Promise<ItemInfo> => {
-      try {
-        const res = await fetch(`/api/wms/shipping/items/${encodeURIComponent(order.shippingOrderCode)}`, { headers });
-        const json = await res.json().catch(() => ({}));
-        const data = ((json as Record<string, unknown>)?.data ?? {}) as Record<string, unknown>;
-        const items = (Array.isArray(data.items) ? data.items : []) as Record<string, unknown>[];
-        const lineItem = items.find((it) => String(it.productSku ?? "") === skuEntry.sku);
-        if (!lineItem) { issues.push(`${order.shippingOrderCode}: SKU not found`); return null; }
-        const qty = Number(lineItem.unassignedQty ?? lineItem.qty ?? skuEntry.qtyPerOrder);
-        if (qty <= 0) return null;
-        return { orderCode: order.shippingOrderCode, customerCode: order.customerCode, shippingItemId: lineItem.shippingItemId, qty };
-      } catch (e) { issues.push(`${order.shippingOrderCode}: ${e instanceof Error ? e.message : "fetch error"}`); return null; }
-    });
-
-    const fetched = (await runCapped(fetchTasks, FETCH_CONCURRENCY)).filter(Boolean) as NonNullable<ItemInfo>[];
-
-    // Phase 2: assign in parallel
     setAssignProgress({ batchCode: batch.batchCode, sku: skuEntry.sku, done: 0, total });
 
-    const assignTasks = fetched.map((info) => async () => {
-      try {
-        const body = {
-          shippingOrderCode: info.orderCode,
-          shippingItemId: info.shippingItemId,
-          customerCode: info.customerCode,
-          warehouseCode: batch.warehouseCode,
-          warehouseCd: stockOption.location,
-          productSku: skuEntry.sku,
-          lotNo: stockOption.lotNo ?? "",
-          expireDate: stockOption.expireDate ?? "",
-          itemCondition: stockOption.itemCondition ?? "GOOD",
-          qty: info.qty,
-        };
-        const r = await fetch("/api/wms/shipping/assign", { method: "POST", headers, body: JSON.stringify(body) });
-        const rj = await r.json().catch(() => ({}));
-        if (!r.ok || !(rj as Record<string, unknown>)?.isSuccess)
-          issues.push(`${info.orderCode}: ${String((rj as Record<string, unknown>)?.message ?? "failed")}`);
-      } catch (e) { issues.push(`${info.orderCode}: ${e instanceof Error ? e.message : "error"}`); }
-      done++;
-      setAssignProgress((p) => p ? { ...p, done } : null);
-    });
+    type ItemInfo = { orderCode: string; customerCode: string; shippingItemId: unknown; qty: number } | null;
 
-    await runCapped(assignTasks, ASSIGN_CONCURRENCY);
+    for (const { stockOption, chunkOrders } of chunks) {
+      const fetchTasks = chunkOrders.map((order) => async (): Promise<ItemInfo> => {
+        try {
+          const res = await fetch(`/api/wms/shipping/items/${encodeURIComponent(order.shippingOrderCode)}`, { headers });
+          const json = await res.json().catch(() => ({}));
+          const data = ((json as Record<string, unknown>)?.data ?? {}) as Record<string, unknown>;
+          const items = (Array.isArray(data.items) ? data.items : []) as Record<string, unknown>[];
+          const lineItem = items.find((it) => String(it.productSku ?? "") === skuEntry.sku);
+          if (!lineItem) { issues.push(`${order.shippingOrderCode}: SKU not found`); return null; }
+          const qty = Number(lineItem.unassignedQty ?? lineItem.qty ?? qtyPerOrder);
+          if (qty <= 0) return null;
+          return { orderCode: order.shippingOrderCode, customerCode: order.customerCode, shippingItemId: lineItem.shippingItemId, qty };
+        } catch (e) { issues.push(`${order.shippingOrderCode}: ${e instanceof Error ? e.message : "fetch error"}`); return null; }
+      });
+      const fetched = (await runCapped(fetchTasks, FETCH_CONCURRENCY)).filter(Boolean) as NonNullable<ItemInfo>[];
+
+      const assignTasks = fetched.map((info) => async () => {
+        try {
+          const body = {
+            shippingOrderCode: info.orderCode,
+            shippingItemId: info.shippingItemId,
+            customerCode: info.customerCode,
+            warehouseCode: batch.warehouseCode,
+            warehouseCd: stockOption.location,
+            productSku: skuEntry.sku,
+            lotNo: stockOption.lotNo ?? "",
+            expireDate: stockOption.expireDate ?? "",
+            itemCondition: stockOption.itemCondition ?? "GOOD",
+            qty: info.qty,
+          };
+          const r = await fetch("/api/wms/shipping/assign", { method: "POST", headers, body: JSON.stringify(body) });
+          const rj = await r.json().catch(() => ({}));
+          if (!r.ok || !(rj as Record<string, unknown>)?.isSuccess)
+            issues.push(`${info.orderCode}: ${String((rj as Record<string, unknown>)?.message ?? "failed")}`);
+        } catch (e) { issues.push(`${info.orderCode}: ${e instanceof Error ? e.message : "error"}`); }
+        done++;
+        setAssignProgress((p) => p ? { ...p, done } : null);
+      });
+
+      await runCapped(assignTasks, ASSIGN_CONCURRENCY);
+    }
 
     setAssignProgress(null);
     const ok = issues.length === 0;
-    const ll = locLabel(stockOption) || stockOption.location;
+    const locLabels = chunks.map((c) => locLabel(c.stockOption) || c.stockOption.location).join(", ");
     setSkuField(batch.batchCode, skuEntry.sku, "assigning", false);
     setSkuField(batch.batchCode, skuEntry.sku, "result", ok ? "ok" : "error");
     setSkuField(batch.batchCode, skuEntry.sku, "message", ok
-      ? `Assigned ×${skuEntry.qtyPerOrder} to ${bOrders.length} orders from ${ll}. Total: ${skuEntry.totalQty} units.`
+      ? `Assigned to ${bOrders.length} orders from: ${locLabels}`
       : `${done - issues.length} ok, ${issues.length} issue(s): ${issues.slice(0, 2).join("; ")}${issues.length > 2 ? "…" : ""}`
     );
   }
@@ -779,7 +838,7 @@ export default function BatchTestPage() {
                                     )}
                                   </div>
                                   {state.options.length === 0 && !state.loading && (
-                                    <button onClick={() => loadLocations(batch, skuEntry.sku)}
+                                    <button onClick={() => loadLocations(batch, skuEntry.sku, skuEntry.totalQty)}
                                       className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 text-sm font-semibold transition-colors flex-shrink-0">
                                       <MapPin className="w-4 h-4" />Load Locations
                                     </button>
@@ -788,18 +847,22 @@ export default function BatchTestPage() {
                                 </div>
 
                                 {/* Location options */}
-                                {state.options.length > 0 && (
+                                {state.options.length > 0 && (() => {
+                                  const selectedTotal = state.selections.reduce((s, sel) => s + sel.qty, 0);
+                                  const isShort = selectedTotal < skuEntry.totalQty;
+                                  return (
                                   <div className="space-y-2">
-                                    <div className="max-h-52 overflow-y-auto space-y-1.5 pr-1">
+                                    <div className="max-h-64 overflow-y-auto space-y-1.5 pr-1">
                                       {state.options.map((opt) => {
                                         const label = locLabel(opt) || opt.location;
-                                        const isSel = state.selected === opt.location;
+                                        const selEntry = state.selections.find((s) => s.location === opt.location);
+                                        const isChecked = !!selEntry;
                                         return (
-                                          <label key={opt.location} className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl border cursor-pointer transition-all ${isSel ? "border-violet-400 bg-violet-50" : "border-slate-200 bg-white hover:border-slate-300"}`}>
-                                            <input type="radio" name={skuKey(batch.batchCode, skuEntry.sku)} value={opt.location} checked={isSel}
-                                              onChange={() => setSkuField(batch.batchCode, skuEntry.sku, "selected", opt.location)}
-                                              className="accent-violet-600 w-4 h-4" />
-                                            <div className="flex-1 min-w-0">
+                                          <div key={opt.location} className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl border transition-all ${isChecked ? "border-violet-400 bg-violet-50" : "border-slate-200 bg-white hover:border-slate-300"}`}>
+                                            <input type="checkbox" checked={isChecked}
+                                              onChange={() => toggleSelection(batch.batchCode, skuEntry.sku, opt, skuEntry.totalQty)}
+                                              className="accent-violet-600 w-4 h-4 flex-shrink-0 cursor-pointer" />
+                                            <div className="flex-1 min-w-0 cursor-pointer" onClick={() => toggleSelection(batch.batchCode, skuEntry.sku, opt, skuEntry.totalQty)}>
                                               <div className="flex items-center gap-2 flex-wrap">
                                                 <span className="font-mono text-sm font-extrabold text-slate-900">{label}</span>
                                                 {opt.lotNo && <span className="text-xs text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">LOT: {opt.lotNo}</span>}
@@ -809,17 +872,45 @@ export default function BatchTestPage() {
                                                 <span className="text-sm font-bold text-green-700">Avail: {opt.availQty}</span>
                                                 <span className="text-sm text-slate-400">Stock: {opt.stockQty}</span>
                                                 {Number(opt.availQty) < skuEntry.totalQty && (
-                                                  <span className="text-sm font-bold text-amber-600">⚠ Short {skuEntry.totalQty - Number(opt.availQty)}</span>
+                                                  <span className="text-sm font-bold text-amber-600">⚠ {Number(opt.availQty)}/{skuEntry.totalQty}</span>
                                                 )}
                                               </div>
                                             </div>
-                                            <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${String(opt.itemCondition).toUpperCase() === "GOOD" ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>
+                                            <span className={`text-xs px-2 py-0.5 rounded-full font-bold flex-shrink-0 ${String(opt.itemCondition).toUpperCase() === "GOOD" ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>
                                               {opt.itemCondition}
                                             </span>
-                                          </label>
+                                            {isChecked && (
+                                              <div className="flex items-center gap-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+                                                <button onClick={() => updateSelectionQty(batch.batchCode, skuEntry.sku, opt.location, -skuEntry.qtyPerOrder)}
+                                                  className="w-7 h-7 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 text-sm font-bold flex items-center justify-center">−</button>
+                                                <input type="number" value={selEntry.qty} min={0} max={Number(opt.availQty)}
+                                                  onChange={(e) => updateSelectionQty(batch.batchCode, skuEntry.sku, opt.location, null, Number(e.target.value))}
+                                                  className="w-16 text-center text-sm font-bold border border-slate-300 rounded-lg px-1 py-0.5 focus:outline-none focus:ring-2 focus:ring-violet-400" />
+                                                <button onClick={() => updateSelectionQty(batch.batchCode, skuEntry.sku, opt.location, skuEntry.qtyPerOrder)}
+                                                  className="w-7 h-7 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 text-sm font-bold flex items-center justify-center">+</button>
+                                              </div>
+                                            )}
+                                          </div>
                                         );
                                       })}
                                     </div>
+
+                                    {/* Progress bar */}
+                                    {state.selections.length > 0 && (
+                                      <div className="px-1">
+                                        <div className="flex items-center justify-between text-xs mb-1">
+                                          <span className={isShort ? "text-amber-600 font-semibold" : "text-green-700 font-semibold"}>
+                                            {selectedTotal} / {skuEntry.totalQty} qty selected
+                                            {isShort ? ` — ⚠ ${skuEntry.totalQty - selectedTotal} short` : " ✓"}
+                                          </span>
+                                          <span className="text-slate-400">{Math.floor(selectedTotal / skuEntry.qtyPerOrder)} / {batch.orderCount} orders</span>
+                                        </div>
+                                        <div className="h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                                          <div className={`h-full rounded-full transition-all ${isShort ? "bg-amber-400" : "bg-green-500"}`}
+                                            style={{ width: `${Math.min(100, skuEntry.totalQty > 0 ? (selectedTotal / skuEntry.totalQty) * 100 : 0)}%` }} />
+                                        </div>
+                                      </div>
+                                    )}
 
                                     {state.result && (
                                       <div className={`flex items-start gap-2 px-3.5 py-3 rounded-xl text-sm ${state.result === "ok" ? "bg-green-50 border border-green-200 text-green-800" : "bg-red-50 border border-red-200 text-red-700"}`}>
@@ -837,21 +928,24 @@ export default function BatchTestPage() {
 
                                     {!state.result && (
                                       <button onClick={() => assignSku(batch, skuEntry)}
-                                        disabled={!state.selected || state.assigning || !!assignProgress}
-                                        className="w-full py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-sm font-bold transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
+                                        disabled={state.selections.length === 0 || state.assigning || !!assignProgress}
+                                        className={`w-full py-3 rounded-xl text-white text-sm font-bold transition-colors disabled:opacity-50 flex items-center justify-center gap-2 ${isShort ? "bg-amber-500 hover:bg-amber-600" : "bg-violet-600 hover:bg-violet-700"}`}>
                                         {state.assigning
                                           ? <><Loader2 className="w-4 h-4 animate-spin" />Assigning…</>
+                                          : isShort
+                                          ? <><AlertCircle className="w-4 h-4" />Assign ({selectedTotal}/{skuEntry.totalQty} qty — short)</>
                                           : <><MapPin className="w-4 h-4" />Assign to All {batch.orderCount} Orders</>}
                                       </button>
                                     )}
                                     {state.result && (
-                                      <button onClick={() => loadLocations(batch, skuEntry.sku)}
+                                      <button onClick={() => loadLocations(batch, skuEntry.sku, skuEntry.totalQty)}
                                         className="w-full py-2.5 rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 text-sm font-semibold transition-colors">
                                         Reload Locations
                                       </button>
                                     )}
                                   </div>
-                                )}
+                                  );
+                                })()}
                               </div>
                             );
                           })}
