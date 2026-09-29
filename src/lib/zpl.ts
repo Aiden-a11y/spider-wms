@@ -571,6 +571,112 @@ export function generateBatchZPL(data: BatchZPLData): string {
   return z.join("\n");
 }
 
+// ── B2B Pick-Line Label (one label per AllocRow) ─────────────────────────────
+//   4" wide @ 203 DPI (PW = 812 dots), variable height
+
+export interface B2BPickLineData {
+  labelIdx: number;      // 1-based
+  totalLabels: number;
+  customerName: string;
+  warehouseCode: string;
+  dateStr: string;
+  location: string;
+  sku: string;
+  productName: string;
+  lot: string;
+  expDate: string;
+  totalQty: number;
+  cartons: number | null;
+  unitsPerCarton: number;
+  orderBreakdown: { orderNo: string; qty: number; cartons: number | null }[];
+}
+
+export function generatePickLineZPL(data: B2BPickLineData): string {
+  const W = 812;
+  const M = 16;
+  const z: string[] = [];
+  let y = 10;
+  const LL_IDX = 2;
+
+  z.push("^XA");
+  z.push(`^PW${W}`);
+  z.push("^LH0,0");
+  z.push("^CI28");
+
+  // ── TOP HEADER ──
+  z.push(`^FO${M},${y}^GB${W - M * 2},2,2^FS`);
+  y += 6;
+  z.push(`^FO${M},${y}^A0N,20,16^FDB2B PICK TICKET^FS`);
+  z.push(`^FO${W - 160},${y}^A0N,20,16^FD${data.labelIdx} / ${data.totalLabels}^FS`);
+  y += 26;
+  z.push(`^FO${M},${y}^A0N,18,15^FDCustomer: ${zt(data.customerName, 26)}  WH: ${zt(data.warehouseCode, 8)}^FS`);
+  y += 22;
+  z.push(`^FO${M},${y}^A0N,18,15^FDDate: ${zt(data.dateStr, 18)}^FS`);
+  y += 24;
+  z.push(`^FO${M},${y}^GB${W - M * 2},2,2^FS`);
+  y += 8;
+
+  // ── LOCATION (big) ──
+  z.push(`^FO${M},${y}^A0N,18,15^FDLOCATION^FS`);
+  y += 22;
+  const locFH = data.location.length > 14 ? 38 : 50;
+  const locFW = Math.round(locFH * 0.82);
+  z.push(`^FO${M},${y}^A0N,${locFH},${locFW}^FD${zt(data.location, 22)}^FS`);
+  y += locFH + 10;
+  z.push(`^FO${M},${y}^GB${W - M * 2},2,2^FS`);
+  y += 8;
+
+  // ── SKU + PRODUCT ──
+  z.push(`^FO${M},${y}^A0N,18,15^FDSKU^FS`);
+  z.push(`^FO${M + 60},${y}^A0N,22,18^FD${zt(data.sku, 22)}^FS`);
+  y += 28;
+  const prodLines = zt(data.productName, 48);
+  z.push(`^FO${M},${y}^A0N,18,15^FD${prodLines}^FS`);
+  y += 22;
+
+  // ── LOT / EXP ──
+  if (data.lot || data.expDate) {
+    z.push(`^FO${M},${y}^A0N,18,15^FDLOT: ${zt(data.lot || "—", 16)}^FS`);
+    z.push(`^FO${M + 280},${y}^A0N,18,15^FDEXP: ${zt(data.expDate || "—", 12)}^FS`);
+    y += 22;
+  }
+  z.push(`^FO${M},${y}^GB${W - M * 2},2,2^FS`);
+  y += 8;
+
+  // ── PICK QTY (large) ──
+  z.push(`^FO${M},${y}^A0N,18,15^FDPICK QTY^FS`);
+  y += 22;
+  const qtyStr = `${data.totalQty.toLocaleString()} EA${data.cartons != null ? `  /  ${data.cartons} CTN` : ""}`;
+  z.push(`^FO${M},${y}^A0N,44,36^FD${zt(qtyStr, 24)}^FS`);
+  y += 54;
+  if (data.unitsPerCarton > 0) {
+    z.push(`^FO${M},${y}^A0N,18,15^FD(${data.unitsPerCarton} ea/carton)^FS`);
+    y += 22;
+  }
+
+  // ── PER-ORDER BREAKDOWN (if shared location) ──
+  if (data.orderBreakdown.length > 1) {
+    z.push(`^FO${M},${y}^GB${W - M * 2},2,2^FS`);
+    y += 8;
+    z.push(`^FO${M},${y}^A0N,18,15^FDORDER BREAKDOWN^FS`);
+    y += 22;
+    for (const row of data.orderBreakdown.slice(0, 10)) {
+      const lineStr = `${zt(row.orderNo, 22)}   ${row.qty} EA${row.cartons != null ? ` / ${row.cartons} CTN` : ""}`;
+      z.push(`^FO${M},${y}^A0N,18,15^FD${zt(lineStr, 40)}^FS`);
+      y += 20;
+    }
+    if (data.orderBreakdown.length > 10) {
+      z.push(`^FO${M},${y}^A0N,18,15^FD... +${data.orderBreakdown.length - 10} more^FS`);
+      y += 20;
+    }
+  }
+
+  y += 10;
+  z.splice(LL_IDX, 0, `^LL${y}`);
+  z.push("^XZ");
+  return z.join("\n");
+}
+
 // ── Zebra Browser Print API ───────────────────────────────────────────────────
 
 // Keep the full device object exactly as returned by /available so Browser Print

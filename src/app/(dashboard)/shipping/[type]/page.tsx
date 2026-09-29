@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { buildLocationOccupancyLookup, getLocationOccupancyInfo, classifyOccupancy } from "@/lib/wms";
 import { supabase } from "@/lib/supabase";
+import { generatePickLineZPL, zebraDiscoverPrinters, zebraSend, type ZebraPrinter } from "@/lib/zpl";
 
 /* ── Shipping type config ── */
 const TYPE_META: Record<string, {
@@ -255,6 +256,9 @@ export default function ShippingTypePage() {
   const [uomMap,         setUomMap]         = useState<Record<string, number>>({}); // sku → units_per_carton
   const [ticketSortOpen, setTicketSortOpen] = useState(false);  // PDF sort dropdown
   const [allocAddrMap,   setAllocAddrMap]   = useState<Record<string, { name: string; address: string; city: string; state: string; zip: string }>>({});
+  const [zebraPickStatus, setZebraPickStatus] = useState<"" | "printing" | "done" | "error">("");
+  const [zebraPickError,  setZebraPickError]  = useState("");
+  const zebraPickPrinter = useRef<ZebraPrinter | null>(null);
 
   // orderCode → shippingOrderNo map (built from loaded orders list)
   const shipNoMap = useMemo(() => {
@@ -1480,6 +1484,65 @@ ${labels}
     if (win) { win.document.write(html); win.document.close(); }
   }
 
+  // ── Zebra — send picking ticket (one label per pick line) ─────────────────
+  async function zebraPickingTicket() {
+    if (allocRows.length === 0) return;
+    setZebraPickStatus("printing");
+    setZebraPickError("");
+    try {
+      let printer = zebraPickPrinter.current;
+      if (!printer) {
+        const list = await zebraDiscoverPrinters();
+        if (list.length === 0) throw new Error("No Zebra printers found. Is Browser Print running?");
+        printer = list[0];
+        zebraPickPrinter.current = printer;
+      }
+
+      const custName = customers.find((c) => c.code === customerCode)?.name ?? customerCode ?? warehouseCode;
+      const dateStr  = new Date().toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+      const codes    = Object.keys(selectedCodes).filter((k) => selectedCodes[k]);
+
+      for (let i = 0; i < allocRows.length; i++) {
+        const row   = allocRows[i];
+        const upc   = uomMap[row.sku] ?? 0;
+        const cartons = upc > 0 ? Math.ceil(row.totalQty / upc) : null;
+        const breakdown = codes
+          .filter((c) => row.perOrder[c] != null)
+          .map((c) => {
+            const qty = row.perOrder[c]!;
+            return { orderNo: shipNoMap[c] || c, qty, cartons: upc > 0 ? Math.ceil(qty / upc) : null };
+          });
+
+        const zpl = generatePickLineZPL({
+          labelIdx: i + 1,
+          totalLabels: allocRows.length,
+          customerName: custName,
+          warehouseCode,
+          dateStr,
+          location: row.location,
+          sku: row.sku,
+          productName: row.productName,
+          lot: row.lot,
+          expDate: row.expDate,
+          totalQty: row.totalQty,
+          cartons,
+          unitsPerCarton: upc,
+          orderBreakdown: breakdown,
+        });
+
+        await zebraSend(printer, zpl);
+        if (i < allocRows.length - 1) await new Promise<void>((r) => setTimeout(r, 200));
+      }
+
+      setZebraPickStatus("done");
+      setTimeout(() => setZebraPickStatus(""), 4000);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Print failed";
+      setZebraPickStatus("error");
+      setZebraPickError(msg);
+    }
+  }
+
   function addTaskItem() {
     if (!taskType || !taskQty || Number(taskQty) <= 0) return;
     setTaskItems((prev) => {
@@ -2694,7 +2757,7 @@ ${labels}
       {/* ── Picking Allocation Modal ── */}
       {allocModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
-          <div className="absolute inset-0 bg-black/50" onClick={() => { if (!allocLoading) setAllocModal(false); }} />
+          <div className="absolute inset-0 bg-black/50" onClick={() => { if (!allocLoading) { setAllocModal(false); setZebraPickStatus(""); setZebraPickError(""); } }} />
           <div className="relative w-full max-w-7xl bg-white shadow-2xl flex flex-col rounded-2xl overflow-hidden" style={{ height: "90vh" }}>
 
             {/* Modal header */}
@@ -2769,10 +2832,35 @@ ${labels}
                         </div>
                       )}
                     </div>
+                    {/* Zebra pick ticket */}
+                    <div className="flex items-center gap-1.5">
+                      {zebraPickStatus && (
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${
+                          zebraPickStatus === "printing" ? "bg-amber-100 text-amber-700"
+                          : zebraPickStatus === "done"    ? "bg-emerald-100 text-emerald-700"
+                          : "bg-red-100 text-red-700"
+                        }`} title={zebraPickError || undefined}>
+                          {zebraPickStatus === "printing" ? `Printing ${allocRows.length} labels…` : zebraPickStatus === "done" ? "✓ Sent to Zebra" : "Error"}
+                        </span>
+                      )}
+                      <button
+                        onClick={zebraPickingTicket}
+                        disabled={zebraPickStatus === "printing"}
+                        className="flex items-center gap-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg px-3 py-2 transition-colors shadow-sm disabled:opacity-50"
+                        title="Send pick labels to Zebra printer (one label per pick line)"
+                      >
+                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="2" y="6" width="20" height="12" rx="2" />
+                          <path d="M6 12h2m4 0h2m4 0h0" />
+                          <path d="M6 16h12" strokeDasharray="2 2" />
+                        </svg>
+                        Zebra Labels
+                      </button>
+                    </div>
                     <button onClick={printPickingLabels}
-                      className="flex items-center gap-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg px-3 py-2 transition-colors shadow-sm">
+                      className="flex items-center gap-2 text-sm font-medium text-white bg-slate-500 hover:bg-slate-700 rounded-lg px-3 py-2 transition-colors shadow-sm">
                       <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="10" y1="14" x2="14" y2="14"/></svg>
-                      Picking Labels
+                      Browser Labels
                     </button>
                     <button onClick={exportAllocExcel}
                       className="flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 transition-colors">
@@ -2780,7 +2868,7 @@ ${labels}
                     </button>
                   </>
                 )}
-                <button onClick={() => setAllocModal(false)} className="text-slate-400 hover:text-slate-700 transition-colors ml-1">
+                <button onClick={() => { setAllocModal(false); setZebraPickStatus(""); setZebraPickError(""); }} className="text-slate-400 hover:text-slate-700 transition-colors ml-1">
                   <X className="w-5 h-5" />
                 </button>
               </div>
