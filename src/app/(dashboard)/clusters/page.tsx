@@ -177,7 +177,7 @@ export default function ClustersPage() {
   type LotStock = { lotNo: string; expireDate: string; remaining: number; raw: Record<string, unknown> };
   const lotStockRef = useRef<Map<string, LotStock[]>>(new Map());
   const [replenSkus, setReplenSkus] = useState<Array<{
-    sku: string; name: string; orderCount: number; location: string; custCode: string;
+    sku: string; name: string; orderCount: number; totalQty: number; location: string; custCode: string;
   }>>([]);
 
   // ── Pre-cluster replen plan picker ────────────────────────────────────────
@@ -186,6 +186,7 @@ export default function ClustersPage() {
   const [replenPickerName, setReplenPickerName] = useState("");
   const [replenPickerCustCode, setReplenPickerCustCode] = useState("");
   const [replenPickerOrderCount, setReplenPickerOrderCount] = useState(0);
+  const [replenPickerTotalQty,   setReplenPickerTotalQty]   = useState(0);
   const [replenPickerStock, setReplenPickerStock] = useState<Record<string, unknown>[]>([]);
   const [replenPickerLoading, setReplenPickerLoading] = useState(false);
   // idx → qty chosen from that stock row; supports picking from multiple locations
@@ -193,6 +194,7 @@ export default function ClustersPage() {
   const [replenSelectedLocs, setReplenSelectedLocs] = useState<Record<string, {
     sources: { stock: Record<string, unknown>; qty: number }[];
     orderCount: number;
+    totalQty: number;
     name: string;
   }>>({});
 
@@ -339,7 +341,7 @@ export default function ClustersPage() {
       .then((data) => {
         if (data?.checkResults) {
           setCheckResults(data.checkResults);
-          setReplenSkus(data.replenSkus ?? []);
+          setReplenSkus((data.replenSkus ?? []).map((r: Record<string, unknown>) => ({ ...r, totalQty: Number(r.totalQty ?? 0) })) as typeof replenSkus);
           setCheckedAt(data.checkedAt);
           checkTriggeredRef.current = true; // skip auto-run
         }
@@ -469,7 +471,7 @@ export default function ClustersPage() {
     const ordersToCheck = filteredOrders;
     setCheckProgress({ done: 0, total: ordersToCheck.length });
 
-    const replenMap: Record<string, { name: string; orderCodes: Set<string>; location: string; custCode: string }> = {};
+    const replenMap: Record<string, { name: string; orderCodes: Set<string>; location: string; custCode: string; totalQty: number }> = {};
 
     const getItemAssignments = (j: Record<string, unknown>): Record<string, unknown>[] => {
       const d = (j?.data ?? {}) as Record<string, unknown>;
@@ -584,9 +586,10 @@ export default function ClustersPage() {
           canCluster = false;
           if (!replenMap[sku]) {
             const anyStock = allStock.find((s) => Number(s.availQty ?? 0) > 0);
-            replenMap[sku] = { name, orderCodes: new Set(), location: anyStock ? readableLocation(anyStock) : "—", custCode };
+            replenMap[sku] = { name, orderCodes: new Set(), location: anyStock ? readableLocation(anyStock) : "—", custCode, totalQty: 0 };
           }
           replenMap[sku].orderCodes.add(code);
+          replenMap[sku].totalQty += requiredQty;
         }
       }
 
@@ -597,7 +600,7 @@ export default function ClustersPage() {
     }
 
     const finalReplenSkus = Object.entries(replenMap)
-      .map(([sku, v]) => ({ sku, name: v.name, orderCount: v.orderCodes.size, location: v.location, custCode: v.custCode }))
+      .map(([sku, v]) => ({ sku, name: v.name, orderCount: v.orderCodes.size, totalQty: v.totalQty, location: v.location, custCode: v.custCode }))
       .sort((a, b) => b.orderCount - a.orderCount);
     setReplenSkus(finalReplenSkus);
     const now = new Date().toISOString();
@@ -612,11 +615,12 @@ export default function ClustersPage() {
   }
 
   // ── Pre-cluster replen plan picker ────────────────────────────────────────
-  async function openReplenPicker(sku: string, name: string, custCode: string, orderCount: number) {
+  async function openReplenPicker(sku: string, name: string, custCode: string, orderCount: number, totalQty: number) {
     setReplenPickerSku(sku);
     setReplenPickerName(name);
     setReplenPickerCustCode(custCode);
     setReplenPickerOrderCount(orderCount);
+    setReplenPickerTotalQty(totalQty);
     setReplenPickerStock([]);
     setReplenPickerLoading(true);
     setReplenPickerOpen(true);
@@ -663,7 +667,7 @@ export default function ClustersPage() {
     if (sources.length === 0) return;
     setReplenSelectedLocs((p) => ({
       ...p,
-      [replenPickerSku]: { sources, orderCount: replenPickerOrderCount, name: replenPickerName },
+      [replenPickerSku]: { sources, orderCount: replenPickerOrderCount, totalQty: replenPickerTotalQty, name: replenPickerName },
     }));
     setReplenPickerOpen(false);
   }
@@ -2615,7 +2619,7 @@ export default function ClustersPage() {
       {/* ── Pre-cluster replen plan picker modal ── */}
       {replenPickerOpen && (() => {
         const selectedTotal = Object.values(replenPickerSelections).reduce((s, q) => s + q, 0);
-        const needed = replenPickerOrderCount;
+        const needed = replenPickerTotalQty || replenPickerOrderCount;
         const isFulfilled = selectedTotal >= needed;
         const hasSelection = Object.values(replenPickerSelections).some((q) => q > 0);
         return (
@@ -2625,7 +2629,10 @@ export default function ClustersPage() {
                 <div>
                   <p className="text-sm font-bold text-slate-900">Select Source Location(s)</p>
                   <p className="text-xs text-slate-500 mt-0.5 font-mono">{replenPickerSku}{replenPickerName ? ` · ${replenPickerName}` : ""}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">{needed} order{needed !== 1 ? "s" : ""} need replenishment</p>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    {replenPickerOrderCount} order{replenPickerOrderCount !== 1 ? "s" : ""} ·{" "}
+                    <span className="font-bold text-orange-600">{needed.toLocaleString()} EA</span> 필요
+                  </p>
                 </div>
                 <button onClick={() => setReplenPickerOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100">
                   <X className="w-4 h-4" />
@@ -2638,7 +2645,7 @@ export default function ClustersPage() {
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-xs text-slate-500">Selected qty</span>
                     <span className={`text-xs font-bold ${isFulfilled ? "text-emerald-600" : "text-amber-600"}`}>
-                      {selectedTotal} / {needed}
+                      {selectedTotal.toLocaleString()} / {needed.toLocaleString()} EA
                     </span>
                   </div>
                   <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
@@ -3055,7 +3062,8 @@ export default function ClustersPage() {
                   <tr className="bg-red-50/50 border-b border-red-100">
                     <th className="px-4 py-2 text-left font-semibold text-red-700">SKU</th>
                     <th className="px-4 py-2 text-left font-semibold text-red-700">Product</th>
-                    <th className="px-4 py-2 text-center font-semibold text-red-700 w-24">Orders blocked</th>
+                    <th className="px-4 py-2 text-center font-semibold text-red-700 w-24">Orders</th>
+                    <th className="px-4 py-2 text-center font-semibold text-orange-700 w-28">총 필요 수량</th>
                     <th className="px-4 py-2 text-left font-semibold text-red-700">Replen Plan</th>
                   </tr>
                 </thead>
@@ -3069,12 +3077,15 @@ export default function ClustersPage() {
                         <td className="px-4 py-2 text-center">
                           <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-bold bg-red-100 text-red-600">{r.orderCount}</span>
                         </td>
+                        <td className="px-4 py-2 text-center">
+                          <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-bold bg-orange-100 text-orange-700">{r.totalQty.toLocaleString()} EA</span>
+                        </td>
                         <td className="px-4 py-2">
                           {selected ? (
                             <div className="flex flex-col gap-1">
                               {selected.sources.map((src, si) => {
-                                const totalQty = selected.sources.reduce((s, x) => s + x.qty, 0);
-                                const short = totalQty < selected.orderCount;
+                                const srcTotal = selected.sources.reduce((s, x) => s + x.qty, 0);
+                                const short = srcTotal < (selected.totalQty || selected.orderCount);
                                 return (
                                   <span key={si} className={`font-mono text-xs font-bold px-2 py-0.5 rounded border ${short ? "text-amber-700 bg-amber-50 border-amber-200" : "text-emerald-700 bg-emerald-50 border-emerald-200"}`}>
                                     {readableLocation(src.stock)} <span className="font-normal">× {src.qty}</span>
@@ -3082,13 +3093,14 @@ export default function ClustersPage() {
                                 );
                               })}
                               {(() => {
-                                const totalQty = selected.sources.reduce((s, x) => s + x.qty, 0);
-                                return totalQty < selected.orderCount ? (
-                                  <span className="text-[10px] text-amber-600 font-semibold">⚠ {totalQty}/{selected.orderCount} 확보</span>
+                                const srcTotal = selected.sources.reduce((s, x) => s + x.qty, 0);
+                                const needed = selected.totalQty || selected.orderCount;
+                                return srcTotal < needed ? (
+                                  <span className="text-[10px] text-amber-600 font-semibold">⚠ {srcTotal}/{needed} EA 확보</span>
                                 ) : null;
                               })()}
                               <button
-                                onClick={() => openReplenPicker(r.sku, r.name, r.custCode, r.orderCount)}
+                                onClick={() => openReplenPicker(r.sku, r.name, r.custCode, r.orderCount, r.totalQty)}
                                 className="text-xs text-slate-400 hover:text-slate-600 underline self-start"
                               >
                                 Change
@@ -3096,7 +3108,7 @@ export default function ClustersPage() {
                             </div>
                           ) : (
                             <button
-                              onClick={() => openReplenPicker(r.sku, r.name, r.custCode, r.orderCount)}
+                              onClick={() => openReplenPicker(r.sku, r.name, r.custCode, r.orderCount, r.totalQty)}
                               className="flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition-colors"
                             >
                               <MapPin className="w-3 h-3" /> Select Location
