@@ -1029,8 +1029,8 @@ export default function ClustersPage() {
         body: JSON.stringify(cluster),
       });
       if (!saveRes.ok) {
-        const errBody = await saveRes.json().catch(() => ({}));
-        throw new Error(errBody?.error ?? `Failed to save cluster (${saveRes.status})`);
+        const errBody = await saveRes.json().catch(() => ({})) as { error?: string; message?: string };
+        throw new Error(errBody?.message ?? errBody?.error ?? `Failed to save cluster (${saveRes.status})`);
       }
 
       await loadClusters();

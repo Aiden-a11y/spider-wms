@@ -36,6 +36,19 @@ export async function POST(req: NextRequest) {
   };
   await redis.set(`wms:b2ccluster:${id}`, updated, { ex: CLUSTER_TTL });
 
+  // Release order claims — completed orders can be re-clustered if needed
+  const orderKeys = [...new Set(
+    (cluster.bins ?? []).map((b) => b.orderCode).filter(Boolean)
+  )].map((code) => `wms:b2ccluster:order:${code}`);
+  if (orderKeys.length > 0) {
+    await Promise.all(
+      orderKeys.map(async (key) => {
+        const owner = await redis.get<string>(key);
+        if (owner === id) await redis.del(key);
+      })
+    );
+  }
+
   // Non-blocking: record pick performance + permanent archive in Supabase
   if (updated.completedAt && updated.completedBy) {
     (async () => {

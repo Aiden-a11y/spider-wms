@@ -15,7 +15,9 @@ export async function GET(req: Request) {
     return NextResponse.json(cluster);
   }
 
-  const keys = (await redis.keys("wms:b2ccluster:*")).filter((k) => !k.endsWith(":counter"));
+  const keys = (await redis.keys("wms:b2ccluster:*")).filter(
+    (k) => !k.endsWith(":counter") && !k.includes(":order:")
+  );
   if (keys.length === 0) return NextResponse.json([]);
   const values = await Promise.all(keys.map((k) => redis.get(k)));
   const clusters = (values
@@ -52,7 +54,44 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   const body = (await req.json()) as B2CCluster;
-  // Assign sequential cluster number if not already set
+
+  // Claim every orderCode atomically — prevents the same order appearing in
+  // two clusters when multiple computers create clusters simultaneously.
+  const orderCodes = [...new Set(
+    (body.bins ?? []).map((b) => b.orderCode).filter(Boolean)
+  )];
+
+  const claimedKeys: string[] = [];
+  const conflicts: string[] = [];
+
+  for (const code of orderCodes) {
+    const key = `wms:b2ccluster:order:${code}`;
+    const result = await redis.set(key, body.id, { nx: true, ex: CLUSTER_TTL });
+    if (result === null) {
+      // Key already exists — this order belongs to another active cluster
+      const owner = await redis.get<string>(key);
+      conflicts.push(`${code}${owner ? ` (cluster ${owner})` : ""}`);
+    } else {
+      claimedKeys.push(key);
+    }
+  }
+
+  if (conflicts.length > 0) {
+    // Roll back: release any claims we just set
+    if (claimedKeys.length > 0) await redis.del(...claimedKeys);
+    const preview = conflicts.slice(0, 3).join(", ");
+    const more = conflicts.length > 3 ? ` 외 ${conflicts.length - 3}건` : "";
+    return NextResponse.json(
+      {
+        error: "conflict",
+        conflicts,
+        message: `이미 다른 클러스터에 포함된 오더: ${preview}${more}`,
+      },
+      { status: 409 }
+    );
+  }
+
+  // All orders claimed — persist the cluster
   const clusterNo = body.clusterNo ?? await redis.incr("wms:b2ccluster:counter");
   const cluster: B2CCluster = { ...body, clusterNo };
   await redis.set(`wms:b2ccluster:${body.id}`, cluster, { ex: CLUSTER_TTL });
@@ -73,6 +112,25 @@ export async function DELETE(req: Request) {
   const { searchParams } = new URL(req.url);
   const id = searchParams.get("id");
   if (!id) return NextResponse.json({ error: "missing id" }, { status: 400 });
+
+  // Release order claims for this cluster so the same orders can be re-clustered
+  const raw = await redis.get(`wms:b2ccluster:${id}`);
+  if (raw) {
+    const cluster = (typeof raw === "string" ? JSON.parse(raw) : raw) as B2CCluster;
+    const orderKeys = [...new Set(
+      (cluster.bins ?? []).map((b) => b.orderCode).filter(Boolean)
+    )].map((code) => `wms:b2ccluster:order:${code}`);
+    if (orderKeys.length > 0) {
+      // Only release keys that still point to this cluster (safety check)
+      await Promise.all(
+        orderKeys.map(async (key) => {
+          const owner = await redis.get<string>(key);
+          if (owner === id) await redis.del(key);
+        })
+      );
+    }
+  }
+
   await redis.del(`wms:b2ccluster:${id}`);
   return NextResponse.json({ ok: true });
 }
