@@ -57,9 +57,9 @@ export async function POST(req: Request) {
 
   // Claim every orderCode atomically — prevents the same order appearing in
   // two clusters when multiple computers create clusters simultaneously.
-  const orderCodes = [...new Set(
+  const orderCodes = Array.from(new Set(
     (body.bins ?? []).map((b) => b.orderCode).filter(Boolean)
-  )];
+  ));
 
   const claimedKeys: string[] = [];
   const conflicts: string[] = [];
@@ -117,9 +117,9 @@ export async function DELETE(req: Request) {
   const raw = await redis.get(`wms:b2ccluster:${id}`);
   if (raw) {
     const cluster = (typeof raw === "string" ? JSON.parse(raw) : raw) as B2CCluster;
-    const orderKeys = [...new Set(
+    const orderKeys = Array.from(new Set(
       (cluster.bins ?? []).map((b) => b.orderCode).filter(Boolean)
-    )].map((code) => `wms:b2ccluster:order:${code}`);
+    )).map((code) => `wms:b2ccluster:order:${code}`);
     if (orderKeys.length > 0) {
       // Only release keys that still point to this cluster (safety check)
       await Promise.all(

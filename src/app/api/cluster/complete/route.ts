@@ -37,9 +37,9 @@ export async function POST(req: NextRequest) {
   await redis.set(`wms:b2ccluster:${id}`, updated, { ex: CLUSTER_TTL });
 
   // Release order claims — completed orders can be re-clustered if needed
-  const orderKeys = [...new Set(
+  const orderKeys = Array.from(new Set(
     (cluster.bins ?? []).map((b) => b.orderCode).filter(Boolean)
-  )].map((code) => `wms:b2ccluster:order:${code}`);
+  )).map((code) => `wms:b2ccluster:order:${code}`);
   if (orderKeys.length > 0) {
     await Promise.all(
       orderKeys.map(async (key) => {
