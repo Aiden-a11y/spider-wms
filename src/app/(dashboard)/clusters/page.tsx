@@ -2631,7 +2631,7 @@ export default function ClustersPage() {
                   <p className="text-xs text-slate-500 mt-0.5 font-mono">{replenPickerSku}{replenPickerName ? ` · ${replenPickerName}` : ""}</p>
                   <p className="text-xs text-slate-400 mt-0.5">
                     {replenPickerOrderCount} order{replenPickerOrderCount !== 1 ? "s" : ""} ·{" "}
-                    <span className="font-bold text-orange-600">{needed.toLocaleString()} EA</span> 필요
+                    <span className="font-bold text-orange-600">{needed.toLocaleString()} EA</span> needed
                   </p>
                 </div>
                 <button onClick={() => setReplenPickerOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100">
@@ -2655,7 +2655,7 @@ export default function ClustersPage() {
                     />
                   </div>
                   {!isFulfilled && hasSelection && (
-                    <p className="text-[11px] text-amber-600 mt-1">부족 — 아래에서 추가 로케이션을 선택하세요 ({needed - selectedTotal} 더 필요)</p>
+                    <p className="text-[11px] text-amber-600 mt-1">Short — select additional locations below ({needed - selectedTotal} more needed)</p>
                   )}
                 </div>
               )}
@@ -3063,7 +3063,7 @@ export default function ClustersPage() {
                     <th className="px-4 py-2 text-left font-semibold text-red-700">SKU</th>
                     <th className="px-4 py-2 text-left font-semibold text-red-700">Product</th>
                     <th className="px-4 py-2 text-center font-semibold text-red-700 w-24">Orders</th>
-                    <th className="px-4 py-2 text-center font-semibold text-orange-700 w-28">총 필요 수량</th>
+                    <th className="px-4 py-2 text-center font-semibold text-orange-700 w-28">Total Qty Needed</th>
                     <th className="px-4 py-2 text-left font-semibold text-red-700">Replen Plan</th>
                   </tr>
                 </thead>
