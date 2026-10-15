@@ -387,6 +387,7 @@ export default function StowPage() {
       const json = await res.json();
 
       let loc: LocationInfo | null = null;
+      let rawLocData: Record<string, unknown> | null = null;
 
       if (res.ok) {
         const d: Record<string, unknown> = (
@@ -394,6 +395,7 @@ export default function StowPage() {
         ) as Record<string, unknown>;
         if (d && (d.zoneName || d.locationCode || d.locationId)) {
           loc = normalizeLocation(d, raw);
+          rawLocData = d;
         }
       }
 
@@ -412,6 +414,49 @@ export default function StowPage() {
       }
 
       if (!loc) throw new Error("Location not found. Check the barcode.");
+
+      // ── Occupancy check ───────────────────────────────
+      // 1) Fields the location-search API may return directly
+      const directQty = rawLocData
+        ? Number(rawLocData.currentQty ?? rawLocData.locQty ?? rawLocData.inventoryQty
+            ?? rawLocData.storedQty ?? rawLocData.useQty ?? -1)
+        : -1;
+
+      let occupied = directQty > 0;
+
+      // 2) If location-search didn't include qty fields, query inventory/detail
+      if (!occupied && directQty < 0 && item) {
+        try {
+          const invRes = await fetch("/api/wms/inventory/detail", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              warehouseCode: item.warehouseCode,
+              customerCode: item.customerCode,
+              productSku: item.productSku,
+            }),
+          });
+          if (invRes.ok) {
+            const invJson = await invRes.json();
+            const invItems: Record<string, unknown>[] = Array.isArray(invJson?.data)
+              ? invJson.data
+              : Array.isArray(invJson?.data?.list) ? invJson.data.list
+              : Array.isArray(invJson) ? invJson : [];
+
+            // Check if any inventory row points to this exact location
+            occupied = invItems.some((inv) => {
+              const invLoc = String(inv.locationCode ?? inv.warehouseCd ?? inv.remark ?? "");
+              return invLoc && invLoc === loc!.locationCode;
+            });
+          }
+        } catch { /* skip — don't block on API failure */ }
+      }
+
+      if (occupied) {
+        throw new Error(
+          `Location ${loc.locationCode} is already occupied. Please choose an empty location.`
+        );
+      }
 
       setLocation(loc);
       setStep("confirm");
