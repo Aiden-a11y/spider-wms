@@ -2622,6 +2622,8 @@ ${labels}
                                 <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">Occupancy</th>
                                 <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">SKU</th>
                                 <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">Product</th>
+                                <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">Remark</th>
+                                <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">Condition</th>
                                 <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">Lot</th>
                                 <th className="px-3 py-2.5 text-left text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">Expire</th>
                                 <th className="px-3 py-2.5 text-right text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap">Qty</th>
@@ -2677,6 +2679,19 @@ ${labels}
                                     </td>
                                     <td className="px-3 py-2.5 font-mono text-slate-700 whitespace-nowrap">{String(item.productSku ?? item.sku ?? "-")}</td>
                                     <td className="px-3 py-2.5 text-slate-600 max-w-[180px] truncate">{String(item.productName ?? item.itemName ?? "-")}</td>
+                                    <td className="px-3 py-2.5 text-slate-500 max-w-[120px] truncate">{String(item.remark ?? item.memo ?? "") || <span className="text-slate-300">—</span>}</td>
+                                    <td className="px-3 py-2.5 whitespace-nowrap">
+                                      {(() => {
+                                        const cond = String(item.itemCondition ?? item.condition ?? item.goodsCondition ?? "").trim();
+                                        if (!cond) return <span className="text-slate-300">—</span>;
+                                        const isGood = cond.toUpperCase() === "GOOD";
+                                        return (
+                                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${isGood ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>
+                                            {cond}
+                                          </span>
+                                        );
+                                      })()}
+                                    </td>
                                     <td className="px-3 py-2.5 font-mono text-slate-600 whitespace-nowrap">{String(item.lotNo ?? item.lot ?? "-")}</td>
                                     <td className="px-3 py-2.5 font-mono text-slate-500 whitespace-nowrap">{String(item.expireDate ?? item.expiryDate ?? "-")}</td>
                                     <td className="px-3 py-2.5 text-right tabular-nums text-slate-800">{qty.toLocaleString()}</td>
@@ -2702,7 +2717,7 @@ ${labels}
                             </tbody>
                             <tfoot>
                               <tr className="bg-slate-50 border-t border-slate-200">
-                                <td colSpan={7} className="px-3 py-2.5 text-xs font-semibold text-slate-500 uppercase">Total</td>
+                                <td colSpan={9} className="px-3 py-2.5 text-xs font-semibold text-slate-500 uppercase">Total</td>
                                 <td className="px-3 py-2.5 text-right tabular-nums font-bold text-slate-800">
                                   {pickingRows.reduce((s, item) => s + Number(item.qty ?? item.totalQty ?? 0), 0).toLocaleString()}
                                 </td>
