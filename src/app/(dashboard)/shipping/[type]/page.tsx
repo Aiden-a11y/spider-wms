@@ -1197,11 +1197,134 @@ export default function ShippingTypePage() {
     writeFile(wb, `picking_alloc_${new Date().toISOString().slice(0, 10)}.xlsx`);
   }
 
-  function printPickingTicket(sort: "location" | "sku" = "location") {
+  function printPickingTicket(sort: "location" | "sku" = "location", mode: "combined" | "individual" = "combined", autoPrint = false) {
     const codes    = Object.keys(selectedCodes).filter((k) => selectedCodes[k]);
+    const now      = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+    const dateStr2 = new Date().toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+    const custName2 = customers.find((c) => c.code === customerCode)?.name ?? customerCode ?? warehouseCode;
+    const sortLabel2 = sort === "sku" ? "Sorted by SKU" : "Sorted by Location";
+    const bodyAttrs = autoPrint ? ` onload="setTimeout(function(){window.print()},800)"` : "";
+
+    if (mode === "individual") {
+      const pages = codes.map((code, orderIdx) => {
+        const shipNo = shipNoMap[code];
+        const orderRows = allocRows.filter((r) => r.perOrder[code] != null);
+        const sortedRows = sort === "sku"
+          ? [...orderRows].sort((a, b) => a.sku.localeCompare(b.sku) || a.lot.localeCompare(b.lot) || pickingSort(a, b))
+          : [...orderRows];
+        const orderQty = sortedRows.reduce((s, r) => s + (r.perOrder[code] ?? 0), 0);
+        const orderCtn = sortedRows.reduce((s, r) => { const u = uomMap[r.sku] ?? 0; const q = r.perOrder[code] ?? 0; return s + (u > 0 ? Math.ceil(q / u) : 0); }, 0);
+        const skuSet = new Set(sortedRows.map((r) => r.sku));
+        const qrUrl2 = `https://api.qrserver.com/v1/create-qr-code/?size=80x80&margin=2&color=000000&bgcolor=ffffff&data=${encodeURIComponent(code)}`;
+
+        const rows2 = sortedRows.map((row, i) => {
+          const qty = row.perOrder[code] ?? 0;
+          const upc = uomMap[row.sku] ?? 0;
+          const cartons = upc > 0 ? Math.ceil(qty / upc) : null;
+          const isShared = Object.keys(row.perOrder).length > 1;
+          return `<tr style="page-break-inside:avoid">
+            <td style="text-align:center;vertical-align:middle;border:1pt solid #000;padding:3pt 2pt;font-size:9pt;font-weight:bold">${i + 1}</td>
+            <td style="border:1pt solid #000;padding:3pt 5pt;vertical-align:top">
+              <div style="font-size:9pt;font-weight:bold;font-family:'Courier New',monospace">Location: ${row.location || "—"}${isShared ? " [SHARED]" : ""}</div>
+              <div style="font-size:9pt">SKU: <span style="font-family:'Courier New',monospace;font-weight:bold">${row.sku || "—"}</span></div>
+              ${row.lot     ? `<div style="font-size:9pt">Lot: <span style="font-family:'Courier New',monospace;font-weight:bold">${row.lot}</span></div>` : ""}
+              ${row.expDate ? `<div style="font-size:9pt">Exp: <span style="font-family:'Courier New',monospace;font-weight:bold">${row.expDate}</span></div>` : ""}
+              ${row.productName ? `<div style="font-size:9pt">Product: ${row.productName}</div>` : ""}
+            </td>
+            <td style="text-align:right;vertical-align:middle;border:1pt solid #000;padding:3pt 5pt;white-space:nowrap">
+              <div style="font-size:9pt;font-weight:bold">${qty.toLocaleString()} EA</div>
+              ${cartons != null ? `<div style="font-size:9pt;font-weight:bold">${cartons} CTN</div><div style="font-size:9pt">${upc} ea/ctn</div>` : ""}
+            </td>
+          </tr>`;
+        }).join("");
+
+        const addr2 = allocAddrMap[code] ?? addrMap[code];
+        const addrHtml2 = addr2 && (addr2.name || addr2.address) ? (() => {
+          const cl = [addr2.city, addr2.state, addr2.zip].filter(Boolean).join(", ");
+          return `<div style="margin-top:5pt;font-size:9pt;font-weight:bold;font-family:Arial,sans-serif">Ship To:</div>
+            <div style="margin-top:2pt;padding:3pt 5pt;border-left:3pt solid #000;background:#f0f0f0">
+              ${addr2.name ? `<div style="font-size:9pt;font-weight:bold;font-family:Arial,sans-serif">${addr2.name}</div>` : ""}
+              ${addr2.address ? `<div style="font-size:9pt;font-family:Arial,sans-serif">${addr2.address}</div>` : ""}
+              ${cl ? `<div style="font-size:9pt;font-family:Arial,sans-serif">${cl}</div>` : ""}
+            </div>`;
+        })() : "";
+
+        return `<div class="page-wrap">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4pt;padding-bottom:4pt;border-bottom:1.5pt solid #000">
+            <div style="flex:1;padding-right:6pt">
+              <div style="font-size:11pt;font-weight:bold;margin-bottom:3pt">Client: ${custName2}</div>
+              <div style="font-size:9pt">Order ${orderIdx + 1} / ${codes.length}</div>
+              <div style="font-size:9pt">Order No.: <span style="font-family:'Courier New',monospace;font-weight:bold">${code}</span></div>
+              ${shipNo ? `<div style="font-size:9pt">Ship: <span style="font-family:'Courier New',monospace;font-weight:bold">${shipNo}</span></div>` : ""}
+              <div style="font-size:9pt">Total SKU: <b>${skuSet.size}</b></div>
+              <div style="font-size:9pt">Total Qty: <b>${orderQty.toLocaleString()}${orderCtn > 0 ? ` / ${orderCtn} CTN` : ""}</b></div>
+              <div style="font-size:8pt;color:#555;margin-top:2pt">&#128196; ${sortLabel2}</div>
+              ${addrHtml2}
+            </div>
+            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3pt;flex-shrink:0">
+              <img src="${qrUrl2}" width="80" height="80" style="border:1pt solid #000" onerror="this.style.display='none'"/>
+              <div style="font-size:9pt;font-weight:bold;text-align:right">${sortedRows.length} lines</div>
+            </div>
+          </div>
+          <table style="width:100%;border-collapse:collapse;margin-top:3pt">
+            <thead><tr style="background:#e8e8e8">
+              <th style="border:1pt solid #000;padding:3pt 2pt;font-size:9pt;text-align:center;width:20pt">No.</th>
+              <th style="border:1pt solid #000;padding:3pt 5pt;font-size:9pt;text-align:left">Item</th>
+              <th style="border:1pt solid #000;padding:3pt 5pt;font-size:9pt;text-align:right;width:52pt">Qty</th>
+            </tr></thead>
+            <tbody>${rows2}</tbody>
+            <tfoot><tr style="background:#e8e8e8">
+              <td colspan="2" style="border:1pt solid #000;padding:3pt 5pt;font-size:9pt;font-weight:bold;text-align:right">TOTAL</td>
+              <td style="border:1pt solid #000;padding:3pt 5pt;text-align:right">
+                <div style="font-size:9pt;font-weight:bold">${orderQty.toLocaleString()} EA</div>
+                ${orderCtn > 0 ? `<div style="font-size:9pt;font-weight:bold">${orderCtn} CTN</div>` : ""}
+              </td>
+            </tr></tfoot>
+          </table>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8pt;margin-top:7pt">
+            <div><div style="border-top:1pt solid #000;margin-bottom:2pt"></div><div style="font-size:9pt">Picker</div></div>
+            <div><div style="border-top:1pt solid #000;margin-bottom:2pt"></div><div style="font-size:9pt">Checked</div></div>
+            <div><div style="border-top:1pt solid #000;margin-bottom:2pt"></div><div style="font-size:9pt">Date/Time</div></div>
+          </div>
+          <div style="margin-top:4pt;font-size:9pt;text-align:right">Generated: ${now}</div>
+        </div>`;
+      }).join("\n");
+
+      const htmlInd = `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<title>Picking Tickets (Individual) · ${dateStr2}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Arial,Helvetica,sans-serif;font-size:9pt;color:#000;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  @page{size:4in 6in;margin:4mm 5mm}
+  .page-wrap{page-break-after:always}
+  .page-wrap:last-child{page-break-after:auto}
+  @media screen{
+    .print-bar{background:#1e293b;padding:8px 16px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:99}
+    .print-btn{background:#333;color:#fff;border:none;padding:6px 18px;border-radius:5px;font-size:12px;font-weight:bold;cursor:pointer}
+    .print-btn:hover{background:#000}
+    .hint{color:#94a3b8;font-size:10px}
+    .page-wrap{width:4in;margin:20px auto 40px;background:#fff;padding:4mm 5mm;box-shadow:0 2px 16px rgba(0,0,0,.2);border-radius:4px}
+  }
+  @media print{
+    .print-bar{display:none!important}
+    .page-wrap{width:100%;margin:0;padding:0}
+  }
+</style></head>
+<body${bodyAttrs}>
+<div class="print-bar">
+  <button class="print-btn" onclick="window.print()">Print Individual Tickets (4×6)</button>
+  <span class="hint">${codes.length} orders · Paper: 4×6 in · Margins: None · Scale: 100%</span>
+</div>
+${pages}
+</body></html>`;
+      const winInd = window.open("", "_blank", "width=500,height=860");
+      if (winInd) { winInd.document.write(htmlInd); winInd.document.close(); }
+      return;
+    }
+
     const total    = allocRows.reduce((s, r) => s + r.totalQty, 0);
     const totalCtn = allocRows.reduce((s, r) => { const u = uomMap[r.sku] ?? 0; return s + (u > 0 ? Math.ceil(r.totalQty / u) : 0); }, 0);
-    const now      = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
     const dateStr  = new Date().toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
 
     const custName = customers.find((c) => c.code === customerCode)?.name ?? customerCode ?? warehouseCode;
@@ -1303,7 +1426,7 @@ export default function ShippingTypePage() {
   }
 </style>
 </head>
-<body>
+<body${bodyAttrs}>
 
 <div class="print-bar">
   <button class="print-btn" onclick="window.print()">Print (4×6 Zebra)</button>
@@ -2884,9 +3007,10 @@ ${labels}
                       </div>
                       {/* Dropdown */}
                       {ticketSortOpen && (
-                        <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-slate-200 rounded-lg shadow-lg overflow-hidden w-52">
+                        <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-slate-200 rounded-lg shadow-lg overflow-hidden w-60">
+                          {/* Combined */}
                           <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wide bg-slate-50 border-b border-slate-100">
-                            Sort Order
+                            Combined (All Orders)
                           </div>
                           <button
                             onClick={() => { setTicketSortOpen(false); printPickingTicket("location"); }}
@@ -2908,34 +3032,46 @@ ${labels}
                               <div className="text-[10px] text-slate-400">SKU alphabetical order</div>
                             </div>
                           </button>
+                          {/* Individual */}
+                          <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wide bg-slate-50 border-t border-slate-200 border-b border-slate-100">
+                            Individual (Per Order)
+                          </div>
+                          <button
+                            onClick={() => { setTicketSortOpen(false); printPickingTicket("location", "individual"); }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors text-left"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
+                            <div>
+                              <div className="font-medium">By Location</div>
+                              <div className="text-[10px] text-slate-400">One ticket per order</div>
+                            </div>
+                          </button>
+                          <button
+                            onClick={() => { setTicketSortOpen(false); printPickingTicket("sku", "individual"); }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors text-left border-t border-slate-100"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="9" y2="18"/></svg>
+                            <div>
+                              <div className="font-medium">By SKU</div>
+                              <div className="text-[10px] text-slate-400">One ticket per order</div>
+                            </div>
+                          </button>
                         </div>
                       )}
                     </div>
-                    {/* Zebra pick ticket */}
-                    <div className="flex items-center gap-1.5">
-                      {zebraPickStatus && (
-                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${
-                          zebraPickStatus === "printing" ? "bg-amber-100 text-amber-700"
-                          : zebraPickStatus === "done"    ? "bg-emerald-100 text-emerald-700"
-                          : "bg-red-100 text-red-700"
-                        }`} title={zebraPickError || undefined}>
-                          {zebraPickStatus === "printing" ? `Printing ${allocRows.length} labels…` : zebraPickStatus === "done" ? "✓ Sent to Zebra" : "Error"}
-                        </span>
-                      )}
-                      <button
-                        onClick={zebraPickingTicket}
-                        disabled={zebraPickStatus === "printing"}
-                        className="flex items-center gap-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg px-3 py-2 transition-colors shadow-sm disabled:opacity-50"
-                        title="Send pick labels to Zebra printer (one label per pick line)"
-                      >
-                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="2" y="6" width="20" height="12" rx="2" />
-                          <path d="M6 12h2m4 0h2m4 0h0" />
-                          <path d="M6 16h12" strokeDasharray="2 2" />
-                        </svg>
-                        Zebra Labels
-                      </button>
-                    </div>
+                    {/* Zebra — auto-print PDF ticket */}
+                    <button
+                      onClick={() => printPickingTicket("location", "combined", true)}
+                      className="flex items-center gap-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg px-3 py-2 transition-colors shadow-sm"
+                      title="Open combined pick ticket and auto-send to default printer (select Zebra in dialog)"
+                    >
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="2" y="6" width="20" height="12" rx="2" />
+                        <path d="M6 12h2m4 0h2m4 0h0" />
+                        <path d="M6 16h12" strokeDasharray="2 2" />
+                      </svg>
+                      Zebra (PDF)
+                    </button>
                     <button onClick={printPickingLabels}
                       className="flex items-center gap-2 text-sm font-medium text-white bg-slate-500 hover:bg-slate-700 rounded-lg px-3 py-2 transition-colors shadow-sm">
                       <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="10" y1="14" x2="14" y2="14"/></svg>
