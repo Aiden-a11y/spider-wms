@@ -480,7 +480,14 @@ export default function ShippingTypePage() {
         const json = await res.json().catch(() => null);
         const list = parseItemList(json);
         if (res.ok && json) setShippingItemsRaw(parseShippingItems(json));
-        if (res.ok && list) { setItemsRaw(list); itemsFetched = true; break; }
+        if (res.ok && list) {
+          setItemsRaw(list);
+          itemsFetched = true;
+          // DEBUG — remove after confirming field names
+          console.log("[shipping-items-debug] first item keys:", list[0] ? Object.keys(list[0]) : "empty");
+          console.log("[shipping-items-debug] first item:", JSON.stringify(list[0]));
+          break;
+        }
       } catch { /* ignore */ }
     }
     // Fallback: POST endpoints
