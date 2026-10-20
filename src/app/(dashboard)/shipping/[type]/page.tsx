@@ -431,6 +431,11 @@ export default function ShippingTypePage() {
         // Only accept if it looks like a real order (has at least one order-code field)
         const hasCode = fetched.shippingOrderCode ?? fetched.orderCode ?? fetched.outboundCode;
         if (!hasCode) continue;
+        // DEBUG — remove after confirming
+        console.log("[detail-debug] keys:", Object.keys(fetched).join(", "));
+        const il = fetched.itemList ?? fetched.items ?? fetched.shippingItemList;
+        if (Array.isArray(il) && il.length > 0) console.log("[detail-debug] itemList[0]:", JSON.stringify(il[0]));
+        else console.log("[detail-debug] no itemList. searched: itemList, items, shippingItemList");
         // Merge: detail wins for everything (it's the freshest single-order GET),
         // but fall back to list-row values for any missing fields.
         // statusName comes from the WMS detail response directly.
