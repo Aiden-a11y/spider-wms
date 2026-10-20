@@ -97,6 +97,9 @@ export default function ClustersPage() {
 
   // ── Occupancy map (all pages) ─────────────────────────────────────────────
   const [occupancyMap, setOccupancyMap] = useState<Map<string, string>>(new Map());
+  // Ref so async functions (runClusterCheck, createCluster) always read the CURRENT map,
+  // not the stale closure captured at button-click time.
+  const occupancyMapRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     if (!warehouseCode) return;
@@ -122,7 +125,11 @@ export default function ClustersPage() {
           if (chunk.length < PAGE_SIZE || (total > 0 && all.length >= total)) break;
           page++;
         }
-        if (!cancelled && all.length > 0) setOccupancyMap(buildLocationOccupancyLookup(all));
+        if (!cancelled && all.length > 0) {
+          const built = buildLocationOccupancyLookup(all);
+          occupancyMapRef.current = built;
+          setOccupancyMap(built);
+        }
       } catch { /* ignore */ }
     })();
 
@@ -136,12 +143,12 @@ export default function ClustersPage() {
     const locCode = String(s.location ?? s.locationCode ?? s.locationCd ?? "");
     if (/^RE-/i.test(locCode)) return false;
 
-    const occupancy = getLocationOccupancyInfo(occupancyMap, s);
+    // Use ref so async callers always get the current map, not a stale closure snapshot
+    const map = occupancyMapRef.current;
+    const occupancy = getLocationOccupancyInfo(map, s);
     if (occupancy) return classifyOccupancy(occupancy) === "shelf";
-    // OccupancyMap is loaded — location not found means non-shelf
-    if (occupancyMap.size > 0) return false;
-    // OccupancyMap not yet loaded: fall back to zone name text
-    return zoneNm.toLowerCase().includes("shelf");
+    if (map.size > 0) return false;
+    return zoneNm.toLowerCase().includes("shelf"); // fallback if map not yet loaded
   };
 
   // ── Replenishment assign ──────────────────────────────────────────────────
