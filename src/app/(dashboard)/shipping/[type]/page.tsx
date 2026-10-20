@@ -3005,39 +3005,39 @@ ${labels}
                           <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
                         </button>
                       </div>
-                      {/* Dropdown */}
+                      {/* Dropdown — all options auto-print to default printer (Zebra) */}
                       {ticketSortOpen && (
-                        <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-slate-200 rounded-lg shadow-lg overflow-hidden w-60">
-                          {/* Combined */}
-                          <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wide bg-slate-50 border-b border-slate-100">
-                            Combined (All Orders)
+                        <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-slate-200 rounded-lg shadow-lg overflow-hidden w-64">
+                          <div className="px-3 py-1.5 text-[10px] font-semibold text-emerald-600 uppercase tracking-wide bg-emerald-50 border-b border-emerald-100 flex items-center gap-1.5">
+                            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 12h2m4 0h2m4 0h0"/><path d="M6 16h12" strokeDasharray="2 2"/></svg>
+                            Send to Zebra — Combined
                           </div>
                           <button
-                            onClick={() => { setTicketSortOpen(false); printPickingTicket("location"); }}
+                            onClick={() => { setTicketSortOpen(false); printPickingTicket("location", "combined", true); }}
                             className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors text-left"
                           >
                             <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
                             <div>
                               <div className="font-medium">By Location</div>
-                              <div className="text-[10px] text-slate-400">Aisle → Bay → Level order</div>
+                              <div className="text-[10px] text-slate-400">All orders · Aisle → Bay → Level</div>
                             </div>
                           </button>
                           <button
-                            onClick={() => { setTicketSortOpen(false); printPickingTicket("sku"); }}
+                            onClick={() => { setTicketSortOpen(false); printPickingTicket("sku", "combined", true); }}
                             className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors text-left border-t border-slate-100"
                           >
                             <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="9" y2="18"/></svg>
                             <div>
                               <div className="font-medium">By SKU</div>
-                              <div className="text-[10px] text-slate-400">SKU alphabetical order</div>
+                              <div className="text-[10px] text-slate-400">All orders · SKU alphabetical</div>
                             </div>
                           </button>
-                          {/* Individual */}
-                          <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wide bg-slate-50 border-t border-slate-200 border-b border-slate-100">
-                            Individual (Per Order)
+                          <div className="px-3 py-1.5 text-[10px] font-semibold text-emerald-600 uppercase tracking-wide bg-emerald-50 border-t border-emerald-100 border-b border-emerald-100 flex items-center gap-1.5">
+                            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 12h2m4 0h2m4 0h0"/><path d="M6 16h12" strokeDasharray="2 2"/></svg>
+                            Send to Zebra — Individual
                           </div>
                           <button
-                            onClick={() => { setTicketSortOpen(false); printPickingTicket("location", "individual"); }}
+                            onClick={() => { setTicketSortOpen(false); printPickingTicket("location", "individual", true); }}
                             className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors text-left"
                           >
                             <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
@@ -3047,7 +3047,7 @@ ${labels}
                             </div>
                           </button>
                           <button
-                            onClick={() => { setTicketSortOpen(false); printPickingTicket("sku", "individual"); }}
+                            onClick={() => { setTicketSortOpen(false); printPickingTicket("sku", "individual", true); }}
                             className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors text-left border-t border-slate-100"
                           >
                             <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="9" y2="18"/></svg>
@@ -3059,19 +3059,6 @@ ${labels}
                         </div>
                       )}
                     </div>
-                    {/* Zebra — auto-print PDF ticket */}
-                    <button
-                      onClick={() => printPickingTicket("location", "combined", true)}
-                      className="flex items-center gap-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg px-3 py-2 transition-colors shadow-sm"
-                      title="Open combined pick ticket and auto-send to default printer (select Zebra in dialog)"
-                    >
-                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="2" y="6" width="20" height="12" rx="2" />
-                        <path d="M6 12h2m4 0h2m4 0h0" />
-                        <path d="M6 16h12" strokeDasharray="2 2" />
-                      </svg>
-                      Zebra (PDF)
-                    </button>
                     <button onClick={printPickingLabels}
                       className="flex items-center gap-2 text-sm font-medium text-white bg-slate-500 hover:bg-slate-700 rounded-lg px-3 py-2 transition-colors shadow-sm">
                       <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="10" y1="14" x2="14" y2="14"/></svg>
