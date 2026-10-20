@@ -1700,8 +1700,34 @@ ${labels}
   const hasLocation = (item: Order) =>
     Boolean(item.location ?? item.locationCode ?? item.zoneNm ?? item.zoneName ?? item.zone);
 
+  // Build remark lookup from order detail itemList (assignments don't carry remark1)
+  // DEBUG — remove after confirming
+  if (Array.isArray(d.itemList ?? d.items ?? d.shippingItemList)) {
+    const sample = ((d.itemList ?? d.items ?? d.shippingItemList) as Record<string,unknown>[])[0];
+    console.log("[remark-debug] detail itemList[0]:", JSON.stringify(sample));
+  } else {
+    console.log("[remark-debug] detail itemList: not found. d keys:", Object.keys(d).slice(0, 20));
+  }
+  const detailItemList = (d.itemList ?? d.items ?? d.shippingItemList) as Order[] | undefined;
+  const remarkLookup = new Map<string, string>();
+  if (Array.isArray(detailItemList)) {
+    for (const it of detailItemList) {
+      const sku = String(it.productSku ?? it.sku ?? "");
+      const lot = String(it.lotNo ?? it.lot ?? "");
+      const remark = String(it.remark1 ?? it.remark ?? it.memo ?? "").trim();
+      if (remark) remarkLookup.set(`${sku}|${lot}`, remark);
+    }
+  }
+
   const pickingRows: Order[] = [
-    ...itemList.filter(hasLocation),
+    ...itemList.filter(hasLocation).map((it) => {
+      const sku = String(it.productSku ?? it.sku ?? "");
+      const lot = String(it.lotNo ?? it.lot ?? "");
+      const existingRemark = String(it.remark1 ?? it.remark ?? it.memo ?? "").trim();
+      if (existingRemark) return it;
+      const merged = remarkLookup.get(`${sku}|${lot}`);
+      return merged ? { ...it, remark1: merged } : it;
+    }),
     ...shippingItemsRaw
       .filter((it) => Number(it.unassignedQty ?? 0) > 0)
       .map((it) => ({ ...it, _unassigned: true, qty: it.unassignedQty, assignedQty: 0, remainQty: it.unassignedQty })),
