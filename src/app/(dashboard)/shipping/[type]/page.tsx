@@ -323,7 +323,7 @@ export default function ShippingTypePage() {
   async function loadOrders(whCode = warehouseCode, custCode = customerCode) {
     if (!whCode) return;
     setLoading(true); setError(""); setOrders([]); setColFilters({}); setSelectedCodes({});
-    const PAGE_SIZE = 500;
+    const PAGE_SIZE = 100;
     const baseBody: Record<string, unknown> = { limit: PAGE_SIZE, pageSize: PAGE_SIZE, orderType: meta.orderType, warehouseCode: whCode };
     if (custCode && custCode !== "ALL") baseBody.customerCode = custCode;
 
@@ -335,19 +335,38 @@ export default function ShippingTypePage() {
 
     for (const ep of [`/api/wms/shipping/${type}/list`, `/api/wms/shipping/list`, `/api/wms/outbound/${type}/list`, `/api/wms/outbound/list`]) {
       try {
-        const all: Order[] = [];
-        let page = 1;
-        while (true) {
-          const res  = await fetch(ep, { method: "POST", headers, body: JSON.stringify({ ...baseBody, page }) });
-          if (!res.ok) { if (page === 1) break; else { setOrders(all); setLoading(false); return; } }
-          const json = await res.json();
-          if (page === 1) setDebugInfo({ endpoint: ep, raw: json });
-          const rows = extractList(json);
-          all.push(...rows);
-          if (rows.length < PAGE_SIZE) break;
-          page++;
+        // Page 1: show immediately so the user isn't blocked
+        const res1 = await fetch(ep, { method: "POST", headers, body: JSON.stringify({ ...baseBody, page: 1 }) });
+        if (!res1.ok) continue;
+        const json1 = await res1.json();
+        setDebugInfo({ endpoint: ep, raw: json1 });
+        const rows1 = extractList(json1);
+        if (rows1.length === 0) continue;
+
+        setOrders(rows1);
+        setLoading(false);
+
+        // Remaining pages: load in background without blocking UI
+        if (rows1.length >= PAGE_SIZE) {
+          (async () => {
+            const all = [...rows1];
+            let page = 2;
+            while (true) {
+              try {
+                const res = await fetch(ep, { method: "POST", headers, body: JSON.stringify({ ...baseBody, page }) });
+                if (!res.ok) break;
+                const json = await res.json();
+                const rows = extractList(json);
+                if (rows.length === 0) break;
+                all.push(...rows);
+                setOrders([...all]);
+                if (rows.length < PAGE_SIZE) break;
+                page++;
+              } catch { break; }
+            }
+          })();
         }
-        if (all.length > 0) { setOrders(all); setLoading(false); return; }
+        return;
       } catch { /* try next */ }
     }
     setError("Could not load orders."); setLoading(false);
