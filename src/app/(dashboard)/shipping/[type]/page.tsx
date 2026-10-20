@@ -480,14 +480,7 @@ export default function ShippingTypePage() {
         const json = await res.json().catch(() => null);
         const list = parseItemList(json);
         if (res.ok && json) setShippingItemsRaw(parseShippingItems(json));
-        if (res.ok && list) {
-          setItemsRaw(list);
-          itemsFetched = true;
-          // DEBUG — remove after confirming field names
-          console.log("[shipping-items-debug] first item keys:", list[0] ? Object.keys(list[0]) : "empty");
-          console.log("[shipping-items-debug] first item:", JSON.stringify(list[0]));
-          break;
-        }
+        if (res.ok && list) { setItemsRaw(list); itemsFetched = true; break; }
       } catch { /* ignore */ }
     }
     // Fallback: POST endpoints
@@ -2686,7 +2679,7 @@ ${labels}
                                     </td>
                                     <td className="px-3 py-2.5 font-mono text-slate-700 whitespace-nowrap">{String(item.productSku ?? item.sku ?? "-")}</td>
                                     <td className="px-3 py-2.5 text-slate-600 max-w-[180px] truncate">{String(item.productName ?? item.itemName ?? "-")}</td>
-                                    <td className="px-3 py-2.5 text-slate-500 max-w-[120px] truncate">{String(item.remark ?? item.memo ?? "") || <span className="text-slate-300">—</span>}</td>
+                                    <td className="px-3 py-2.5 text-slate-500 max-w-[120px] truncate">{String(item.remark1 ?? item.remark ?? item.memo ?? "") || <span className="text-slate-300">—</span>}</td>
                                     <td className="px-3 py-2.5 whitespace-nowrap">
                                       {(() => {
                                         const cond = String(item.itemCondition ?? item.condition ?? item.goodsCondition ?? "").trim();
