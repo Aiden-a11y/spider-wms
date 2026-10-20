@@ -206,6 +206,7 @@ export default function ShippingTypePage() {
   const [autoAssignResult, setAutoAssignResult] = useState<"" | "ok" | "error">("");
   const [autoAssignMsg,    setAutoAssignMsg]    = useState("");
   const [shippingItemsRaw, setShippingItemsRaw] = useState<Order[]>([]); // data.items (shippingItemId, unassignedQty)
+  const [itemDetailsRaw,   setItemDetailsRaw]   = useState<Order[]>([]); // full item detail with remark
 
   /* ── Bulk Auto-Assign state (B2C multi-select) ── */
   const [bulkAssignModal,    setBulkAssignModal]    = useState(false);
@@ -394,6 +395,7 @@ export default function ShippingTypePage() {
     setDetail(null);
     setItemsRaw([]);
     setShippingItemsRaw([]);
+    setItemDetailsRaw([]);
     if (!keepTab) setActiveTab("info");
     setDetailLoading(true);
     setOccupancyMap(new Map());
@@ -499,6 +501,24 @@ export default function ShippingTypePage() {
         } catch { /* try next */ }
       }
     }
+
+    // Fetch full item details (includes remark1) — assignments don't carry remark
+    ;(async () => {
+      const remarkEndpoints = [
+        { url: `/api/wms/shipping/${type}/item/list`, body: { shippingOrderCode: code, pageNum: 1, pageSize: 500 } },
+        { url: `/api/wms/shipping/item/list`,          body: { shippingOrderCode: code, pageNum: 1, pageSize: 500 } },
+        { url: `/api/wms/outbound/item/list`,          body: { shippingOrderCode: code, pageNum: 1, pageSize: 500 } },
+      ];
+      for (const { url, body } of remarkEndpoints) {
+        try {
+          const res  = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+          const json = await res.json().catch(() => null);
+          if (!res.ok || !json) continue;
+          const list = parseItemList(json) ?? parseShippingItems(json);
+          if (list && list.length > 0) { setItemDetailsRaw(list as Order[]); break; }
+        } catch { /* ignore */ }
+      }
+    })();
 
     // Load occupancy map for the warehouse (best-effort)
     const whCode = String(order.warehouseCode ?? order.warehouse ?? warehouseCode ?? "");
@@ -1700,23 +1720,17 @@ ${labels}
   const hasLocation = (item: Order) =>
     Boolean(item.location ?? item.locationCode ?? item.zoneNm ?? item.zoneName ?? item.zone);
 
-  // Build remark lookup from order detail itemList (assignments don't carry remark1)
-  // DEBUG — remove after confirming
-  if (Array.isArray(d.itemList ?? d.items ?? d.shippingItemList)) {
-    const sample = ((d.itemList ?? d.items ?? d.shippingItemList) as Record<string,unknown>[])[0];
-    console.log("[remark-debug] detail itemList[0]:", JSON.stringify(sample));
-  } else {
-    console.log("[remark-debug] detail itemList: not found. d keys:", Object.keys(d).slice(0, 20));
-  }
-  const detailItemList = (d.itemList ?? d.items ?? d.shippingItemList) as Order[] | undefined;
+  // Build remark lookup: itemDetailsRaw (from POST item/list) has remark1; assignments don't
   const remarkLookup = new Map<string, string>();
-  if (Array.isArray(detailItemList)) {
-    for (const it of detailItemList) {
-      const sku = String(it.productSku ?? it.sku ?? "");
-      const lot = String(it.lotNo ?? it.lot ?? "");
-      const remark = String(it.remark1 ?? it.remark ?? it.memo ?? "").trim();
-      if (remark) remarkLookup.set(`${sku}|${lot}`, remark);
-    }
+  const remarkSources = [
+    ...(itemDetailsRaw.length > 0 ? itemDetailsRaw : []),
+    ...((d.itemList ?? d.items ?? d.shippingItemList) as Order[] | undefined ?? []),
+  ];
+  for (const it of remarkSources) {
+    const sku = String(it.productSku ?? it.sku ?? "");
+    const lot = String(it.lotNo ?? it.lot ?? "");
+    const remark = String(it.remark1 ?? it.remark ?? it.memo ?? "").trim();
+    if (remark && !remarkLookup.has(`${sku}|${lot}`)) remarkLookup.set(`${sku}|${lot}`, remark);
   }
 
   const pickingRows: Order[] = [
