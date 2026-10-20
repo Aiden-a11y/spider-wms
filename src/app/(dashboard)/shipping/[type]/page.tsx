@@ -466,11 +466,13 @@ export default function ShippingTypePage() {
       return null;
     }
 
-    // Helper: extract line-item list (shippingItemId/unassignedQty) from response
+    // Helper: extract line-item list (shippingItemId/unassignedQty/etc3-remark) from response
     function parseShippingItems(json: unknown): Record<string, unknown>[] {
       if (!json || typeof json !== "object") return [];
       const j = json as Record<string, unknown>;
-      const list = (j?.data as Record<string, unknown>)?.items ?? j?.items;
+      const d = j?.data as Record<string, unknown> | undefined;
+      const list = d?.items ?? d?.itemList ?? d?.shippingItemList ??
+                   j?.items ?? j?.itemList ?? j?.shippingItemList;
       return Array.isArray(list) ? (list as Record<string, unknown>[]) : [];
     }
 
@@ -1720,26 +1722,29 @@ ${labels}
   const hasLocation = (item: Order) =>
     Boolean(item.location ?? item.locationCode ?? item.zoneNm ?? item.zoneName ?? item.zone);
 
-  // Build remark lookup: itemDetailsRaw (from POST item/list) has remark1; assignments don't
-  const remarkLookup = new Map<string, string>();
+  // Build remark lookup: shipping items carry etc3 as the remark field (keyed by SKU)
+  const remarkLookup = new Map<string, string>(); // key: sku or "sku|lot"
   const remarkSources = [
+    ...shippingItemsRaw,
     ...(itemDetailsRaw.length > 0 ? itemDetailsRaw : []),
     ...((d.itemList ?? d.items ?? d.shippingItemList) as Order[] | undefined ?? []),
   ];
   for (const it of remarkSources) {
-    const sku = String(it.productSku ?? it.sku ?? "");
+    const sku = String(it.productSku ?? it.sku ?? it.unitBarcode ?? "");
     const lot = String(it.lotNo ?? it.lot ?? "");
-    const remark = String(it.remark1 ?? it.remark ?? it.memo ?? "").trim();
-    if (remark && !remarkLookup.has(`${sku}|${lot}`)) remarkLookup.set(`${sku}|${lot}`, remark);
+    const remark = String(it.etc3 ?? it.remark1 ?? it.remark ?? it.memo ?? "").trim();
+    if (!remark) continue;
+    if (lot && !remarkLookup.has(`${sku}|${lot}`)) remarkLookup.set(`${sku}|${lot}`, remark);
+    if (!remarkLookup.has(sku)) remarkLookup.set(sku, remark);
   }
 
   const pickingRows: Order[] = [
     ...itemList.filter(hasLocation).map((it) => {
       const sku = String(it.productSku ?? it.sku ?? "");
       const lot = String(it.lotNo ?? it.lot ?? "");
-      const existingRemark = String(it.remark1 ?? it.remark ?? it.memo ?? "").trim();
+      const existingRemark = String(it.etc3 ?? it.remark1 ?? it.remark ?? it.memo ?? "").trim();
       if (existingRemark) return it;
-      const merged = remarkLookup.get(`${sku}|${lot}`);
+      const merged = remarkLookup.get(`${sku}|${lot}`) ?? remarkLookup.get(sku);
       return merged ? { ...it, remark1: merged } : it;
     }),
     ...shippingItemsRaw
@@ -2719,7 +2724,7 @@ ${labels}
                                     </td>
                                     <td className="px-3 py-2.5 font-mono text-slate-700 whitespace-nowrap">{String(item.productSku ?? item.sku ?? "-")}</td>
                                     <td className="px-3 py-2.5 text-slate-600 max-w-[180px] truncate">{String(item.productName ?? item.itemName ?? "-")}</td>
-                                    <td className="px-3 py-2.5 text-slate-500 max-w-[120px] truncate">{String(item.remark1 ?? item.remark ?? item.memo ?? "") || <span className="text-slate-300">—</span>}</td>
+                                    <td className="px-3 py-2.5 text-slate-500 max-w-[120px] truncate">{String(item.etc3 ?? item.remark1 ?? item.remark ?? item.memo ?? "") || <span className="text-slate-300">—</span>}</td>
                                     <td className="px-3 py-2.5 whitespace-nowrap">
                                       {(() => {
                                         const cond = String(item.itemCondition ?? item.condition ?? item.goodsCondition ?? "").trim();
