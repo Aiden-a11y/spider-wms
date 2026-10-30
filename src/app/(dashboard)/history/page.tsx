@@ -167,7 +167,9 @@ export default function HistoryPage() {
     setOccupancyLookup(occupancy);
 
     try {
-      const res = await fetch(`/api/inventory-history?date=${encodeURIComponent(date)}&warehouseCode=${encodeURIComponent(warehouseCode)}`);
+      const res = await fetch(`/api/inventory-history?date=${encodeURIComponent(date)}&warehouseCode=${encodeURIComponent(warehouseCode)}`, {
+        headers: { Authorization: `Bearer ${user!.token}` },
+      });
       const json = await res.json();
       if (!res.ok) { setError(json.error ?? `HTTP ${res.status}`); }
       else setRows((json.data ?? []) as SnapshotRow[]);
@@ -184,11 +186,15 @@ export default function HistoryPage() {
     setSaveStatus("Connecting…");
 
     try {
+      // Pass client-local date so snapshot is stored under the date the user sees
+      const localDate = new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD in local tz
       const res = await fetch("/api/snapshot/run", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${user!.token}`,
+          "Content-Type": "application/json",
         },
+        body: JSON.stringify({ date: localDate }),
       });
       if (!res.ok || !res.body) {
         const json = await res.json().catch(() => ({}));

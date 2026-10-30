@@ -7,6 +7,7 @@
 
 import { NextRequest } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { checkApiAuth } from "@/lib/api-auth";
 
 export const maxDuration = 300;
 
@@ -46,15 +47,10 @@ function sseEncode(ev: ProgressEvent): Uint8Array {
 }
 
 export async function POST(req: NextRequest) {
-  // Auth: user passes their WMS Bearer token
-  const auth = req.headers.get("authorization") ?? "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  if (!token) {
-    return new Response(
-      `data: ${JSON.stringify({ type: "error", msg: "No auth token" })}\n\n`,
-      { status: 401, headers: { "Content-Type": "text/event-stream" } }
-    );
-  }
+  // Auth: user passes their WMS Bearer token (verified before anything is deleted/written)
+  const denied = await checkApiAuth(req);
+  if (denied) return denied;
+  const token = (req.headers.get("authorization") ?? "").slice(7).trim();
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey =
@@ -77,9 +73,11 @@ export async function POST(req: NextRequest) {
       try {
         const sb = createClient(supabaseUrl, supabaseKey);
         const capturedAt = new Date().toISOString();
-        const today = new Date().toLocaleDateString("en-CA", {
-          timeZone: "America/Los_Angeles",
-        });
+        // Use client-supplied date if present (manual trigger), else fall back to LA timezone (cron)
+        const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+        const today: string = typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.date)
+          ? body.date
+          : new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
 
         // ── 1. Warehouses ───────────────────────────────────────────────────
         send({ type: "status", msg: "Fetching warehouses…", pct: 2 });
