@@ -52,7 +52,7 @@ type StockOption = {
   zoneNm: string; aisleNm: string; bayNm: string; levelNm: string; positionNm: string;
 };
 
-type SkuSelection = { location: string; qty: number };
+type SkuSelection = { location: string; lotNo: string; expireDate: string; qty: number };
 
 type SkuAssignState = {
   loading: boolean; options: StockOption[]; selections: SkuSelection[];
@@ -358,39 +358,43 @@ export default function BatchTestPage() {
           ...(prev[key] ?? EMPTY_SKU_STATE),
           loading: false,
           options: good,
-          selections: good.length > 0 ? [{ location: good[0].location, qty: firstQty }] : [],
+          selections: good.length > 0 ? [{ location: good[0].location, lotNo: good[0].lotNo, expireDate: good[0].expireDate, qty: firstQty }] : [],
         },
       }));
     } catch { setSkuField(batch.batchCode, sku, "loading", false); }
   }
 
   // ── Selection helpers ──────────────────────────────────────────────────────
+  function selMatch(sel: SkuSelection, opt: StockOption) {
+    return sel.location === opt.location && sel.lotNo === opt.lotNo && sel.expireDate === opt.expireDate;
+  }
+
   function toggleSelection(batchCode: string, sku: string, opt: StockOption, totalQty: number) {
     const key = skuKey(batchCode, sku);
     setSkuState((prev) => {
       const s = prev[key] ?? EMPTY_SKU_STATE;
-      const existing = s.selections.find((sel) => sel.location === opt.location);
+      const existing = s.selections.find((sel) => selMatch(sel, opt));
       let newSels: SkuSelection[];
       if (existing) {
-        newSels = s.selections.filter((sel) => sel.location !== opt.location);
+        newSels = s.selections.filter((sel) => !selMatch(sel, opt));
       } else {
         const alreadySelected = s.selections.reduce((sum, sel) => sum + sel.qty, 0);
         const remaining = Math.max(0, totalQty - alreadySelected);
         const qty = Math.min(Number(opt.availQty), remaining > 0 ? remaining : Number(opt.availQty));
-        newSels = [...s.selections, { location: opt.location, qty }];
+        newSels = [...s.selections, { location: opt.location, lotNo: opt.lotNo, expireDate: opt.expireDate, qty }];
       }
       return { ...prev, [key]: { ...s, selections: newSels } };
     });
   }
 
-  function updateSelectionQty(batchCode: string, sku: string, location: string, delta: number | null, absVal?: number) {
+  function updateSelectionQty(batchCode: string, sku: string, location: string, lotNo: string, expireDate: string, delta: number | null, absVal?: number) {
     const key = skuKey(batchCode, sku);
     setSkuState((prev) => {
       const s = prev[key] ?? EMPTY_SKU_STATE;
-      const opt = s.options.find((o) => o.location === location);
+      const opt = s.options.find((o) => o.location === location && o.lotNo === lotNo && o.expireDate === expireDate);
       const maxQty = opt ? Number(opt.availQty) : Infinity;
       const newSels = s.selections.map((sel) => {
-        if (sel.location !== location) return sel;
+        if (sel.location !== location || sel.lotNo !== lotNo || sel.expireDate !== expireDate) return sel;
         const newQty = absVal != null ? absVal : sel.qty + (delta ?? 0);
         return { ...sel, qty: Math.max(0, Math.min(maxQty, newQty)) };
       });
@@ -855,10 +859,11 @@ export default function BatchTestPage() {
                                     <div className="max-h-64 overflow-y-auto space-y-1.5 pr-1">
                                       {state.options.map((opt) => {
                                         const label = locLabel(opt) || opt.location;
-                                        const selEntry = state.selections.find((s) => s.location === opt.location);
+                                        const selEntry = state.selections.find((s) => selMatch(s, opt));
                                         const isChecked = !!selEntry;
+                                        const rowKey = `${opt.location}|${opt.lotNo}|${opt.expireDate}`;
                                         return (
-                                          <div key={opt.location} className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl border transition-all ${isChecked ? "border-violet-400 bg-violet-50" : "border-slate-200 bg-white hover:border-slate-300"}`}>
+                                          <div key={rowKey} className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl border transition-all ${isChecked ? "border-violet-400 bg-violet-50" : "border-slate-200 bg-white hover:border-slate-300"}`}>
                                             <input type="checkbox" checked={isChecked}
                                               onChange={() => toggleSelection(batch.batchCode, skuEntry.sku, opt, skuEntry.totalQty)}
                                               className="accent-violet-600 w-4 h-4 flex-shrink-0 cursor-pointer" />
@@ -881,12 +886,12 @@ export default function BatchTestPage() {
                                             </span>
                                             {isChecked && (
                                               <div className="flex items-center gap-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
-                                                <button onClick={() => updateSelectionQty(batch.batchCode, skuEntry.sku, opt.location, -skuEntry.qtyPerOrder)}
+                                                <button onClick={() => updateSelectionQty(batch.batchCode, skuEntry.sku, opt.location, opt.lotNo, opt.expireDate, -skuEntry.qtyPerOrder)}
                                                   className="w-7 h-7 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 text-sm font-bold flex items-center justify-center">−</button>
                                                 <input type="number" value={selEntry.qty} min={0} max={Number(opt.availQty)}
-                                                  onChange={(e) => updateSelectionQty(batch.batchCode, skuEntry.sku, opt.location, null, Number(e.target.value))}
+                                                  onChange={(e) => updateSelectionQty(batch.batchCode, skuEntry.sku, opt.location, opt.lotNo, opt.expireDate, null, Number(e.target.value))}
                                                   className="w-16 text-center text-sm font-bold border border-slate-300 rounded-lg px-1 py-0.5 focus:outline-none focus:ring-2 focus:ring-violet-400" />
-                                                <button onClick={() => updateSelectionQty(batch.batchCode, skuEntry.sku, opt.location, skuEntry.qtyPerOrder)}
+                                                <button onClick={() => updateSelectionQty(batch.batchCode, skuEntry.sku, opt.location, opt.lotNo, opt.expireDate, skuEntry.qtyPerOrder)}
                                                   className="w-7 h-7 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 text-sm font-bold flex items-center justify-center">+</button>
                                               </div>
                                             )}
