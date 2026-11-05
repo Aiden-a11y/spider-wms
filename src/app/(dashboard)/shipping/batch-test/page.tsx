@@ -411,7 +411,7 @@ export default function BatchTestPage() {
     if (!bOrders.length) return;
 
     const selectionOpts = state.selections
-      .map((sel) => ({ sel, opt: state.options.find((o) => o.location === sel.location) }))
+      .map((sel) => ({ sel, opt: state.options.find((o) => o.location === sel.location && o.lotNo === sel.lotNo && o.expireDate === sel.expireDate) }))
       .filter((s): s is { sel: SkuSelection; opt: StockOption } => s.opt != null);
     if (selectionOpts.length === 0) return;
 
