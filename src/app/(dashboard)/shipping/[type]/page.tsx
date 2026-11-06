@@ -248,6 +248,14 @@ export default function ShippingTypePage() {
   const [taskType,   setTaskType]   = useState<string>(TASK_TYPES[0]);
   const [taskQty,    setTaskQty]    = useState<number | "">(1);
 
+  /* ── FBA Label Auto-fill state (B2B only) ── */
+  const fbaFillInputRef = useRef<HTMLInputElement>(null);
+  const [fbaFillModal,   setFbaFillModal]   = useState(false);
+  const [fbaFillRunning, setFbaFillRunning] = useState(false);
+  const [fbaFillLog,     setFbaFillLog]     = useState<string[]>([]);
+  type FbaEntry = { fbaId: string; pages: number; orderCode: string | null };
+  const [fbaFillEntries, setFbaFillEntries] = useState<FbaEntry[]>([]);
+
   /* ── Picking Allocation state (B2B only) ── */
   const [selectedCodes,  setSelectedCodes]  = useState<Record<string, boolean>>({});
   const [allocModal,     setAllocModal]     = useState(false);
@@ -1707,6 +1715,90 @@ ${labels}
     }
   }
 
+  /* ── FBA Label Auto-fill ── */
+  async function countPdfPages(file: File): Promise<number> {
+    const ab = await file.arrayBuffer();
+    const bytes = new Uint8Array(ab);
+    let text = "";
+    const len = Math.min(bytes.length, 300000);
+    for (let i = 0; i < len; i++) text += String.fromCharCode(bytes[i]);
+    const hits: number[] = [];
+    const re = /\/Count\s+(\d+)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) hits.push(parseInt(m[1]));
+    return hits.length ? Math.max(...hits) : 1;
+  }
+
+  async function handleFbaFillFiles(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (!files.length) return;
+    const entries: FbaEntry[] = await Promise.all(
+      files.map(async (f) => {
+        const fbaId = f.name.split("-")[0].toUpperCase();
+        const pages = await countPdfPages(f);
+        const matched = orders.find((o) => String(o.shippingOrderNo ?? "").trim().toUpperCase() === fbaId);
+        const orderCode = matched ? String(matched.shippingOrderCode ?? matched.orderCode ?? "") : null;
+        return { fbaId, pages, orderCode };
+      })
+    );
+    setFbaFillEntries(entries.sort((a, b) => a.fbaId.localeCompare(b.fbaId)));
+    setFbaFillLog([]);
+    setFbaFillModal(true);
+  }
+
+  async function runFbaFill() {
+    setFbaFillRunning(true);
+    const matched = fbaFillEntries.filter((e) => e.orderCode);
+    const log: string[] = [];
+    for (const entry of matched) {
+      log.push(`${entry.fbaId} → fetching…`);
+      setFbaFillLog([...log]);
+      let detail: Record<string, unknown> | null = null;
+      for (const ep of [
+        `/api/wms/shipping/${entry.orderCode}`,
+        `/api/wms/shipping/${type}/${entry.orderCode}`,
+        `/api/wms/shipping/detail/${entry.orderCode}`,
+      ]) {
+        try {
+          const r = await fetch(ep, { headers });
+          if (!r.ok) continue;
+          const j = await r.json();
+          const d = j?.data ?? j;
+          if (d && typeof d === "object" && !Array.isArray(d)) { detail = d as Record<string, unknown>; break; }
+        } catch { continue; }
+      }
+      if (!detail) {
+        log[log.length - 1] = `${entry.fbaId} → ❌ Could not fetch detail`;
+        setFbaFillLog([...log]);
+        continue;
+      }
+      const labels = entry.pages;
+      const pickPack = Math.floor(labels / 2);
+      const taskText = `Labels×${labels}, Picking per Carton×${pickPack}, Packing per Carton×${pickPack}`;
+      const existing = String(detail.comment ?? "").trim();
+      const newComment = existing ? `${existing} | ${taskText}` : taskText;
+      const payload = Object.fromEntries(
+        Object.entries({ ...detail, comment: newComment })
+          .filter(([, v]) => v === null || typeof v === "string" || typeof v === "number" || typeof v === "boolean")
+      );
+      try {
+        const r = await fetch("/api/wms/shipping/save", { method: "POST", headers, body: JSON.stringify(payload) });
+        const j = await r.json().catch(() => null);
+        if (r.ok && (j as Record<string,unknown>)?.isSuccess !== false) {
+          log[log.length - 1] = `${entry.fbaId} → ✅ Saved (labels=${labels}, pick/pack=${pickPack})`;
+        } else {
+          log[log.length - 1] = `${entry.fbaId} → ❌ ${(j as Record<string,unknown>)?.message ?? "Save failed"}`;
+        }
+      } catch {
+        log[log.length - 1] = `${entry.fbaId} → ❌ Network error`;
+      }
+      setFbaFillLog([...log]);
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    setFbaFillRunning(false);
+  }
+
   function addTaskItem() {
     if (!taskType || !taskQty || Number(taskQty) <= 0) return;
     setTaskItems((prev) => {
@@ -1930,23 +2022,33 @@ ${labels}
           {type === "b2b" && (() => {
             const selCount = Object.keys(selectedCodes).filter((k) => selectedCodes[k]).length;
             return (
-              <button
-                onClick={runPickingAllocation}
-                disabled={selCount === 0}
-                className={`flex items-center gap-2 text-sm font-medium rounded-lg px-3 py-2 transition-colors ${
-                  selCount > 0
-                    ? "bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
-                    : "border border-slate-200 text-slate-400 bg-white cursor-not-allowed"
-                }`}
-              >
-                <ClipboardList className="w-4 h-4" />
-                Picking Allocation
-                {selCount > 0 && (
-                  <span className="bg-white/25 text-white text-xs font-bold rounded-full px-1.5 min-w-[20px] text-center">
-                    {selCount}
-                  </span>
-                )}
-              </button>
+              <>
+                <button
+                  onClick={runPickingAllocation}
+                  disabled={selCount === 0}
+                  className={`flex items-center gap-2 text-sm font-medium rounded-lg px-3 py-2 transition-colors ${
+                    selCount > 0
+                      ? "bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
+                      : "border border-slate-200 text-slate-400 bg-white cursor-not-allowed"
+                  }`}
+                >
+                  <ClipboardList className="w-4 h-4" />
+                  Picking Allocation
+                  {selCount > 0 && (
+                    <span className="bg-white/25 text-white text-xs font-bold rounded-full px-1.5 min-w-[20px] text-center">
+                      {selCount}
+                    </span>
+                  )}
+                </button>
+                <input ref={fbaFillInputRef} type="file" multiple accept=".pdf" className="hidden" onChange={handleFbaFillFiles} />
+                <button
+                  onClick={() => fbaFillInputRef.current?.click()}
+                  className="flex items-center gap-2 text-sm font-medium rounded-lg px-3 py-2 border border-orange-300 text-orange-700 hover:bg-orange-50 transition-colors"
+                  title="Upload FBA label PDFs to auto-fill Labels / Picking per Carton / Packing per Carton"
+                >
+                  FBA Label Fill
+                </button>
+              </>
             );
           })()}
           {type === "b2c" && (() => {
@@ -3339,6 +3441,78 @@ ${labels}
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ── FBA Label Fill Modal ── */}
+      {fbaFillModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50" onClick={() => { if (!fbaFillRunning) setFbaFillModal(false); }} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between p-5 border-b border-slate-100">
+              <div>
+                <h3 className="font-bold text-slate-900">FBA Label Auto-fill</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {fbaFillEntries.filter((e) => e.orderCode).length} / {fbaFillEntries.length} orders matched
+                </p>
+              </div>
+              {!fbaFillRunning && (
+                <button onClick={() => setFbaFillModal(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+              )}
+            </div>
+            <div className="flex-1 overflow-y-auto p-5 space-y-2">
+              {fbaFillLog.length === 0 ? (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-xs text-slate-500 border-b border-slate-100">
+                      <th className="text-left pb-2">FBA ID</th>
+                      <th className="text-right pb-2">Pages</th>
+                      <th className="text-right pb-2">Labels</th>
+                      <th className="text-right pb-2">Pick/Pack</th>
+                      <th className="text-left pb-2 pl-4">Order Code</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fbaFillEntries.map((e) => (
+                      <tr key={e.fbaId} className={`border-b border-slate-50 ${e.orderCode ? "" : "opacity-40"}`}>
+                        <td className="py-1.5 font-mono text-xs">{e.fbaId}</td>
+                        <td className="py-1.5 text-right">{e.pages}</td>
+                        <td className="py-1.5 text-right font-bold text-blue-700">{e.pages}</td>
+                        <td className="py-1.5 text-right font-bold text-emerald-700">{Math.floor(e.pages / 2)}</td>
+                        <td className="py-1.5 pl-4 font-mono text-xs">
+                          {e.orderCode ? <span className="text-slate-800">{e.orderCode}</span> : <span className="text-red-400">No match</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div className="space-y-1">
+                  {fbaFillLog.map((line, i) => (
+                    <p key={i} className={`text-xs font-mono ${line.includes("✅") ? "text-green-700" : line.includes("❌") ? "text-red-600" : "text-slate-500"}`}>{line}</p>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="p-5 border-t border-slate-100 flex justify-end gap-3">
+              {!fbaFillRunning && fbaFillLog.length === 0 && (
+                <>
+                  <button onClick={() => setFbaFillModal(false)} className="px-4 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50">Cancel</button>
+                  <button
+                    onClick={runFbaFill}
+                    disabled={fbaFillEntries.filter((e) => e.orderCode).length === 0}
+                    className="px-4 py-2 text-sm font-semibold bg-orange-600 hover:bg-orange-700 text-white rounded-lg disabled:opacity-40"
+                  >
+                    Update {fbaFillEntries.filter((e) => e.orderCode).length} Orders
+                  </button>
+                </>
+              )}
+              {fbaFillRunning && <p className="text-sm text-slate-500 animate-pulse">Updating orders…</p>}
+              {!fbaFillRunning && fbaFillLog.length > 0 && (
+                <button onClick={() => setFbaFillModal(false)} className="px-4 py-2 text-sm font-semibold bg-slate-800 text-white rounded-lg">Close</button>
+              )}
+            </div>
           </div>
         </div>
       )}
