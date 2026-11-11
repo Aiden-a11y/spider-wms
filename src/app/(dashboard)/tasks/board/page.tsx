@@ -123,7 +123,7 @@ export default function TaskBoardPage() {
   });
 
   // --- Board (Kanban) grouping by group_key ---
-  const allGroupKeys = [...new Set(tasks.map((t) => t.group_key ?? "기타"))].sort();
+  const allGroupKeys = Array.from(new Set(tasks.map((t) => t.group_key ?? "기타"))).sort();
   const pendingByGroup: Record<string, Task[]> = {};
   for (const k of allGroupKeys) pendingByGroup[k] = [];
   for (const t of tasks.filter((t) => t.status === "pending")) {
