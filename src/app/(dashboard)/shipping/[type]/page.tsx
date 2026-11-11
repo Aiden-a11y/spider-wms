@@ -8,10 +8,12 @@ import {
   RefreshCw, AlertCircle, Truck, Search, Download, X,
   Building2, User, Store, Globe, MapPin, Save, CheckCircle2, ArrowLeftRight,
   ClipboardList, AlertTriangle, PackageCheck, Loader2, ExternalLink,
+  Plus, Trash2, FileSpreadsheet, Layers,
 } from "lucide-react";
 import { buildLocationOccupancyLookup, getLocationOccupancyInfo, classifyOccupancy } from "@/lib/wms";
 import { supabase } from "@/lib/supabase";
 import { generatePickLineZPL, zebraDiscoverPrinters, zebraSend, type ZebraPrinter } from "@/lib/zpl";
+import * as XLSX from "xlsx";
 
 /* ── Shipping type config ── */
 const TYPE_META: Record<string, {
@@ -117,6 +119,18 @@ type AllocRow = {
   expDate: string;
   totalQty: number;
   perOrder: Record<string, number>;
+};
+
+type PackingRow = {
+  id?: string;
+  order_code: string;
+  sku: string;
+  product_name: string;
+  qty_per_carton: number;
+  carton_count: number;
+  pallet_no: string;
+  total_qty: number;
+  note: string;
 };
 
 /** Picking priority sort: aisle → bay → level → position → zone (all numeric ascending) */
@@ -255,6 +269,11 @@ export default function ShippingTypePage() {
   const [fbaFillLog,     setFbaFillLog]     = useState<string[]>([]);
   type FbaEntry = { fbaId: string; pages: number; orderCode: string | null };
   const [fbaFillEntries, setFbaFillEntries] = useState<FbaEntry[]>([]);
+
+  /* ── Packing List state ── */
+  const [packingRows,     setPackingRows]     = useState<PackingRow[]>([]);
+  const [packingLoading,  setPackingLoading]  = useState(false);
+  const [packingSaving,   setPackingSaving]   = useState(false);
 
   /* ── Picking Allocation state (B2B only) ── */
   const [selectedCodes,  setSelectedCodes]  = useState<Record<string, boolean>>({});
@@ -417,18 +436,33 @@ export default function ShippingTypePage() {
   }
 
   /* ── 4. Fetch order detail on row click ── */
+  async function loadPackingList(orderCode: string) {
+    setPackingLoading(true);
+    try {
+      const res = await fetch(`/api/packing-list?order_code=${encodeURIComponent(orderCode)}`, {
+        headers: authHeader,
+      });
+      const data = await res.json();
+      setPackingRows(data.rows ?? []);
+    } finally {
+      setPackingLoading(false);
+    }
+  }
+
   async function openDetail(order: Order, keepTab = false) {
     setSelected(order);
     setDetail(null);
     setItemsRaw([]);
     setShippingItemsRaw([]);
     setItemDetailsRaw([]);
+    setPackingRows([]);
     if (!keepTab) setActiveTab("info");
     setDetailLoading(true);
     setOccupancyMap(new Map());
     setPickingSaved(false);
 
     const code = String(order.shippingOrderCode ?? order.orderCode ?? order.outboundCode ?? "");
+    loadPackingList(code);
 
     // detail endpoints — confirmed working: GET /shipping/{code} (no type prefix)
     const detailEndpoints = [
@@ -575,6 +609,7 @@ export default function ShippingTypePage() {
     setOccupancyMap(new Map()); setPickingSaved(false);
     setAutoAssigning(false); setAutoAssignResult(""); setAutoAssignMsg("");
     setStatusModal(false); setNewStatus(""); setCancelComment(""); setOutDate(""); setNeedOutDate(false); setStatusError("");
+    setPackingRows([]);
     closeAssignModal();
   }
 
@@ -2749,6 +2784,207 @@ ${labels}
                         <Field label="Shipping Rate"   {...ef("shippingRate")} />
                         <Field label="Shipping Cost"   {...ef("shippingCost")} />
                       </div>
+                    </div>
+
+                    {/* ── Packing List ── */}
+                    <div className="border-t border-slate-100 pt-5">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <Layers className="w-4 h-4 text-slate-400" />
+                          <p className="text-xs text-slate-400 uppercase tracking-wide">Packing List</p>
+                          {packingRows.length > 0 && (
+                            <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-full px-2 py-0.5">
+                              {packingRows.reduce((s, r) => s + r.carton_count, 0)} CTN / {packingRows.reduce((s, r) => s + r.total_qty, 0)} PCS
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {/* Auto-fill from picking items */}
+                          {itemsRaw.length > 0 && packingRows.length === 0 && (
+                            <button
+                              onClick={async () => {
+                                const orderCode = String(selected?.shippingOrderCode ?? selected?.orderCode ?? selected?.outboundCode ?? "");
+                                const newRows: Omit<PackingRow, "id" | "total_qty">[] = itemsRaw.map((item) => ({
+                                  order_code: orderCode,
+                                  sku: String(item.sku ?? item.stockCode ?? item.itemCode ?? ""),
+                                  product_name: String(item.productName ?? item.itemName ?? ""),
+                                  qty_per_carton: 0,
+                                  carton_count: 0,
+                                  pallet_no: "",
+                                  note: "",
+                                }));
+                                const res = await fetch("/api/packing-list", {
+                                  method: "POST",
+                                  headers: { ...authHeader, "Content-Type": "application/json" },
+                                  body: JSON.stringify(newRows),
+                                });
+                                const data = await res.json();
+                                if (data.rows) setPackingRows(data.rows);
+                              }}
+                              className="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-700 border border-blue-200 hover:border-blue-400 rounded-lg px-2.5 py-1.5 transition-colors"
+                            >
+                              <PackageCheck className="w-3.5 h-3.5" /> SKU 자동 불러오기
+                            </button>
+                          )}
+                          {/* Add empty row */}
+                          <button
+                            onClick={async () => {
+                              const orderCode = String(selected?.shippingOrderCode ?? selected?.orderCode ?? selected?.outboundCode ?? "");
+                              const res = await fetch("/api/packing-list", {
+                                method: "POST",
+                                headers: { ...authHeader, "Content-Type": "application/json" },
+                                body: JSON.stringify([{ order_code: orderCode, sku: "", product_name: "", qty_per_carton: 0, carton_count: 0, pallet_no: "", note: "" }]),
+                              });
+                              const data = await res.json();
+                              if (data.rows) setPackingRows((prev) => [...prev, ...data.rows]);
+                            }}
+                            className="flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-400 rounded-lg px-2.5 py-1.5 transition-colors"
+                          >
+                            <Plus className="w-3.5 h-3.5" /> 행 추가
+                          </button>
+                          {/* Excel export */}
+                          {packingRows.length > 0 && (
+                            <button
+                              onClick={() => {
+                                const orderCode = String(selected?.shippingOrderCode ?? selected?.orderCode ?? selected?.outboundCode ?? "");
+                                const wsData = [
+                                  ["Order Code", "SKU", "Product Name", "Qty/Carton", "Carton Count", "Total Qty", "Pallet No", "Note"],
+                                  ...packingRows.map((r) => [orderCode, r.sku, r.product_name, r.qty_per_carton, r.carton_count, r.total_qty, r.pallet_no, r.note]),
+                                  [],
+                                  ["", "", "TOTAL", "", packingRows.reduce((s, r) => s + r.carton_count, 0), packingRows.reduce((s, r) => s + r.total_qty, 0), "", ""],
+                                ];
+                                const ws = XLSX.utils.aoa_to_sheet(wsData);
+                                ws["!cols"] = [{ wch: 24 }, { wch: 16 }, { wch: 30 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 20 }];
+                                const wb = XLSX.utils.book_new();
+                                XLSX.utils.book_append_sheet(wb, ws, "Packing List");
+                                XLSX.writeFile(wb, `PackingList_${orderCode}.xlsx`);
+                              }}
+                              className="flex items-center gap-1.5 text-xs font-medium text-green-700 border border-green-200 hover:border-green-400 rounded-lg px-2.5 py-1.5 transition-colors"
+                            >
+                              <FileSpreadsheet className="w-3.5 h-3.5" /> Excel 추출
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {packingLoading ? (
+                        <div className="flex items-center justify-center py-6 text-slate-400 text-sm gap-2">
+                          <Loader2 className="w-4 h-4 animate-spin" /> 로딩 중...
+                        </div>
+                      ) : packingRows.length === 0 ? (
+                        <div className="text-center py-6 text-slate-400 text-sm border border-dashed border-slate-200 rounded-xl">
+                          패킹 리스트가 없습니다. 행을 추가하거나 SKU 자동 불러오기를 사용하세요.
+                        </div>
+                      ) : (
+                        <div className="overflow-x-auto rounded-xl border border-slate-200">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="bg-slate-50 border-b border-slate-200">
+                                {["SKU", "Product Name", "Qty/CTN", "CTN 수", "Total PCS", "Pallet No", "Note", ""].map((h) => (
+                                  <th key={h} className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {packingRows.map((row, idx) => (
+                                <tr key={row.id ?? idx} className="hover:bg-slate-50 transition-colors">
+                                  {(["sku", "product_name"] as const).map((field) => (
+                                    <td key={field} className="px-3 py-2">
+                                      <input
+                                        type="text"
+                                        value={row[field]}
+                                        onChange={(e) => setPackingRows((prev) => prev.map((r, i) => i === idx ? { ...r, [field]: e.target.value } : r))}
+                                        onBlur={async () => {
+                                          if (!row.id) return;
+                                          await fetch(`/api/packing-list?id=${row.id}`, {
+                                            method: "PATCH",
+                                            headers: { ...authHeader, "Content-Type": "application/json" },
+                                            body: JSON.stringify({ [field]: row[field] }),
+                                          });
+                                        }}
+                                        className="w-full min-w-[80px] text-sm text-slate-800 border border-transparent hover:border-slate-200 focus:border-blue-400 focus:outline-none rounded px-1.5 py-1 bg-transparent focus:bg-white transition-colors"
+                                      />
+                                    </td>
+                                  ))}
+                                  {(["qty_per_carton", "carton_count"] as const).map((field) => (
+                                    <td key={field} className="px-3 py-2">
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        value={row[field] || ""}
+                                        onChange={(e) => {
+                                          const val = Number(e.target.value) || 0;
+                                          setPackingRows((prev) => prev.map((r, i) => {
+                                            if (i !== idx) return r;
+                                            const updated = { ...r, [field]: val };
+                                            updated.total_qty = updated.qty_per_carton * updated.carton_count;
+                                            return updated;
+                                          }));
+                                        }}
+                                        onBlur={async () => {
+                                          if (!row.id) return;
+                                          await fetch(`/api/packing-list?id=${row.id}`, {
+                                            method: "PATCH",
+                                            headers: { ...authHeader, "Content-Type": "application/json" },
+                                            body: JSON.stringify({ qty_per_carton: row.qty_per_carton, carton_count: row.carton_count }),
+                                          });
+                                        }}
+                                        className="w-20 text-sm text-right tabular-nums text-slate-800 border border-transparent hover:border-slate-200 focus:border-blue-400 focus:outline-none rounded px-1.5 py-1 bg-transparent focus:bg-white transition-colors"
+                                      />
+                                    </td>
+                                  ))}
+                                  <td className="px-3 py-2 text-right tabular-nums font-semibold text-slate-700">
+                                    {(row.qty_per_carton * row.carton_count).toLocaleString()}
+                                  </td>
+                                  {(["pallet_no", "note"] as const).map((field) => (
+                                    <td key={field} className="px-3 py-2">
+                                      <input
+                                        type="text"
+                                        value={row[field]}
+                                        onChange={(e) => setPackingRows((prev) => prev.map((r, i) => i === idx ? { ...r, [field]: e.target.value } : r))}
+                                        onBlur={async () => {
+                                          if (!row.id) return;
+                                          await fetch(`/api/packing-list?id=${row.id}`, {
+                                            method: "PATCH",
+                                            headers: { ...authHeader, "Content-Type": "application/json" },
+                                            body: JSON.stringify({ [field]: row[field] }),
+                                          });
+                                        }}
+                                        className="w-full min-w-[60px] text-sm text-slate-800 border border-transparent hover:border-slate-200 focus:border-blue-400 focus:outline-none rounded px-1.5 py-1 bg-transparent focus:bg-white transition-colors"
+                                      />
+                                    </td>
+                                  ))}
+                                  <td className="px-2 py-2">
+                                    <button
+                                      onClick={async () => {
+                                        if (row.id) {
+                                          await fetch(`/api/packing-list?id=${row.id}`, { method: "DELETE", headers: authHeader });
+                                        }
+                                        setPackingRows((prev) => prev.filter((_, i) => i !== idx));
+                                      }}
+                                      className="text-slate-300 hover:text-red-500 transition-colors p-1"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                            <tfoot>
+                              <tr className="bg-slate-50 border-t-2 border-slate-200 font-semibold">
+                                <td colSpan={3} className="px-3 py-2 text-xs text-slate-500 uppercase">Total</td>
+                                <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                                  {packingRows.reduce((s, r) => s + r.carton_count, 0)} CTN
+                                </td>
+                                <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                                  {packingRows.reduce((s, r) => s + r.total_qty, 0).toLocaleString()} PCS
+                                </td>
+                                <td colSpan={3} />
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
