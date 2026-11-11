@@ -182,6 +182,7 @@ interface Warehouse { id: string; name: string }
 
 export default function ShippingTypePage() {
   const { user }  = useAuth();
+  const authHeader: Record<string, string> = user?.token ? { Authorization: `Bearer ${user.token}` } : {};
   const router    = useRouter();
   const params    = useParams();
   const type      = String(params.type ?? "b2b").toLowerCase();

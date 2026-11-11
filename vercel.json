@@ -10,7 +10,7 @@
     },
     {
       "path": "/api/cron/slack-sync",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 8 * * *"
     }
   ]
 }
