@@ -38,6 +38,7 @@ import {
   Activity,
   BarChart2,
   TrendingUp,
+  MessageSquare,
 } from "lucide-react";
 
 type NavChild = { href: string; label: string; icon: React.ElementType };
@@ -51,6 +52,15 @@ function isGroup(item: NavItem): item is GroupItem {
 
 const nav: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, children: undefined },
+  {
+    href: undefined,
+    label: "Task Manager",
+    icon: MessageSquare,
+    children: [
+      { href: "/tasks", label: "업무 목록", icon: MessageSquare },
+      { href: "/tasks/board", label: "보드 / 달력", icon: CalendarDays },
+    ],
+  },
   {
     href: undefined,
     label: "Inventory",

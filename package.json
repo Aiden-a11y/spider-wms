@@ -8,6 +8,8 @@
     "start": "next start"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
+    "@slack/web-api": "^8.3.0",
     "@supabase/supabase-js": "^2.104.0",
     "@types/jsbarcode": "^3.11.4",
     "@types/qrcode": "^1.5.6",
