@@ -26,10 +26,15 @@ export async function GET(req: NextRequest) {
   }
 
   const limit = req.nextUrl.searchParams.get("limit") ?? "50";
+  const oldest = req.nextUrl.searchParams.get("oldest");
 
   // Fetch main channel messages
-  const histRes = await fetch(
-    `https://slack.com/api/conversations.history?channel=${channelId}&limit=${limit}`,
+  const histUrl = new URL("https://slack.com/api/conversations.history");
+  histUrl.searchParams.set("channel", channelId);
+  histUrl.searchParams.set("limit", limit);
+  if (oldest) histUrl.searchParams.set("oldest", oldest);
+
+  const histRes = await fetch(histUrl.toString(),
     { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" }
   );
   const hist = await histRes.json();
