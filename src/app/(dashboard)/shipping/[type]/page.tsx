@@ -1755,13 +1755,29 @@ ${labels}
   async function countPdfPages(file: File): Promise<number> {
     const ab = await file.arrayBuffer();
     const bytes = new Uint8Array(ab);
-    let text = "";
-    const len = Math.min(bytes.length, 300000);
-    for (let i = 0; i < len; i++) text += String.fromCharCode(bytes[i]);
+    const CHUNK = 200000;
+    const dec = (start: number, end: number) => {
+      let s = "";
+      for (let i = start; i < end; i++) s += String.fromCharCode(bytes[i]);
+      return s;
+    };
+    // Scan start + end of file (PDF catalog/xref is at the end)
+    const head = dec(0, Math.min(bytes.length, CHUNK));
+    const tail = bytes.length > CHUNK ? dec(Math.max(0, bytes.length - CHUNK), bytes.length) : "";
+    const text = head + tail;
+
+    // Method 1: count individual /Type /Page entries (most reliable)
+    const pageTypeMatches = text.match(/\/Type\s*\/Page[\s/<[]/g);
+    if (pageTypeMatches && pageTypeMatches.length > 0) return pageTypeMatches.length;
+
+    // Method 2: highest /Count value (root Pages node)
     const hits: number[] = [];
     const re = /\/Count\s+(\d+)/g;
     let m: RegExpExecArray | null;
-    while ((m = re.exec(text)) !== null) hits.push(parseInt(m[1]));
+    while ((m = re.exec(text)) !== null) {
+      const n = parseInt(m[1]);
+      if (n > 0) hits.push(n);
+    }
     return hits.length ? Math.max(...hits) : 1;
   }
 
