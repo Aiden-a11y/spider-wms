@@ -2081,17 +2081,25 @@ ${labels}
   /* SKU → total picking qty (for Remain calculation in Packing List) */
   const skuPickingQty = useMemo(() => {
     const map = new Map<string, { qty: number; productName: string }>();
-    pickingRows.forEach((it) => {
-      const sku = String((it as Record<string, unknown>).productSku ?? (it as Record<string, unknown>).sku ?? "");
+    // Use all available item sources — picking rows first, then raw fallbacks
+    const sources: Record<string, unknown>[] = [
+      ...pickingRows,
+      ...shippingItemsRaw,
+      ...itemsRaw,
+    ] as Record<string, unknown>[];
+    sources.forEach((it) => {
+      const sku = String(
+        it.productSku ?? it.sku ?? it.stockCode ?? it.itemCode ?? it.unitBarcode ?? ""
+      );
       if (!sku) return;
-      const qty = Number((it as Record<string, unknown>).qty ?? (it as Record<string, unknown>).totalQty ?? 0);
-      const name = String((it as Record<string, unknown>).productName ?? (it as Record<string, unknown>).itemName ?? "");
+      const qty = Number(it.qty ?? it.totalQty ?? it.requestQty ?? it.orderQty ?? 0);
+      const name = String(it.productName ?? it.itemName ?? it.goodsName ?? it.productNm ?? "");
       const prev = map.get(sku);
-      if (prev) prev.qty += qty;
+      if (prev) { prev.qty += qty; }
       else map.set(sku, { qty, productName: name });
     });
     return map;
-  }, [pickingRows]);
+  }, [pickingRows, shippingItemsRaw, itemsRaw]);
 
   /* Fields to skip in "extra" section */
   const SKIP_FIELDS = new Set([
@@ -2923,38 +2931,39 @@ ${labels}
                               >
                                 <RefreshCw className={`w-3.5 h-3.5 ${packingLoading ? "animate-spin" : ""}`} /> 다시 불러오기
                               </button>
-                              {/* Auto-fill from picking (always shown when picking data exists) */}
-                              {hasPickingData && (
-                                <button
-                                  onClick={async () => {
-                                    // Delete existing rows first
-                                    if (packingRows.length > 0) {
-                                      await fetch(`/api/packing-list?order_code=${encodeURIComponent(orderCode)}`, { method: "DELETE", headers: authHeader });
-                                    }
-                                    // Build unique-SKU rows from picking
-                                    const newRows = Array.from(skuPickingQty.entries()).map(([sku, { productName }]) => ({
-                                      order_code: orderCode,
-                                      sku,
-                                      product_name: productName,
-                                      qty_per_carton: 0,
-                                      carton_count: 0,
-                                      pallet_no: "",
-                                      note: "",
-                                    }));
-                                    const res = await fetch("/api/packing-list", {
-                                      method: "POST",
-                                      headers: { ...authHeader, "Content-Type": "application/json" },
-                                      body: JSON.stringify(newRows),
-                                    });
-                                    const data = await res.json();
-                                    if (data.rows) setPackingRows(data.rows);
+                              {/* Auto-fill from picking — always shown; uses all available item sources */}
+                              <button
+                                onClick={async () => {
+                                  // Always delete existing rows (including bad/empty ones) before re-creating
+                                  await fetch(`/api/packing-list?order_code=${encodeURIComponent(orderCode)}`, { method: "DELETE", headers: authHeader });
+                                  if (skuPickingQty.size === 0) {
+                                    setPackingRows([]);
                                     setShowPalletSummary(false);
-                                  }}
-                                  className="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-700 border border-blue-200 hover:border-blue-400 rounded-lg px-2.5 py-1.5 transition-colors"
-                                >
-                                  <PackageCheck className="w-3.5 h-3.5" /> SKU 자동 불러오기
-                                </button>
-                              )}
+                                    return;
+                                  }
+                                  // Build unique-SKU rows from picking (deduplicated)
+                                  const newRows = Array.from(skuPickingQty.entries()).map(([sku, { productName }]) => ({
+                                    order_code: orderCode,
+                                    sku,
+                                    product_name: productName,
+                                    qty_per_carton: 0,
+                                    carton_count: 0,
+                                    pallet_no: "",
+                                    note: "",
+                                  }));
+                                  const res = await fetch("/api/packing-list", {
+                                    method: "POST",
+                                    headers: { ...authHeader, "Content-Type": "application/json" },
+                                    body: JSON.stringify(newRows),
+                                  });
+                                  const data = await res.json();
+                                  if (data.rows) setPackingRows(data.rows);
+                                  setShowPalletSummary(false);
+                                }}
+                                className="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-700 border border-blue-200 hover:border-blue-400 rounded-lg px-2.5 py-1.5 transition-colors"
+                              >
+                                <PackageCheck className="w-3.5 h-3.5" /> SKU 자동 불러오기
+                              </button>
                               {/* Add empty row */}
                               <button
                                 onClick={async () => {
