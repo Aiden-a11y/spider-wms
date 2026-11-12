@@ -2899,6 +2899,13 @@ ${labels}
                       const totalCtn = packingRows.reduce((s, r) => s + r.carton_count, 0);
                       const totalPcs = packingRows.reduce((s, r) => s + r.total_qty, 0);
 
+                      // SKU별 packed 합계 (같은 SKU가 여러 팔렛에 나뉘어도 정확히 계산)
+                      const packedBySku = new Map<string, number>();
+                      packingRows.forEach((r) => {
+                        if (!r.sku) return;
+                        packedBySku.set(r.sku, (packedBySku.get(r.sku) ?? 0) + r.qty_per_carton * r.carton_count);
+                      });
+
                       // Pallet summary: group by pallet_no
                       const palletGroups = new Map<string, PackingRow[]>();
                       packingRows.forEach((r) => {
@@ -3100,8 +3107,9 @@ ${labels}
                                 <tbody className="divide-y divide-slate-100">
                                   {packingRows.map((row, idx) => {
                                     const pickTotal = skuPickingQty.get(row.sku)?.qty ?? null;
-                                    const packed = row.qty_per_carton * row.carton_count;
-                                    const remain = pickTotal !== null ? pickTotal - packed : null;
+                                    // Use total packed across ALL rows of this SKU (multi-pallet aware)
+                                    const skuTotalPacked = packedBySku.get(row.sku) ?? 0;
+                                    const remain = pickTotal !== null ? pickTotal - skuTotalPacked : null;
                                     return (
                                       <tr key={row.id ?? idx} className="hover:bg-slate-50 transition-colors">
                                         {(["sku", "product_name"] as const).map((field) => (
@@ -3151,7 +3159,7 @@ ${labels}
                                         ))}
                                         {/* Total PCS */}
                                         <td className="px-3 py-2 text-right tabular-nums font-semibold text-slate-700">
-                                          {packed.toLocaleString()}
+                                          {(row.qty_per_carton * row.carton_count).toLocaleString()}
                                         </td>
                                         {/* Remain */}
                                         <td className="px-3 py-2 text-right tabular-nums font-bold">
@@ -3205,8 +3213,11 @@ ${labels}
                                     <td className="px-3 py-2 text-right tabular-nums text-slate-700">{totalPcs.toLocaleString()} PCS</td>
                                     <td className="px-3 py-2 text-right tabular-nums text-xs text-orange-500">
                                       {(() => {
-                                        const totalPicking = Array.from(skuPickingQty.values()).reduce((s, { qty }) => s + qty, 0);
-                                        const rem = totalPicking > 0 ? totalPicking - totalPcs : null;
+                                        // Sum picking qty only for SKUs that appear in packing list
+                                        const trackedSkus = new Set(packingRows.map((r) => r.sku).filter(Boolean));
+                                        const totalPicking = Array.from(trackedSkus).reduce((s, sku) => s + (skuPickingQty.get(sku)?.qty ?? 0), 0);
+                                        const totalPackedTracked = Array.from(trackedSkus).reduce((s, sku) => s + (packedBySku.get(sku) ?? 0), 0);
+                                        const rem = totalPicking > 0 ? totalPicking - totalPackedTracked : null;
                                         return rem === null ? "" : rem === 0 ? <span className="text-emerald-600 font-bold">✓ 완료</span> : `${rem.toLocaleString()} 남음`;
                                       })()}
                                     </td>
