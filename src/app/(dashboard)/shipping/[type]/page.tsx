@@ -271,7 +271,7 @@ export default function ShippingTypePage() {
   const [fbaFillDropdown, setFbaFillDropdown] = useState(false);
   type FbaFillType = "spd" | "ltl" | "ulta";
   const [fbaFillType, setFbaFillType] = useState<FbaFillType>("spd");
-  const [fbaLtlPallets, setFbaLtlPallets] = useState<number>(1);
+  const [fbaLtlPallets, setFbaLtlPallets] = useState<Record<string, number>>({});
   type FbaEntry = { fbaId: string; pages: number; orderCode: string | null };
   const [fbaFillEntries, setFbaFillEntries] = useState<FbaEntry[]>([]);
 
@@ -1798,7 +1798,12 @@ ${labels}
         return { fbaId, pages, orderCode };
       })
     );
-    setFbaFillEntries(entries.sort((a, b) => a.fbaId.localeCompare(b.fbaId)));
+    const sorted = entries.sort((a, b) => a.fbaId.localeCompare(b.fbaId));
+    setFbaFillEntries(sorted);
+    // Initialize pallet map: 1 per entry
+    const palletInit: Record<string, number> = {};
+    sorted.forEach((e) => { palletInit[e.fbaId] = 1; });
+    setFbaLtlPallets(palletInit);
     setFbaFillLog([]);
     setFbaFillModal(true);
   }
@@ -1833,7 +1838,8 @@ ${labels}
       if (fbaFillType === "ltl") {
         const labels = entry.pages + 4;
         const pickCarton = entry.pages;
-        taskText = `Labels×${labels}, Pick Carton×${pickCarton}, Out per pallet×${fbaLtlPallets}, Palletizing and wrapping×${fbaLtlPallets}`;
+        const pallets = fbaLtlPallets[entry.fbaId] ?? 1;
+        taskText = `Labels×${labels}, Pick Carton×${pickCarton}, Out per pallet×${pallets}, Palletizing and wrapping×${pallets}`;
       } else {
         // SPD or ULTA: same logic
         const labels = entry.pages;
@@ -3762,21 +3768,6 @@ ${labels}
               <div className="flex-1 overflow-y-auto p-5 space-y-4">
                 {fbaFillLog.length === 0 ? (
                   <>
-                    {/* LTL pallet input */}
-                    {fbaFillType === "ltl" && (
-                      <div className="flex items-center gap-3 p-3 bg-amber-50 border border-amber-200 rounded-xl">
-                        <div className="text-amber-700 font-medium text-sm whitespace-nowrap">Out per Pallet / Palletizing &amp; Wrapping 수량</div>
-                        <input
-                          type="number"
-                          min={1}
-                          value={fbaLtlPallets}
-                          onChange={(e) => setFbaLtlPallets(Math.max(1, parseInt(e.target.value) || 1))}
-                          className="w-24 border border-amber-300 rounded-lg px-3 py-1.5 text-sm text-center font-bold focus:outline-none focus:ring-2 focus:ring-amber-400"
-                        />
-                        <span className="text-xs text-amber-600">pallets</span>
-                      </div>
-                    )}
-
                     {/* Table */}
                     <table className="w-full text-sm">
                       <thead>
@@ -3787,8 +3778,7 @@ ${labels}
                             <>
                               <th className="text-right pb-2 text-blue-700">Labels (p+4)</th>
                               <th className="text-right pb-2 text-emerald-700">Pick Carton</th>
-                              <th className="text-right pb-2 text-amber-700">Out/Pallet</th>
-                              <th className="text-right pb-2 text-purple-700">Palletizing</th>
+                              <th className="text-right pb-2 text-amber-700">Pallets</th>
                             </>
                           ) : (
                             <>
@@ -3800,28 +3790,41 @@ ${labels}
                         </tr>
                       </thead>
                       <tbody>
-                        {fbaFillEntries.map((e) => (
-                          <tr key={e.fbaId} className={`border-b border-slate-50 ${e.orderCode ? "" : "opacity-40"}`}>
-                            <td className="py-1.5 font-mono text-xs">{e.fbaId}</td>
-                            <td className="py-1.5 text-right text-slate-500">{e.pages}</td>
-                            {fbaFillType === "ltl" ? (
-                              <>
-                                <td className="py-1.5 text-right font-bold text-blue-700">{e.pages + 4}</td>
-                                <td className="py-1.5 text-right font-bold text-emerald-700">{e.pages}</td>
-                                <td className="py-1.5 text-right font-bold text-amber-700">{fbaLtlPallets}</td>
-                                <td className="py-1.5 text-right font-bold text-purple-700">{fbaLtlPallets}</td>
-                              </>
-                            ) : (
-                              <>
-                                <td className="py-1.5 text-right font-bold text-blue-700">{e.pages}</td>
-                                <td className="py-1.5 text-right font-bold text-emerald-700">{Math.floor(e.pages / 2)}</td>
-                              </>
-                            )}
-                            <td className="py-1.5 pl-4 font-mono text-xs">
-                              {e.orderCode ? <span className="text-slate-800">{e.orderCode}</span> : <span className="text-red-400">No match</span>}
-                            </td>
-                          </tr>
-                        ))}
+                        {fbaFillEntries.map((e) => {
+                          const pallets = fbaLtlPallets[e.fbaId] ?? 1;
+                          return (
+                            <tr key={e.fbaId} className={`border-b border-slate-50 ${e.orderCode ? "" : "opacity-40"}`}>
+                              <td className="py-1.5 font-mono text-xs">{e.fbaId}</td>
+                              <td className="py-1.5 text-right text-slate-500">{e.pages}</td>
+                              {fbaFillType === "ltl" ? (
+                                <>
+                                  <td className="py-1.5 text-right font-bold text-blue-700">{e.pages + 4}</td>
+                                  <td className="py-1.5 text-right font-bold text-emerald-700">{e.pages}</td>
+                                  <td className="py-1.5 text-right">
+                                    <input
+                                      type="number"
+                                      min={1}
+                                      value={pallets}
+                                      onChange={(ev) => {
+                                        const v = Math.max(1, parseInt(ev.target.value) || 1);
+                                        setFbaLtlPallets((prev) => ({ ...prev, [e.fbaId]: v }));
+                                      }}
+                                      className="w-16 border border-amber-300 rounded-md px-2 py-0.5 text-sm text-center font-bold text-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                                    />
+                                  </td>
+                                </>
+                              ) : (
+                                <>
+                                  <td className="py-1.5 text-right font-bold text-blue-700">{e.pages}</td>
+                                  <td className="py-1.5 text-right font-bold text-emerald-700">{Math.floor(e.pages / 2)}</td>
+                                </>
+                              )}
+                              <td className="py-1.5 pl-4 font-mono text-xs">
+                                {e.orderCode ? <span className="text-slate-800">{e.orderCode}</span> : <span className="text-red-400">No match</span>}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </>
