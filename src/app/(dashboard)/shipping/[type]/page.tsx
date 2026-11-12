@@ -276,9 +276,10 @@ export default function ShippingTypePage() {
   const [fbaFillEntries, setFbaFillEntries] = useState<FbaEntry[]>([]);
 
   /* ── Packing List state ── */
-  const [packingRows,     setPackingRows]     = useState<PackingRow[]>([]);
-  const [packingLoading,  setPackingLoading]  = useState(false);
-  const [packingSaving,   setPackingSaving]   = useState(false);
+  const [packingRows,       setPackingRows]       = useState<PackingRow[]>([]);
+  const [packingLoading,    setPackingLoading]    = useState(false);
+  const [packingSaving,     setPackingSaving]     = useState(false);
+  const [showPalletSummary, setShowPalletSummary] = useState(false);
 
   /* ── Picking Allocation state (B2B only) ── */
   const [selectedCodes,  setSelectedCodes]  = useState<Record<string, boolean>>({});
@@ -461,6 +462,7 @@ export default function ShippingTypePage() {
     setShippingItemsRaw([]);
     setItemDetailsRaw([]);
     setPackingRows([]);
+    setShowPalletSummary(false);
     if (!keepTab) setActiveTab("info");
     setDetailLoading(true);
     setOccupancyMap(new Map());
@@ -2076,6 +2078,21 @@ ${labels}
       .map((it) => ({ ...it, _unassigned: true, qty: it.unassignedQty, assignedQty: 0, remainQty: it.unassignedQty })),
   ];
 
+  /* SKU → total picking qty (for Remain calculation in Packing List) */
+  const skuPickingQty = useMemo(() => {
+    const map = new Map<string, { qty: number; productName: string }>();
+    pickingRows.forEach((it) => {
+      const sku = String((it as Record<string, unknown>).productSku ?? (it as Record<string, unknown>).sku ?? "");
+      if (!sku) return;
+      const qty = Number((it as Record<string, unknown>).qty ?? (it as Record<string, unknown>).totalQty ?? 0);
+      const name = String((it as Record<string, unknown>).productName ?? (it as Record<string, unknown>).itemName ?? "");
+      const prev = map.get(sku);
+      if (prev) prev.qty += qty;
+      else map.set(sku, { qty, productName: name });
+    });
+    return map;
+  }, [pickingRows]);
+
   /* Fields to skip in "extra" section */
   const SKIP_FIELDS = new Set([
     "shippingOrderCode","orderCode","outboundCode","status","orderStatus","statusName",
@@ -2868,205 +2885,331 @@ ${labels}
                     </div>
 
                     {/* ── Packing List ── */}
-                    <div className="border-t border-slate-100 pt-5">
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-2">
-                          <Layers className="w-4 h-4 text-slate-400" />
-                          <p className="text-xs text-slate-400 uppercase tracking-wide">Packing List</p>
-                          {packingRows.length > 0 && (
-                            <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-full px-2 py-0.5">
-                              {packingRows.reduce((s, r) => s + r.carton_count, 0)} CTN / {packingRows.reduce((s, r) => s + r.total_qty, 0)} PCS
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {/* Auto-fill from picking items */}
-                          {itemsRaw.length > 0 && packingRows.length === 0 && (
-                            <button
-                              onClick={async () => {
-                                const orderCode = String(selected?.shippingOrderCode ?? selected?.orderCode ?? selected?.outboundCode ?? "");
-                                const newRows: Omit<PackingRow, "id" | "total_qty">[] = itemsRaw.map((item) => ({
-                                  order_code: orderCode,
-                                  sku: String(item.sku ?? item.stockCode ?? item.itemCode ?? ""),
-                                  product_name: String(item.productName ?? item.itemName ?? ""),
-                                  qty_per_carton: 0,
-                                  carton_count: 0,
-                                  pallet_no: "",
-                                  note: "",
-                                }));
-                                const res = await fetch("/api/packing-list", {
-                                  method: "POST",
-                                  headers: { ...authHeader, "Content-Type": "application/json" },
-                                  body: JSON.stringify(newRows),
-                                });
-                                const data = await res.json();
-                                if (data.rows) setPackingRows(data.rows);
-                              }}
-                              className="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-700 border border-blue-200 hover:border-blue-400 rounded-lg px-2.5 py-1.5 transition-colors"
-                            >
-                              <PackageCheck className="w-3.5 h-3.5" /> SKU 자동 불러오기
-                            </button>
-                          )}
-                          {/* Add empty row */}
-                          <button
-                            onClick={async () => {
-                              const orderCode = String(selected?.shippingOrderCode ?? selected?.orderCode ?? selected?.outboundCode ?? "");
-                              const res = await fetch("/api/packing-list", {
-                                method: "POST",
-                                headers: { ...authHeader, "Content-Type": "application/json" },
-                                body: JSON.stringify([{ order_code: orderCode, sku: "", product_name: "", qty_per_carton: 0, carton_count: 0, pallet_no: "", note: "" }]),
-                              });
-                              const data = await res.json();
-                              if (data.rows) setPackingRows((prev) => [...prev, ...data.rows]);
-                            }}
-                            className="flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-400 rounded-lg px-2.5 py-1.5 transition-colors"
-                          >
-                            <Plus className="w-3.5 h-3.5" /> 행 추가
-                          </button>
-                          {/* Excel export */}
-                          {packingRows.length > 0 && (
-                            <button
-                              onClick={() => {
-                                const orderCode = String(selected?.shippingOrderCode ?? selected?.orderCode ?? selected?.outboundCode ?? "");
-                                const wsData = [
-                                  ["Order Code", "SKU", "Product Name", "Qty/Carton", "Carton Count", "Total Qty", "Pallet No", "Note"],
-                                  ...packingRows.map((r) => [orderCode, r.sku, r.product_name, r.qty_per_carton, r.carton_count, r.total_qty, r.pallet_no, r.note]),
-                                  [],
-                                  ["", "", "TOTAL", "", packingRows.reduce((s, r) => s + r.carton_count, 0), packingRows.reduce((s, r) => s + r.total_qty, 0), "", ""],
-                                ];
-                                const ws = XLSX.utils.aoa_to_sheet(wsData);
-                                ws["!cols"] = [{ wch: 24 }, { wch: 16 }, { wch: 30 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 20 }];
-                                const wb = XLSX.utils.book_new();
-                                XLSX.utils.book_append_sheet(wb, ws, "Packing List");
-                                XLSX.writeFile(wb, `PackingList_${orderCode}.xlsx`);
-                              }}
-                              className="flex items-center gap-1.5 text-xs font-medium text-green-700 border border-green-200 hover:border-green-400 rounded-lg px-2.5 py-1.5 transition-colors"
-                            >
-                              <FileSpreadsheet className="w-3.5 h-3.5" /> Excel 추출
-                            </button>
-                          )}
-                        </div>
-                      </div>
+                    {(() => {
+                      const orderCode = String(selected?.shippingOrderCode ?? selected?.orderCode ?? selected?.outboundCode ?? "");
+                      const hasPickingData = skuPickingQty.size > 0;
+                      const totalCtn = packingRows.reduce((s, r) => s + r.carton_count, 0);
+                      const totalPcs = packingRows.reduce((s, r) => s + r.total_qty, 0);
 
-                      {packingLoading ? (
-                        <div className="flex items-center justify-center py-6 text-slate-400 text-sm gap-2">
-                          <Loader2 className="w-4 h-4 animate-spin" /> 로딩 중...
-                        </div>
-                      ) : packingRows.length === 0 ? (
-                        <div className="text-center py-6 text-slate-400 text-sm border border-dashed border-slate-200 rounded-xl">
-                          패킹 리스트가 없습니다. 행을 추가하거나 SKU 자동 불러오기를 사용하세요.
-                        </div>
-                      ) : (
-                        <div className="overflow-x-auto rounded-xl border border-slate-200">
-                          <table className="w-full text-sm">
-                            <thead>
-                              <tr className="bg-slate-50 border-b border-slate-200">
-                                {["SKU", "Product Name", "Qty/CTN", "CTN 수", "Total PCS", "Pallet No", "Note", ""].map((h) => (
-                                  <th key={h} className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wide px-3 py-2.5 whitespace-nowrap">{h}</th>
-                                ))}
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100">
-                              {packingRows.map((row, idx) => (
-                                <tr key={row.id ?? idx} className="hover:bg-slate-50 transition-colors">
-                                  {(["sku", "product_name"] as const).map((field) => (
-                                    <td key={field} className="px-3 py-2">
-                                      <input
-                                        type="text"
-                                        value={row[field]}
-                                        onChange={(e) => setPackingRows((prev) => prev.map((r, i) => i === idx ? { ...r, [field]: e.target.value } : r))}
-                                        onBlur={async () => {
-                                          if (!row.id) return;
-                                          await fetch(`/api/packing-list?id=${row.id}`, {
-                                            method: "PATCH",
-                                            headers: { ...authHeader, "Content-Type": "application/json" },
-                                            body: JSON.stringify({ [field]: row[field] }),
-                                          });
-                                        }}
-                                        className="w-full min-w-[80px] text-sm text-slate-800 border border-transparent hover:border-slate-200 focus:border-blue-400 focus:outline-none rounded px-1.5 py-1 bg-transparent focus:bg-white transition-colors"
-                                      />
+                      // Pallet summary: group by pallet_no
+                      const palletGroups = new Map<string, PackingRow[]>();
+                      packingRows.forEach((r) => {
+                        const key = r.pallet_no?.trim() || "미지정";
+                        const arr = palletGroups.get(key) ?? [];
+                        arr.push(r);
+                        palletGroups.set(key, arr);
+                      });
+
+                      return (
+                        <div className="border-t border-slate-100 pt-5">
+                          {/* Header row */}
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-2">
+                              <Layers className="w-4 h-4 text-slate-400" />
+                              <p className="text-xs text-slate-400 uppercase tracking-wide">Packing List</p>
+                              {packingRows.length > 0 && (
+                                <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-full px-2 py-0.5">
+                                  {totalCtn} CTN / {totalPcs.toLocaleString()} PCS
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {/* Reload from DB */}
+                              <button
+                                onClick={() => loadPackingList(orderCode)}
+                                disabled={packingLoading}
+                                className="flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-700 border border-slate-200 hover:border-slate-400 rounded-lg px-2.5 py-1.5 transition-colors disabled:opacity-40"
+                                title="저장된 패킹 리스트 다시 불러오기"
+                              >
+                                <RefreshCw className={`w-3.5 h-3.5 ${packingLoading ? "animate-spin" : ""}`} /> 다시 불러오기
+                              </button>
+                              {/* Auto-fill from picking (always shown when picking data exists) */}
+                              {hasPickingData && (
+                                <button
+                                  onClick={async () => {
+                                    // Delete existing rows first
+                                    if (packingRows.length > 0) {
+                                      await fetch(`/api/packing-list?order_code=${encodeURIComponent(orderCode)}`, { method: "DELETE", headers: authHeader });
+                                    }
+                                    // Build unique-SKU rows from picking
+                                    const newRows = Array.from(skuPickingQty.entries()).map(([sku, { productName }]) => ({
+                                      order_code: orderCode,
+                                      sku,
+                                      product_name: productName,
+                                      qty_per_carton: 0,
+                                      carton_count: 0,
+                                      pallet_no: "",
+                                      note: "",
+                                    }));
+                                    const res = await fetch("/api/packing-list", {
+                                      method: "POST",
+                                      headers: { ...authHeader, "Content-Type": "application/json" },
+                                      body: JSON.stringify(newRows),
+                                    });
+                                    const data = await res.json();
+                                    if (data.rows) setPackingRows(data.rows);
+                                    setShowPalletSummary(false);
+                                  }}
+                                  className="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-700 border border-blue-200 hover:border-blue-400 rounded-lg px-2.5 py-1.5 transition-colors"
+                                >
+                                  <PackageCheck className="w-3.5 h-3.5" /> SKU 자동 불러오기
+                                </button>
+                              )}
+                              {/* Add empty row */}
+                              <button
+                                onClick={async () => {
+                                  const res = await fetch("/api/packing-list", {
+                                    method: "POST",
+                                    headers: { ...authHeader, "Content-Type": "application/json" },
+                                    body: JSON.stringify([{ order_code: orderCode, sku: "", product_name: "", qty_per_carton: 0, carton_count: 0, pallet_no: "", note: "" }]),
+                                  });
+                                  const data = await res.json();
+                                  if (data.rows) setPackingRows((prev) => [...prev, ...data.rows]);
+                                }}
+                                className="flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-400 rounded-lg px-2.5 py-1.5 transition-colors"
+                              >
+                                <Plus className="w-3.5 h-3.5" /> 행 추가
+                              </button>
+                              {packingRows.length > 0 && (
+                                <>
+                                  {/* 완료 — show pallet summary */}
+                                  <button
+                                    onClick={() => setShowPalletSummary((v) => !v)}
+                                    className={`flex items-center gap-1.5 text-xs font-semibold rounded-lg px-2.5 py-1.5 transition-colors border ${
+                                      showPalletSummary
+                                        ? "bg-emerald-600 text-white border-emerald-600"
+                                        : "text-emerald-700 border-emerald-300 hover:border-emerald-500"
+                                    }`}
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5" /> {showPalletSummary ? "입력 화면" : "완료 / 팔렛 요약"}
+                                  </button>
+                                  {/* Excel export */}
+                                  <button
+                                    onClick={() => {
+                                      const wsData: (string | number)[][] = [
+                                        ["Order Code", "SKU", "Product Name", "Qty/Carton", "Carton Count", "Total Qty", "Pallet No", "Note"],
+                                        ...packingRows.map((r) => [orderCode, r.sku, r.product_name, r.qty_per_carton, r.carton_count, r.total_qty, r.pallet_no, r.note]),
+                                        [],
+                                        ["", "", "TOTAL", "", totalCtn, totalPcs, "", ""],
+                                      ];
+                                      // Pallet-grouped sheets
+                                      const wb = XLSX.utils.book_new();
+                                      const ws = XLSX.utils.aoa_to_sheet(wsData);
+                                      ws["!cols"] = [{ wch: 24 }, { wch: 16 }, { wch: 30 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 20 }];
+                                      XLSX.utils.book_append_sheet(wb, ws, "Packing List");
+                                      // Pallet summary sheet
+                                      const palletData: (string | number)[][] = [["Pallet No", "SKU", "Product Name", "Qty/CTN", "CTN", "Total PCS"]];
+                                      palletGroups.forEach((rows, pallet) => {
+                                        rows.forEach((r) => palletData.push([pallet, r.sku, r.product_name, r.qty_per_carton, r.carton_count, r.total_qty]));
+                                        const ptl = rows.reduce((s, r) => s + r.carton_count, 0);
+                                        const pps = rows.reduce((s, r) => s + r.total_qty, 0);
+                                        palletData.push(["", "", `[${pallet} 소계]`, "", ptl, pps]);
+                                        palletData.push([]);
+                                      });
+                                      const ws2 = XLSX.utils.aoa_to_sheet(palletData);
+                                      ws2["!cols"] = [{ wch: 12 }, { wch: 16 }, { wch: 30 }, { wch: 10 }, { wch: 8 }, { wch: 12 }];
+                                      XLSX.utils.book_append_sheet(wb, ws2, "By Pallet");
+                                      XLSX.writeFile(wb, `PackingList_${orderCode}.xlsx`);
+                                    }}
+                                    className="flex items-center gap-1.5 text-xs font-medium text-green-700 border border-green-200 hover:border-green-400 rounded-lg px-2.5 py-1.5 transition-colors"
+                                  >
+                                    <FileSpreadsheet className="w-3.5 h-3.5" /> Excel 추출
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </div>
+
+                          {packingLoading ? (
+                            <div className="flex items-center justify-center py-6 text-slate-400 text-sm gap-2">
+                              <Loader2 className="w-4 h-4 animate-spin" /> 로딩 중...
+                            </div>
+                          ) : packingRows.length === 0 ? (
+                            <div className="text-center py-6 text-slate-400 text-sm border border-dashed border-slate-200 rounded-xl">
+                              행을 추가하거나{hasPickingData ? " SKU 자동 불러오기를 사용하세요." : " 직접 입력하세요."}
+                            </div>
+                          ) : showPalletSummary ? (
+                            /* ── Pallet Summary View ── */
+                            <div className="space-y-4">
+                              {Array.from(palletGroups.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([pallet, rows]) => {
+                                const pCtn = rows.reduce((s, r) => s + r.carton_count, 0);
+                                const pPcs = rows.reduce((s, r) => s + r.total_qty, 0);
+                                return (
+                                  <div key={pallet} className="border border-slate-200 rounded-xl overflow-hidden">
+                                    <div className="bg-slate-800 text-white px-4 py-2 flex items-center justify-between">
+                                      <span className="text-sm font-bold">🏷️ Pallet {pallet}</span>
+                                      <span className="text-xs text-slate-300">{pCtn} CTN / {pPcs.toLocaleString()} PCS</span>
+                                    </div>
+                                    <table className="w-full text-sm">
+                                      <thead>
+                                        <tr className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500 uppercase">
+                                          <th className="text-left px-3 py-2">SKU</th>
+                                          <th className="text-left px-3 py-2">Product</th>
+                                          <th className="text-right px-3 py-2">Qty/CTN</th>
+                                          <th className="text-right px-3 py-2">CTN</th>
+                                          <th className="text-right px-3 py-2">Total PCS</th>
+                                          <th className="text-left px-3 py-2">Note</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-slate-100">
+                                        {rows.map((r, i) => (
+                                          <tr key={i} className="hover:bg-slate-50">
+                                            <td className="px-3 py-2 font-mono text-xs">{r.sku}</td>
+                                            <td className="px-3 py-2 text-slate-700">{r.product_name}</td>
+                                            <td className="px-3 py-2 text-right tabular-nums">{r.qty_per_carton}</td>
+                                            <td className="px-3 py-2 text-right tabular-nums font-semibold">{r.carton_count}</td>
+                                            <td className="px-3 py-2 text-right tabular-nums font-bold text-blue-700">{r.total_qty.toLocaleString()}</td>
+                                            <td className="px-3 py-2 text-slate-500 text-xs">{r.note}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                );
+                              })}
+                              {/* Grand total */}
+                              <div className="flex items-center justify-between bg-slate-800 text-white rounded-xl px-5 py-3">
+                                <span className="text-sm font-semibold">전체 합계</span>
+                                <div className="flex gap-6 text-sm tabular-nums">
+                                  <span><span className="text-slate-400 text-xs mr-1">CTN</span><strong>{totalCtn}</strong></span>
+                                  <span><span className="text-slate-400 text-xs mr-1">PCS</span><strong>{totalPcs.toLocaleString()}</strong></span>
+                                  <span><span className="text-slate-400 text-xs mr-1">Pallets</span><strong>{palletGroups.size}</strong></span>
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            /* ── Editing View ── */
+                            <div className="overflow-x-auto rounded-xl border border-slate-200">
+                              <table className="w-full text-sm">
+                                <thead>
+                                  <tr className="bg-slate-50 border-b border-slate-200">
+                                    {["SKU", "Product Name", "Qty/CTN", "CTN 수", "Total PCS", "Remain", "Pallet No", "Note", ""].map((h) => (
+                                      <th key={h} className={`text-xs font-semibold text-slate-500 uppercase tracking-wide px-3 py-2.5 whitespace-nowrap ${h === "Remain" ? "text-right text-orange-500" : "text-left"}`}>{h}</th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {packingRows.map((row, idx) => {
+                                    const pickTotal = skuPickingQty.get(row.sku)?.qty ?? null;
+                                    const packed = row.qty_per_carton * row.carton_count;
+                                    const remain = pickTotal !== null ? pickTotal - packed : null;
+                                    return (
+                                      <tr key={row.id ?? idx} className="hover:bg-slate-50 transition-colors">
+                                        {(["sku", "product_name"] as const).map((field) => (
+                                          <td key={field} className="px-3 py-2">
+                                            <input
+                                              type="text"
+                                              value={row[field]}
+                                              onChange={(e) => setPackingRows((prev) => prev.map((r, i) => i === idx ? { ...r, [field]: e.target.value } : r))}
+                                              onBlur={async () => {
+                                                if (!row.id) return;
+                                                await fetch(`/api/packing-list?id=${row.id}`, {
+                                                  method: "PATCH",
+                                                  headers: { ...authHeader, "Content-Type": "application/json" },
+                                                  body: JSON.stringify({ [field]: row[field] }),
+                                                });
+                                              }}
+                                              className="w-full min-w-[80px] text-sm text-slate-800 border border-transparent hover:border-slate-200 focus:border-blue-400 focus:outline-none rounded px-1.5 py-1 bg-transparent focus:bg-white transition-colors"
+                                            />
+                                          </td>
+                                        ))}
+                                        {(["qty_per_carton", "carton_count"] as const).map((field) => (
+                                          <td key={field} className="px-3 py-2">
+                                            <input
+                                              type="number"
+                                              min={0}
+                                              value={row[field] || ""}
+                                              onChange={(e) => {
+                                                const val = Number(e.target.value) || 0;
+                                                setPackingRows((prev) => prev.map((r, i) => {
+                                                  if (i !== idx) return r;
+                                                  const updated = { ...r, [field]: val };
+                                                  updated.total_qty = updated.qty_per_carton * updated.carton_count;
+                                                  return updated;
+                                                }));
+                                              }}
+                                              onBlur={async () => {
+                                                if (!row.id) return;
+                                                await fetch(`/api/packing-list?id=${row.id}`, {
+                                                  method: "PATCH",
+                                                  headers: { ...authHeader, "Content-Type": "application/json" },
+                                                  body: JSON.stringify({ qty_per_carton: row.qty_per_carton, carton_count: row.carton_count }),
+                                                });
+                                              }}
+                                              className="w-20 text-sm text-right tabular-nums text-slate-800 border border-transparent hover:border-slate-200 focus:border-blue-400 focus:outline-none rounded px-1.5 py-1 bg-transparent focus:bg-white transition-colors"
+                                            />
+                                          </td>
+                                        ))}
+                                        {/* Total PCS */}
+                                        <td className="px-3 py-2 text-right tabular-nums font-semibold text-slate-700">
+                                          {packed.toLocaleString()}
+                                        </td>
+                                        {/* Remain */}
+                                        <td className="px-3 py-2 text-right tabular-nums font-bold">
+                                          {remain === null ? (
+                                            <span className="text-slate-300">—</span>
+                                          ) : remain === 0 ? (
+                                            <span className="text-emerald-600">✓ 0</span>
+                                          ) : (
+                                            <span className={remain > 0 ? "text-orange-500" : "text-red-600"}>{remain.toLocaleString()}</span>
+                                          )}
+                                        </td>
+                                        {(["pallet_no", "note"] as const).map((field) => (
+                                          <td key={field} className="px-3 py-2">
+                                            <input
+                                              type="text"
+                                              value={row[field]}
+                                              onChange={(e) => setPackingRows((prev) => prev.map((r, i) => i === idx ? { ...r, [field]: e.target.value } : r))}
+                                              onBlur={async () => {
+                                                if (!row.id) return;
+                                                await fetch(`/api/packing-list?id=${row.id}`, {
+                                                  method: "PATCH",
+                                                  headers: { ...authHeader, "Content-Type": "application/json" },
+                                                  body: JSON.stringify({ [field]: row[field] }),
+                                                });
+                                              }}
+                                              className="w-full min-w-[60px] text-sm text-slate-800 border border-transparent hover:border-slate-200 focus:border-blue-400 focus:outline-none rounded px-1.5 py-1 bg-transparent focus:bg-white transition-colors"
+                                            />
+                                          </td>
+                                        ))}
+                                        <td className="px-2 py-2">
+                                          <button
+                                            onClick={async () => {
+                                              if (row.id) {
+                                                await fetch(`/api/packing-list?id=${row.id}`, { method: "DELETE", headers: authHeader });
+                                              }
+                                              setPackingRows((prev) => prev.filter((_, i) => i !== idx));
+                                            }}
+                                            className="text-slate-300 hover:text-red-500 transition-colors p-1"
+                                          >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                                <tfoot>
+                                  <tr className="bg-slate-50 border-t-2 border-slate-200 font-semibold">
+                                    <td colSpan={3} className="px-3 py-2 text-xs text-slate-500 uppercase">Total</td>
+                                    <td className="px-3 py-2 text-right tabular-nums text-slate-700">{totalCtn} CTN</td>
+                                    <td className="px-3 py-2 text-right tabular-nums text-slate-700">{totalPcs.toLocaleString()} PCS</td>
+                                    <td className="px-3 py-2 text-right tabular-nums text-xs text-orange-500">
+                                      {(() => {
+                                        const totalPicking = Array.from(skuPickingQty.values()).reduce((s, { qty }) => s + qty, 0);
+                                        const rem = totalPicking > 0 ? totalPicking - totalPcs : null;
+                                        return rem === null ? "" : rem === 0 ? <span className="text-emerald-600 font-bold">✓ 완료</span> : `${rem.toLocaleString()} 남음`;
+                                      })()}
                                     </td>
-                                  ))}
-                                  {(["qty_per_carton", "carton_count"] as const).map((field) => (
-                                    <td key={field} className="px-3 py-2">
-                                      <input
-                                        type="number"
-                                        min={0}
-                                        value={row[field] || ""}
-                                        onChange={(e) => {
-                                          const val = Number(e.target.value) || 0;
-                                          setPackingRows((prev) => prev.map((r, i) => {
-                                            if (i !== idx) return r;
-                                            const updated = { ...r, [field]: val };
-                                            updated.total_qty = updated.qty_per_carton * updated.carton_count;
-                                            return updated;
-                                          }));
-                                        }}
-                                        onBlur={async () => {
-                                          if (!row.id) return;
-                                          await fetch(`/api/packing-list?id=${row.id}`, {
-                                            method: "PATCH",
-                                            headers: { ...authHeader, "Content-Type": "application/json" },
-                                            body: JSON.stringify({ qty_per_carton: row.qty_per_carton, carton_count: row.carton_count }),
-                                          });
-                                        }}
-                                        className="w-20 text-sm text-right tabular-nums text-slate-800 border border-transparent hover:border-slate-200 focus:border-blue-400 focus:outline-none rounded px-1.5 py-1 bg-transparent focus:bg-white transition-colors"
-                                      />
-                                    </td>
-                                  ))}
-                                  <td className="px-3 py-2 text-right tabular-nums font-semibold text-slate-700">
-                                    {(row.qty_per_carton * row.carton_count).toLocaleString()}
-                                  </td>
-                                  {(["pallet_no", "note"] as const).map((field) => (
-                                    <td key={field} className="px-3 py-2">
-                                      <input
-                                        type="text"
-                                        value={row[field]}
-                                        onChange={(e) => setPackingRows((prev) => prev.map((r, i) => i === idx ? { ...r, [field]: e.target.value } : r))}
-                                        onBlur={async () => {
-                                          if (!row.id) return;
-                                          await fetch(`/api/packing-list?id=${row.id}`, {
-                                            method: "PATCH",
-                                            headers: { ...authHeader, "Content-Type": "application/json" },
-                                            body: JSON.stringify({ [field]: row[field] }),
-                                          });
-                                        }}
-                                        className="w-full min-w-[60px] text-sm text-slate-800 border border-transparent hover:border-slate-200 focus:border-blue-400 focus:outline-none rounded px-1.5 py-1 bg-transparent focus:bg-white transition-colors"
-                                      />
-                                    </td>
-                                  ))}
-                                  <td className="px-2 py-2">
-                                    <button
-                                      onClick={async () => {
-                                        if (row.id) {
-                                          await fetch(`/api/packing-list?id=${row.id}`, { method: "DELETE", headers: authHeader });
-                                        }
-                                        setPackingRows((prev) => prev.filter((_, i) => i !== idx));
-                                      }}
-                                      className="text-slate-300 hover:text-red-500 transition-colors p-1"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                            <tfoot>
-                              <tr className="bg-slate-50 border-t-2 border-slate-200 font-semibold">
-                                <td colSpan={3} className="px-3 py-2 text-xs text-slate-500 uppercase">Total</td>
-                                <td className="px-3 py-2 text-right tabular-nums text-slate-700">
-                                  {packingRows.reduce((s, r) => s + r.carton_count, 0)} CTN
-                                </td>
-                                <td className="px-3 py-2 text-right tabular-nums text-slate-700">
-                                  {packingRows.reduce((s, r) => s + r.total_qty, 0).toLocaleString()} PCS
-                                </td>
-                                <td colSpan={3} />
-                              </tr>
-                            </tfoot>
-                          </table>
+                                    <td colSpan={3} />
+                                  </tr>
+                                </tfoot>
+                              </table>
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
+                      );
+                    })()}
                   </div>
                 )}
 
