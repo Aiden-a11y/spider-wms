@@ -272,7 +272,7 @@ export default function ShippingTypePage() {
   type FbaFillType = "spd" | "ltl" | "ulta";
   const [fbaFillType, setFbaFillType] = useState<FbaFillType>("spd");
   const [fbaLtlPallets, setFbaLtlPallets] = useState<Record<string, number>>({});
-  type FbaEntry = { fbaId: string; pages: number; orderCode: string | null };
+  type FbaEntry = { fbaId: string; pages: number; orderCode: string | null; order: Order | null };
   const [fbaFillEntries, setFbaFillEntries] = useState<FbaEntry[]>([]);
 
   /* ── Packing List state ── */
@@ -1795,7 +1795,7 @@ ${labels}
         const pages = await countPdfPages(f);
         const matched = orders.find((o) => String(o.shippingOrderNo ?? "").trim().toUpperCase() === fbaId);
         const orderCode = matched ? String(matched.shippingOrderCode ?? matched.orderCode ?? "") : null;
-        return { fbaId, pages, orderCode };
+        return { fbaId, pages, orderCode, order: matched ?? null };
       })
     );
     const sorted = entries.sort((a, b) => a.fbaId.localeCompare(b.fbaId));
@@ -1813,9 +1813,11 @@ ${labels}
     const matched = fbaFillEntries.filter((e) => e.orderCode);
     const log: string[] = [];
     for (const entry of matched) {
-      log.push(`${entry.fbaId} → fetching…`);
+      log.push(`${entry.fbaId} → fetching detail…`);
       setFbaFillLog([...log]);
-      let detail: Record<string, unknown> | null = null;
+
+      // Fetch detail — merge with list-row data (same as openDetail)
+      let fetched: Record<string, unknown> | null = null;
       for (const ep of [
         `/api/wms/shipping/${entry.orderCode}`,
         `/api/wms/shipping/${type}/${entry.orderCode}`,
@@ -1825,15 +1827,30 @@ ${labels}
           const r = await fetch(ep, { headers });
           if (!r.ok) continue;
           const j = await r.json();
-          const d = j?.data ?? j;
-          if (d && typeof d === "object" && !Array.isArray(d)) { detail = d as Record<string, unknown>; break; }
+          const d = (j?.data ?? j) as Record<string, unknown>;
+          // Must have at least one order-code field (same validation as openDetail)
+          if (!d || typeof d !== "object" || Array.isArray(d)) continue;
+          if (!(d.shippingOrderCode ?? d.orderCode ?? d.outboundCode)) continue;
+          fetched = d;
+          break;
         } catch { continue; }
       }
-      if (!detail) {
+
+      // Merge list-row + detail (list-row is the base, detail overrides)
+      const baseOrder = entry.order ? { ...(entry.order as Record<string, unknown>) } : {};
+      const mergedDetail: Record<string, unknown> = fetched
+        ? { ...baseOrder, ...fetched }
+        : baseOrder;
+
+      if (!fetched && !entry.order) {
         log[log.length - 1] = `${entry.fbaId} → ❌ Could not fetch detail`;
         setFbaFillLog([...log]);
         continue;
       }
+
+      log[log.length - 1] = `${entry.fbaId} → saving…`;
+      setFbaFillLog([...log]);
+
       let taskText: string;
       if (fbaFillType === "ltl") {
         const labels = entry.pages + 4;
@@ -1841,24 +1858,27 @@ ${labels}
         const pallets = fbaLtlPallets[entry.fbaId] ?? 1;
         taskText = `Labels×${labels}, Pick Carton×${pickCarton}, Out per pallet×${pallets}, Palletizing and wrapping×${pallets}`;
       } else {
-        // SPD or ULTA: same logic
         const labels = entry.pages;
         const pickPack = Math.floor(labels / 2);
         taskText = `Labels×${labels}, Picking per Carton×${pickPack}, Packing per Carton×${pickPack}`;
       }
-      const existing = String(detail.comment ?? "").trim();
+
+      const existing = String(mergedDetail.comment ?? "").trim();
       const newComment = existing ? `${existing} | ${taskText}` : taskText;
+
+      // Only send primitive fields (WMS API rejects nested objects)
       const payload = Object.fromEntries(
-        Object.entries({ ...detail, comment: newComment })
+        Object.entries({ ...mergedDetail, comment: newComment })
           .filter(([, v]) => v === null || typeof v === "string" || typeof v === "number" || typeof v === "boolean")
       );
+
       try {
         const r = await fetch("/api/wms/shipping/save", { method: "POST", headers, body: JSON.stringify(payload) });
-        const j = await r.json().catch(() => null);
-        if (r.ok && (j as Record<string,unknown>)?.isSuccess !== false) {
-          log[log.length - 1] = `${entry.fbaId} → ✅ Saved (${taskText})`;
+        const j = await r.json().catch(() => null) as Record<string, unknown> | null;
+        if (r.ok && j?.isSuccess !== false) {
+          log[log.length - 1] = `${entry.fbaId} → ✅ ${taskText}`;
         } else {
-          log[log.length - 1] = `${entry.fbaId} → ❌ ${(j as Record<string,unknown>)?.message ?? "Save failed"}`;
+          log[log.length - 1] = `${entry.fbaId} → ❌ ${j?.message ?? `HTTP ${r.status}`}`;
         }
       } catch {
         log[log.length - 1] = `${entry.fbaId} → ❌ Network error`;
