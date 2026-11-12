@@ -280,6 +280,11 @@ export default function ShippingTypePage() {
   const [packingLoading,    setPackingLoading]    = useState(false);
   const [packingSaving,     setPackingSaving]     = useState(false);
   const [showPalletSummary, setShowPalletSummary] = useState(false);
+  const [activePallet, setActivePallet] = useState<string>("");
+  const [palletMeta, setPalletMeta] = useState<Record<string, { l: string; w: string; h: string; weight: string }>>({});
+  const [packAddSku, setPackAddSku] = useState<string>("");
+  const [packAddQtyPerCtn, setPackAddQtyPerCtn] = useState<string>("");
+  const [packAddCtnCount, setPackAddCtnCount] = useState<string>("");
 
   /* ── Picking Allocation state (B2B only) ── */
   const [selectedCodes,  setSelectedCodes]  = useState<Record<string, boolean>>({});
@@ -463,6 +468,11 @@ export default function ShippingTypePage() {
     setItemDetailsRaw([]);
     setPackingRows([]);
     setShowPalletSummary(false);
+    setActivePallet("");
+    setPalletMeta({});
+    setPackAddSku("");
+    setPackAddQtyPerCtn("");
+    setPackAddCtnCount("");
     if (!keepTab) setActiveTab("info");
     setDetailLoading(true);
     setOccupancyMap(new Map());
@@ -2887,341 +2897,429 @@ ${labels}
                       </div>
                     </div>
 
-                    {/* ── Packing List ── */}
+                    {/* ── Packing ── */}
                     {(() => {
                       const orderCode = String(selected?.shippingOrderCode ?? selected?.orderCode ?? selected?.outboundCode ?? "");
-                      const hasPickingData = skuPickingQty.size > 0;
                       const totalCtn = packingRows.reduce((s, r) => s + r.carton_count, 0);
                       const totalPcs = packingRows.reduce((s, r) => s + r.total_qty, 0);
 
-                      // SKU별 packed 합계 (같은 SKU가 여러 팔렛에 나뉘어도 정확히 계산)
+                      // packed qty per SKU across all pallets
                       const packedBySku = new Map<string, number>();
                       packingRows.forEach((r) => {
                         if (!r.sku) return;
                         packedBySku.set(r.sku, (packedBySku.get(r.sku) ?? 0) + r.qty_per_carton * r.carton_count);
                       });
 
-                      // Pallet summary: group by pallet_no
+                      // Derive existing pallet numbers from rows
+                      const palletNos = Array.from(
+                        new Set(packingRows.map((r) => r.pallet_no?.trim()).filter(Boolean))
+                      ).sort((a, b) => (parseInt(a) || 0) - (parseInt(b) || 0));
+
+                      // Active pallet: use state if set and valid, else first existing, else ""
+                      const curPallet = (activePallet && (palletNos.includes(activePallet) || activePallet === "__new__"))
+                        ? activePallet
+                        : palletNos[0] ?? "";
+
+                      const palletRows = packingRows.filter((r) => r.pallet_no?.trim() === curPallet);
+                      const palletCtn  = palletRows.reduce((s, r) => s + r.carton_count, 0);
+                      const palletPcs  = palletRows.reduce((s, r) => s + r.total_qty, 0);
+                      const meta = palletMeta[curPallet] ?? { l: "", w: "", h: "", weight: "" };
+
+                      // Groups for summary / Excel
                       const palletGroups = new Map<string, PackingRow[]>();
                       packingRows.forEach((r) => {
-                        const key = r.pallet_no?.trim() || "미지정";
+                        const key = r.pallet_no?.trim() || "Unassigned";
                         const arr = palletGroups.get(key) ?? [];
                         arr.push(r);
                         palletGroups.set(key, arr);
                       });
 
+                      async function savePalletRow(id: string, patch: Record<string, unknown>) {
+                        await fetch(`/api/packing-list?id=${id}`, {
+                          method: "PATCH",
+                          headers: { ...authHeader, "Content-Type": "application/json" },
+                          body: JSON.stringify(patch),
+                        });
+                      }
+
+                      async function addItemToPallet() {
+                        if (!packAddSku || !curPallet) return;
+                        const res = await fetch("/api/packing-list", {
+                          method: "POST",
+                          headers: { ...authHeader, "Content-Type": "application/json" },
+                          body: JSON.stringify([{
+                            order_code: orderCode,
+                            sku: packAddSku,
+                            product_name: skuPickingQty.get(packAddSku)?.productName ?? "",
+                            qty_per_carton: Number(packAddQtyPerCtn) || 0,
+                            carton_count: Number(packAddCtnCount) || 0,
+                            pallet_no: curPallet,
+                            note: "",
+                          }]),
+                        });
+                        const data = await res.json();
+                        if (data.rows) setPackingRows((prev) => [...prev, ...data.rows]);
+                        setPackAddQtyPerCtn("");
+                        setPackAddCtnCount("");
+                      }
+
                       return (
-                        <div className="border-t border-slate-100 pt-5">
-                          {/* Header row */}
-                          <div className="flex items-center justify-between mb-3">
-                            <div className="flex items-center gap-2">
-                              <Layers className="w-4 h-4 text-slate-400" />
-                              <p className="text-xs text-slate-400 uppercase tracking-wide">Packing List</p>
-                              {packingRows.length > 0 && (
-                                <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-full px-2 py-0.5">
-                                  {totalCtn} CTN / {totalPcs.toLocaleString()} PCS
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-2">
-                              {/* Reload from DB */}
+                        <div className="border-t border-slate-100 pt-5 space-y-5">
+
+                          {/* ── Section 1: Order Items ── */}
+                          <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="flex items-center gap-2">
+                                <Layers className="w-4 h-4 text-slate-400" />
+                                <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Order Items</span>
+                              </div>
                               <button
                                 onClick={() => loadPackingList(orderCode)}
                                 disabled={packingLoading}
-                                className="flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-700 border border-slate-200 hover:border-slate-400 rounded-lg px-2.5 py-1.5 transition-colors disabled:opacity-40"
-                                title="저장된 패킹 리스트 다시 불러오기"
+                                className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600 transition-colors disabled:opacity-40"
                               >
-                                <RefreshCw className={`w-3.5 h-3.5 ${packingLoading ? "animate-spin" : ""}`} /> 다시 불러오기
+                                <RefreshCw className={`w-3 h-3 ${packingLoading ? "animate-spin" : ""}`} /> Reload
                               </button>
-                              {/* Auto-fill from picking — always shown; uses all available item sources */}
-                              <button
-                                onClick={async () => {
-                                  // Always delete existing rows (including bad/empty ones) before re-creating
-                                  await fetch(`/api/packing-list?order_code=${encodeURIComponent(orderCode)}`, { method: "DELETE", headers: authHeader });
-                                  if (skuPickingQty.size === 0) {
-                                    setPackingRows([]);
-                                    setShowPalletSummary(false);
-                                    return;
-                                  }
-                                  // Build unique-SKU rows from picking (deduplicated)
-                                  const newRows = Array.from(skuPickingQty.entries()).map(([sku, { productName }]) => ({
-                                    order_code: orderCode,
-                                    sku,
-                                    product_name: productName,
-                                    qty_per_carton: 0,
-                                    carton_count: 0,
-                                    pallet_no: "",
-                                    note: "",
-                                  }));
-                                  const res = await fetch("/api/packing-list", {
-                                    method: "POST",
-                                    headers: { ...authHeader, "Content-Type": "application/json" },
-                                    body: JSON.stringify(newRows),
-                                  });
-                                  const data = await res.json();
-                                  if (data.rows) setPackingRows(data.rows);
-                                  setShowPalletSummary(false);
-                                }}
-                                className="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-700 border border-blue-200 hover:border-blue-400 rounded-lg px-2.5 py-1.5 transition-colors"
-                              >
-                                <PackageCheck className="w-3.5 h-3.5" /> SKU 자동 불러오기
-                              </button>
-                              {/* Add empty row */}
-                              <button
-                                onClick={async () => {
-                                  const res = await fetch("/api/packing-list", {
-                                    method: "POST",
-                                    headers: { ...authHeader, "Content-Type": "application/json" },
-                                    body: JSON.stringify([{ order_code: orderCode, sku: "", product_name: "", qty_per_carton: 0, carton_count: 0, pallet_no: "", note: "" }]),
-                                  });
-                                  const data = await res.json();
-                                  if (data.rows) setPackingRows((prev) => [...prev, ...data.rows]);
-                                }}
-                                className="flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-400 rounded-lg px-2.5 py-1.5 transition-colors"
-                              >
-                                <Plus className="w-3.5 h-3.5" /> 행 추가
-                              </button>
-                              {packingRows.length > 0 && (
-                                <>
-                                  {/* 완료 — show pallet summary */}
-                                  <button
-                                    onClick={() => setShowPalletSummary((v) => !v)}
-                                    className={`flex items-center gap-1.5 text-xs font-semibold rounded-lg px-2.5 py-1.5 transition-colors border ${
-                                      showPalletSummary
-                                        ? "bg-emerald-600 text-white border-emerald-600"
-                                        : "text-emerald-700 border-emerald-300 hover:border-emerald-500"
-                                    }`}
-                                  >
-                                    <CheckCircle2 className="w-3.5 h-3.5" /> {showPalletSummary ? "입력 화면" : "완료 / 팔렛 요약"}
-                                  </button>
-                                  {/* Excel export */}
-                                  <button
-                                    onClick={() => {
-                                      const wsData: (string | number)[][] = [
-                                        ["Order Code", "SKU", "Product Name", "Qty/Carton", "Carton Count", "Total Qty", "Pallet No", "Note"],
-                                        ...packingRows.map((r) => [orderCode, r.sku, r.product_name, r.qty_per_carton, r.carton_count, r.total_qty, r.pallet_no, r.note]),
-                                        [],
-                                        ["", "", "TOTAL", "", totalCtn, totalPcs, "", ""],
-                                      ];
-                                      // Pallet-grouped sheets
-                                      const wb = XLSX.utils.book_new();
-                                      const ws = XLSX.utils.aoa_to_sheet(wsData);
-                                      ws["!cols"] = [{ wch: 24 }, { wch: 16 }, { wch: 30 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 20 }];
-                                      XLSX.utils.book_append_sheet(wb, ws, "Packing List");
-                                      // Pallet summary sheet
-                                      const palletData: (string | number)[][] = [["Pallet No", "SKU", "Product Name", "Qty/CTN", "CTN", "Total PCS"]];
-                                      palletGroups.forEach((rows, pallet) => {
-                                        rows.forEach((r) => palletData.push([pallet, r.sku, r.product_name, r.qty_per_carton, r.carton_count, r.total_qty]));
-                                        const ptl = rows.reduce((s, r) => s + r.carton_count, 0);
-                                        const pps = rows.reduce((s, r) => s + r.total_qty, 0);
-                                        palletData.push(["", "", `[${pallet} 소계]`, "", ptl, pps]);
-                                        palletData.push([]);
-                                      });
-                                      const ws2 = XLSX.utils.aoa_to_sheet(palletData);
-                                      ws2["!cols"] = [{ wch: 12 }, { wch: 16 }, { wch: 30 }, { wch: 10 }, { wch: 8 }, { wch: 12 }];
-                                      XLSX.utils.book_append_sheet(wb, ws2, "By Pallet");
-                                      XLSX.writeFile(wb, `PackingList_${orderCode}.xlsx`);
-                                    }}
-                                    className="flex items-center gap-1.5 text-xs font-medium text-green-700 border border-green-200 hover:border-green-400 rounded-lg px-2.5 py-1.5 transition-colors"
-                                  >
-                                    <FileSpreadsheet className="w-3.5 h-3.5" /> Excel 추출
-                                  </button>
-                                </>
-                              )}
                             </div>
+                            {skuPickingQty.size === 0 ? (
+                              <div className="text-xs text-slate-400 py-3 text-center border border-dashed border-slate-200 rounded-lg">
+                                No picking data available for this order.
+                              </div>
+                            ) : (
+                              <div className="rounded-xl border border-slate-200 overflow-hidden">
+                                <table className="w-full text-xs">
+                                  <thead>
+                                    <tr className="bg-slate-50 border-b border-slate-200">
+                                      {["SKU", "Product Name", "Required", "Packed", "Remain"].map((h) => (
+                                        <th key={h} className={`px-3 py-2 text-slate-500 font-semibold uppercase tracking-wide whitespace-nowrap ${h === "Required" || h === "Packed" || h === "Remain" ? "text-right" : "text-left"}`}>{h}</th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100">
+                                    {Array.from(skuPickingQty.entries()).map(([sku, { qty, productName }]) => {
+                                      const packed = packedBySku.get(sku) ?? 0;
+                                      const remain = qty - packed;
+                                      return (
+                                        <tr key={sku} className="hover:bg-slate-50">
+                                          <td className="px-3 py-2 font-mono text-slate-700">{sku}</td>
+                                          <td className="px-3 py-2 text-slate-600 max-w-[160px] truncate">{productName || "—"}</td>
+                                          <td className="px-3 py-2 text-right tabular-nums text-slate-700">{qty.toLocaleString()}</td>
+                                          <td className="px-3 py-2 text-right tabular-nums text-slate-700">{packed.toLocaleString()}</td>
+                                          <td className="px-3 py-2 text-right tabular-nums font-semibold">
+                                            {remain === 0 ? (
+                                              <span className="text-emerald-600">✓ 0</span>
+                                            ) : (
+                                              <span className={remain > 0 ? "text-orange-500" : "text-red-600"}>{remain.toLocaleString()}</span>
+                                            )}
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                  <tfoot>
+                                    <tr className="bg-slate-50 border-t-2 border-slate-200 font-semibold text-xs">
+                                      <td colSpan={2} className="px-3 py-2 text-slate-500 uppercase">Total</td>
+                                      <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                                        {Array.from(skuPickingQty.values()).reduce((s, { qty }) => s + qty, 0).toLocaleString()}
+                                      </td>
+                                      <td className="px-3 py-2 text-right tabular-nums text-slate-700">{totalPcs.toLocaleString()}</td>
+                                      <td className="px-3 py-2 text-right tabular-nums">
+                                        {(() => {
+                                          const totalReq = Array.from(skuPickingQty.values()).reduce((s, { qty }) => s + qty, 0);
+                                          const rem = totalReq - totalPcs;
+                                          return rem === 0
+                                            ? <span className="text-emerald-600 font-bold">✓ Done</span>
+                                            : <span className={rem > 0 ? "text-orange-500" : "text-red-600"}>{rem.toLocaleString()} left</span>;
+                                        })()}
+                                      </td>
+                                    </tr>
+                                  </tfoot>
+                                </table>
+                              </div>
+                            )}
                           </div>
 
-                          {packingLoading ? (
-                            <div className="flex items-center justify-center py-6 text-slate-400 text-sm gap-2">
-                              <Loader2 className="w-4 h-4 animate-spin" /> 로딩 중...
+                          {/* ── Section 2: Pallets ── */}
+                          <div>
+                            {/* Pallet tab bar */}
+                            <div className="flex items-center gap-1 mb-3 flex-wrap">
+                              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide mr-2">Pallets</span>
+                              {palletNos.map((no) => (
+                                <button
+                                  key={no}
+                                  onClick={() => setActivePallet(no)}
+                                  className={`text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${
+                                    curPallet === no
+                                      ? "bg-slate-800 text-white border-slate-800"
+                                      : "bg-white text-slate-600 border-slate-200 hover:border-slate-400"
+                                  }`}
+                                >
+                                  Pallet {no}
+                                </button>
+                              ))}
+                              {/* New Pallet button */}
+                              <button
+                                onClick={() => {
+                                  const maxNo = palletNos.reduce((m, n) => Math.max(m, parseInt(n) || 0), 0);
+                                  setActivePallet(String(maxNo + 1));
+                                }}
+                                className="flex items-center gap-1 text-xs font-medium text-blue-600 border border-blue-200 hover:border-blue-400 rounded-lg px-3 py-1.5 transition-colors"
+                              >
+                                <Plus className="w-3.5 h-3.5" /> New Pallet
+                              </button>
+                              {/* Export */}
+                              {packingRows.length > 0 && (
+                                <button
+                                  onClick={() => {
+                                    const wb = XLSX.utils.book_new();
+                                    // Sheet 1: full list
+                                    const wsData: (string | number)[][] = [
+                                      ["Pallet", "SKU", "Product Name", "Qty/CTN", "Cartons", "Total PCS", "L(in)", "W(in)", "H(in)", "Weight(lbs)"],
+                                      ...packingRows.map((r) => {
+                                        const m = palletMeta[r.pallet_no?.trim() ?? ""] ?? {};
+                                        return [r.pallet_no, r.sku, r.product_name, r.qty_per_carton, r.carton_count, r.total_qty, m.l ?? "", m.w ?? "", m.h ?? "", m.weight ?? ""];
+                                      }),
+                                      [],
+                                      ["", "", "TOTAL", "", totalCtn, totalPcs, "", "", "", ""],
+                                    ];
+                                    const ws1 = XLSX.utils.aoa_to_sheet(wsData);
+                                    ws1["!cols"] = [8, 18, 28, 10, 10, 12, 8, 8, 8, 12].map((w) => ({ wch: w }));
+                                    XLSX.utils.book_append_sheet(wb, ws1, "Packing List");
+                                    // Sheet 2: by pallet
+                                    const palletData: (string | number | boolean)[][] = [["Pallet", "SKU", "Product", "Qty/CTN", "Cartons", "Total PCS", "L", "W", "H", "Weight"]];
+                                    palletGroups.forEach((rows, pNo) => {
+                                      const m = palletMeta[pNo] ?? {};
+                                      rows.forEach((r, i) => palletData.push([
+                                        i === 0 ? pNo : "",
+                                        r.sku, r.product_name, r.qty_per_carton, r.carton_count, r.total_qty,
+                                        i === 0 ? (m.l || "") : "", i === 0 ? (m.w || "") : "", i === 0 ? (m.h || "") : "", i === 0 ? (m.weight || "") : "",
+                                      ]));
+                                      const pCtn = rows.reduce((s, r) => s + r.carton_count, 0);
+                                      const pPcs = rows.reduce((s, r) => s + r.total_qty, 0);
+                                      palletData.push(["", "", `Pallet ${pNo} Subtotal`, "", pCtn, pPcs, "", "", "", ""]);
+                                      palletData.push([]);
+                                    });
+                                    const ws2 = XLSX.utils.aoa_to_sheet(palletData);
+                                    ws2["!cols"] = [10, 18, 28, 10, 10, 12, 8, 8, 8, 12].map((w) => ({ wch: w }));
+                                    XLSX.utils.book_append_sheet(wb, ws2, "By Pallet");
+                                    XLSX.writeFile(wb, `PackingList_${orderCode}.xlsx`);
+                                  }}
+                                  className="ml-auto flex items-center gap-1.5 text-xs font-medium text-green-700 border border-green-200 hover:border-green-400 rounded-lg px-3 py-1.5 transition-colors"
+                                >
+                                  <FileSpreadsheet className="w-3.5 h-3.5" /> Export Excel
+                                </button>
+                              )}
                             </div>
-                          ) : packingRows.length === 0 ? (
-                            <div className="text-center py-6 text-slate-400 text-sm border border-dashed border-slate-200 rounded-xl">
-                              행을 추가하거나{hasPickingData ? " SKU 자동 불러오기를 사용하세요." : " 직접 입력하세요."}
-                            </div>
-                          ) : showPalletSummary ? (
-                            /* ── Pallet Summary View ── */
-                            <div className="space-y-4">
-                              {Array.from(palletGroups.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([pallet, rows]) => {
-                                const pCtn = rows.reduce((s, r) => s + r.carton_count, 0);
-                                const pPcs = rows.reduce((s, r) => s + r.total_qty, 0);
-                                return (
-                                  <div key={pallet} className="border border-slate-200 rounded-xl overflow-hidden">
-                                    <div className="bg-slate-800 text-white px-4 py-2 flex items-center justify-between">
-                                      <span className="text-sm font-bold">🏷️ Pallet {pallet}</span>
-                                      <span className="text-xs text-slate-300">{pCtn} CTN / {pPcs.toLocaleString()} PCS</span>
-                                    </div>
-                                    <table className="w-full text-sm">
-                                      <thead>
-                                        <tr className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500 uppercase">
-                                          <th className="text-left px-3 py-2">SKU</th>
-                                          <th className="text-left px-3 py-2">Product</th>
-                                          <th className="text-right px-3 py-2">Qty/CTN</th>
-                                          <th className="text-right px-3 py-2">CTN</th>
-                                          <th className="text-right px-3 py-2">Total PCS</th>
-                                          <th className="text-left px-3 py-2">Note</th>
-                                        </tr>
-                                      </thead>
-                                      <tbody className="divide-y divide-slate-100">
-                                        {rows.map((r, i) => (
-                                          <tr key={i} className="hover:bg-slate-50">
-                                            <td className="px-3 py-2 font-mono text-xs">{r.sku}</td>
-                                            <td className="px-3 py-2 text-slate-700">{r.product_name}</td>
-                                            <td className="px-3 py-2 text-right tabular-nums">{r.qty_per_carton}</td>
-                                            <td className="px-3 py-2 text-right tabular-nums font-semibold">{r.carton_count}</td>
-                                            <td className="px-3 py-2 text-right tabular-nums font-bold text-blue-700">{r.total_qty.toLocaleString()}</td>
-                                            <td className="px-3 py-2 text-slate-500 text-xs">{r.note}</td>
-                                          </tr>
-                                        ))}
-                                      </tbody>
-                                    </table>
-                                  </div>
-                                );
-                              })}
-                              {/* Grand total */}
-                              <div className="flex items-center justify-between bg-slate-800 text-white rounded-xl px-5 py-3">
-                                <span className="text-sm font-semibold">전체 합계</span>
-                                <div className="flex gap-6 text-sm tabular-nums">
-                                  <span><span className="text-slate-400 text-xs mr-1">CTN</span><strong>{totalCtn}</strong></span>
-                                  <span><span className="text-slate-400 text-xs mr-1">PCS</span><strong>{totalPcs.toLocaleString()}</strong></span>
-                                  <span><span className="text-slate-400 text-xs mr-1">Pallets</span><strong>{palletGroups.size}</strong></span>
-                                </div>
+
+                            {packingLoading ? (
+                              <div className="flex items-center justify-center py-8 text-slate-400 text-sm gap-2">
+                                <Loader2 className="w-4 h-4 animate-spin" /> Loading…
                               </div>
-                            </div>
-                          ) : (
-                            /* ── Editing View ── */
-                            <div className="overflow-x-auto rounded-xl border border-slate-200">
-                              <table className="w-full text-sm">
-                                <thead>
-                                  <tr className="bg-slate-50 border-b border-slate-200">
-                                    {["SKU", "Product Name", "Qty/CTN", "CTN 수", "Total PCS", "Remain", "Pallet No", "Note", ""].map((h) => (
-                                      <th key={h} className={`text-xs font-semibold text-slate-500 uppercase tracking-wide px-3 py-2.5 whitespace-nowrap ${h === "Remain" ? "text-right text-orange-500" : "text-left"}`}>{h}</th>
+                            ) : !curPallet ? (
+                              <div className="text-center py-8 text-slate-400 text-sm border border-dashed border-slate-200 rounded-xl">
+                                Click <strong>New Pallet</strong> to start building the packing list.
+                              </div>
+                            ) : (
+                              <div className="border border-slate-200 rounded-xl overflow-hidden">
+                                {/* Pallet header: dimensions + summary */}
+                                <div className="bg-slate-800 text-white px-4 py-3 flex flex-wrap items-center gap-4">
+                                  <span className="text-sm font-bold mr-2">Pallet {curPallet}</span>
+                                  <span className="text-xs text-slate-300">{palletCtn} CTN · {palletPcs.toLocaleString()} PCS</span>
+                                  <div className="flex items-center gap-2 ml-auto flex-wrap">
+                                    {(["l", "w", "h"] as const).map((dim) => (
+                                      <label key={dim} className="flex items-center gap-1 text-xs">
+                                        <span className="text-slate-400 uppercase">{dim}(in)</span>
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          value={meta[dim]}
+                                          onChange={(e) => setPalletMeta((prev) => ({ ...prev, [curPallet]: { ...meta, [dim]: e.target.value } }))}
+                                          className="w-16 text-xs text-right bg-slate-700 border border-slate-600 focus:border-blue-400 focus:outline-none rounded px-1.5 py-1 text-white tabular-nums"
+                                          placeholder="0"
+                                        />
+                                      </label>
                                     ))}
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100">
-                                  {packingRows.map((row, idx) => {
-                                    const pickTotal = skuPickingQty.get(row.sku)?.qty ?? null;
-                                    // Use total packed across ALL rows of this SKU (multi-pallet aware)
-                                    const skuTotalPacked = packedBySku.get(row.sku) ?? 0;
-                                    const remain = pickTotal !== null ? pickTotal - skuTotalPacked : null;
-                                    return (
-                                      <tr key={row.id ?? idx} className="hover:bg-slate-50 transition-colors">
-                                        {(["sku", "product_name"] as const).map((field) => (
-                                          <td key={field} className="px-3 py-2">
-                                            <input
-                                              type="text"
-                                              value={row[field]}
-                                              onChange={(e) => setPackingRows((prev) => prev.map((r, i) => i === idx ? { ...r, [field]: e.target.value } : r))}
-                                              onBlur={async () => {
-                                                if (!row.id) return;
-                                                await fetch(`/api/packing-list?id=${row.id}`, {
-                                                  method: "PATCH",
-                                                  headers: { ...authHeader, "Content-Type": "application/json" },
-                                                  body: JSON.stringify({ [field]: row[field] }),
-                                                });
-                                              }}
-                                              className="w-full min-w-[80px] text-sm text-slate-800 border border-transparent hover:border-slate-200 focus:border-blue-400 focus:outline-none rounded px-1.5 py-1 bg-transparent focus:bg-white transition-colors"
-                                            />
-                                          </td>
+                                    <label className="flex items-center gap-1 text-xs">
+                                      <span className="text-slate-400">Weight(lbs)</span>
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        value={meta.weight}
+                                        onChange={(e) => setPalletMeta((prev) => ({ ...prev, [curPallet]: { ...meta, weight: e.target.value } }))}
+                                        className="w-20 text-xs text-right bg-slate-700 border border-slate-600 focus:border-blue-400 focus:outline-none rounded px-1.5 py-1 text-white tabular-nums"
+                                        placeholder="0"
+                                      />
+                                    </label>
+                                  </div>
+                                </div>
+
+                                {/* Add item form */}
+                                <div className="bg-blue-50/60 border-b border-slate-200 px-4 py-3 flex flex-wrap items-end gap-3">
+                                  <div className="flex flex-col gap-1">
+                                    <label className="text-xs font-medium text-slate-500 uppercase tracking-wide">SKU</label>
+                                    <select
+                                      value={packAddSku}
+                                      onChange={(e) => setPackAddSku(e.target.value)}
+                                      className="text-sm border border-slate-200 rounded-lg px-2 py-1.5 bg-white focus:border-blue-400 focus:outline-none min-w-[160px]"
+                                    >
+                                      <option value="">— Select SKU —</option>
+                                      {Array.from(skuPickingQty.keys()).map((sku) => {
+                                        const rem = (skuPickingQty.get(sku)?.qty ?? 0) - (packedBySku.get(sku) ?? 0);
+                                        return (
+                                          <option key={sku} value={sku}>
+                                            {sku}{rem > 0 ? ` (${rem.toLocaleString()} left)` : " ✓"}
+                                          </option>
+                                        );
+                                      })}
+                                    </select>
+                                  </div>
+                                  <div className="flex flex-col gap-1">
+                                    <label className="text-xs font-medium text-slate-500 uppercase tracking-wide">Qty / Carton</label>
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      value={packAddQtyPerCtn}
+                                      onChange={(e) => setPackAddQtyPerCtn(e.target.value)}
+                                      onKeyDown={(e) => { if (e.key === "Enter") addItemToPallet(); }}
+                                      placeholder="0"
+                                      className="w-24 text-sm text-right border border-slate-200 rounded-lg px-2 py-1.5 bg-white focus:border-blue-400 focus:outline-none tabular-nums"
+                                    />
+                                  </div>
+                                  <div className="flex flex-col gap-1">
+                                    <label className="text-xs font-medium text-slate-500 uppercase tracking-wide">Cartons</label>
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      value={packAddCtnCount}
+                                      onChange={(e) => setPackAddCtnCount(e.target.value)}
+                                      onKeyDown={(e) => { if (e.key === "Enter") addItemToPallet(); }}
+                                      placeholder="0"
+                                      className="w-24 text-sm text-right border border-slate-200 rounded-lg px-2 py-1.5 bg-white focus:border-blue-400 focus:outline-none tabular-nums"
+                                    />
+                                  </div>
+                                  <div className="flex flex-col gap-1">
+                                    <label className="text-xs text-transparent">add</label>
+                                    <button
+                                      onClick={addItemToPallet}
+                                      disabled={!packAddSku}
+                                      className="flex items-center gap-1.5 text-sm font-semibold bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white rounded-lg px-4 py-1.5 transition-colors"
+                                    >
+                                      <Plus className="w-4 h-4" /> Add Item
+                                    </button>
+                                  </div>
+                                  {/* Delete pallet */}
+                                  {palletRows.length === 0 && (
+                                    <button
+                                      onClick={() => setActivePallet(palletNos.filter((n) => n !== curPallet)[0] ?? "")}
+                                      className="ml-auto text-xs text-red-400 hover:text-red-600 transition-colors flex items-center gap-1"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" /> Remove pallet
+                                    </button>
+                                  )}
+                                </div>
+
+                                {/* Items in this pallet */}
+                                {palletRows.length === 0 ? (
+                                  <div className="text-center py-6 text-slate-400 text-sm">
+                                    No items yet. Select a SKU and add above.
+                                  </div>
+                                ) : (
+                                  <table className="w-full text-sm">
+                                    <thead>
+                                      <tr className="bg-slate-50 border-b border-slate-200">
+                                        {["SKU", "Product Name", "Qty/CTN", "Cartons", "Total PCS", "Note", ""].map((h) => (
+                                          <th key={h} className={`text-xs font-semibold text-slate-500 uppercase tracking-wide px-3 py-2.5 whitespace-nowrap ${["Qty/CTN", "Cartons", "Total PCS"].includes(h) ? "text-right" : "text-left"}`}>{h}</th>
                                         ))}
-                                        {(["qty_per_carton", "carton_count"] as const).map((field) => (
-                                          <td key={field} className="px-3 py-2">
-                                            <input
-                                              type="number"
-                                              min={0}
-                                              value={row[field] || ""}
-                                              onChange={(e) => {
-                                                const val = Number(e.target.value) || 0;
-                                                setPackingRows((prev) => prev.map((r, i) => {
-                                                  if (i !== idx) return r;
-                                                  const updated = { ...r, [field]: val };
-                                                  updated.total_qty = updated.qty_per_carton * updated.carton_count;
-                                                  return updated;
-                                                }));
-                                              }}
-                                              onBlur={async () => {
-                                                if (!row.id) return;
-                                                await fetch(`/api/packing-list?id=${row.id}`, {
-                                                  method: "PATCH",
-                                                  headers: { ...authHeader, "Content-Type": "application/json" },
-                                                  body: JSON.stringify({ qty_per_carton: row.qty_per_carton, carton_count: row.carton_count }),
-                                                });
-                                              }}
-                                              className="w-20 text-sm text-right tabular-nums text-slate-800 border border-transparent hover:border-slate-200 focus:border-blue-400 focus:outline-none rounded px-1.5 py-1 bg-transparent focus:bg-white transition-colors"
-                                            />
-                                          </td>
-                                        ))}
-                                        {/* Total PCS */}
-                                        <td className="px-3 py-2 text-right tabular-nums font-semibold text-slate-700">
-                                          {(row.qty_per_carton * row.carton_count).toLocaleString()}
-                                        </td>
-                                        {/* Remain */}
-                                        <td className="px-3 py-2 text-right tabular-nums font-bold">
-                                          {remain === null ? (
-                                            <span className="text-slate-300">—</span>
-                                          ) : remain === 0 ? (
-                                            <span className="text-emerald-600">✓ 0</span>
-                                          ) : (
-                                            <span className={remain > 0 ? "text-orange-500" : "text-red-600"}>{remain.toLocaleString()}</span>
-                                          )}
-                                        </td>
-                                        {(["pallet_no", "note"] as const).map((field) => (
-                                          <td key={field} className="px-3 py-2">
-                                            <input
-                                              type="text"
-                                              value={row[field]}
-                                              onChange={(e) => setPackingRows((prev) => prev.map((r, i) => i === idx ? { ...r, [field]: e.target.value } : r))}
-                                              onBlur={async () => {
-                                                if (!row.id) return;
-                                                await fetch(`/api/packing-list?id=${row.id}`, {
-                                                  method: "PATCH",
-                                                  headers: { ...authHeader, "Content-Type": "application/json" },
-                                                  body: JSON.stringify({ [field]: row[field] }),
-                                                });
-                                              }}
-                                              className="w-full min-w-[60px] text-sm text-slate-800 border border-transparent hover:border-slate-200 focus:border-blue-400 focus:outline-none rounded px-1.5 py-1 bg-transparent focus:bg-white transition-colors"
-                                            />
-                                          </td>
-                                        ))}
-                                        <td className="px-2 py-2">
-                                          <button
-                                            onClick={async () => {
-                                              if (row.id) {
-                                                await fetch(`/api/packing-list?id=${row.id}`, { method: "DELETE", headers: authHeader });
-                                              }
-                                              setPackingRows((prev) => prev.filter((_, i) => i !== idx));
-                                            }}
-                                            className="text-slate-300 hover:text-red-500 transition-colors p-1"
-                                          >
-                                            <Trash2 className="w-3.5 h-3.5" />
-                                          </button>
-                                        </td>
                                       </tr>
-                                    );
-                                  })}
-                                </tbody>
-                                <tfoot>
-                                  <tr className="bg-slate-50 border-t-2 border-slate-200 font-semibold">
-                                    <td colSpan={3} className="px-3 py-2 text-xs text-slate-500 uppercase">Total</td>
-                                    <td className="px-3 py-2 text-right tabular-nums text-slate-700">{totalCtn} CTN</td>
-                                    <td className="px-3 py-2 text-right tabular-nums text-slate-700">{totalPcs.toLocaleString()} PCS</td>
-                                    <td className="px-3 py-2 text-right tabular-nums text-xs text-orange-500">
-                                      {(() => {
-                                        // Sum picking qty only for SKUs that appear in packing list
-                                        const trackedSkus = new Set(packingRows.map((r) => r.sku).filter(Boolean));
-                                        const totalPicking = Array.from(trackedSkus).reduce((s, sku) => s + (skuPickingQty.get(sku)?.qty ?? 0), 0);
-                                        const totalPackedTracked = Array.from(trackedSkus).reduce((s, sku) => s + (packedBySku.get(sku) ?? 0), 0);
-                                        const rem = totalPicking > 0 ? totalPicking - totalPackedTracked : null;
-                                        return rem === null ? "" : rem === 0 ? <span className="text-emerald-600 font-bold">✓ 완료</span> : `${rem.toLocaleString()} 남음`;
-                                      })()}
-                                    </td>
-                                    <td colSpan={3} />
-                                  </tr>
-                                </tfoot>
-                              </table>
-                            </div>
-                          )}
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                      {palletRows.map((row, idx) => {
+                                        const globalIdx = packingRows.findIndex((r) => r.id === row.id);
+                                        return (
+                                          <tr key={row.id ?? idx} className="hover:bg-slate-50 transition-colors">
+                                            <td className="px-3 py-2 font-mono text-xs text-slate-700">{row.sku}</td>
+                                            <td className="px-3 py-2 text-slate-600 text-xs max-w-[180px] truncate">{row.product_name || "—"}</td>
+                                            {(["qty_per_carton", "carton_count"] as const).map((field) => (
+                                              <td key={field} className="px-3 py-2">
+                                                <input
+                                                  type="number"
+                                                  min={0}
+                                                  value={row[field] || ""}
+                                                  onChange={(e) => {
+                                                    const val = Number(e.target.value) || 0;
+                                                    setPackingRows((prev) => prev.map((r, i) => {
+                                                      if (i !== globalIdx) return r;
+                                                      const up = { ...r, [field]: val };
+                                                      up.total_qty = up.qty_per_carton * up.carton_count;
+                                                      return up;
+                                                    }));
+                                                  }}
+                                                  onBlur={async () => {
+                                                    if (!row.id) return;
+                                                    await savePalletRow(row.id, { qty_per_carton: row.qty_per_carton, carton_count: row.carton_count });
+                                                  }}
+                                                  className="w-20 text-sm text-right tabular-nums text-slate-800 border border-transparent hover:border-slate-200 focus:border-blue-400 focus:outline-none rounded px-1.5 py-1 bg-transparent focus:bg-white transition-colors"
+                                                />
+                                              </td>
+                                            ))}
+                                            <td className="px-3 py-2 text-right tabular-nums font-semibold text-slate-700">
+                                              {(row.qty_per_carton * row.carton_count).toLocaleString()}
+                                            </td>
+                                            <td className="px-3 py-2">
+                                              <input
+                                                type="text"
+                                                value={row.note}
+                                                onChange={(e) => setPackingRows((prev) => prev.map((r, i) => i === globalIdx ? { ...r, note: e.target.value } : r))}
+                                                onBlur={async () => { if (row.id) await savePalletRow(row.id, { note: row.note }); }}
+                                                className="w-full text-xs text-slate-600 border border-transparent hover:border-slate-200 focus:border-blue-400 focus:outline-none rounded px-1.5 py-1 bg-transparent focus:bg-white transition-colors"
+                                                placeholder="note…"
+                                              />
+                                            </td>
+                                            <td className="px-2 py-2">
+                                              <button
+                                                onClick={async () => {
+                                                  if (row.id) await fetch(`/api/packing-list?id=${row.id}`, { method: "DELETE", headers: authHeader });
+                                                  setPackingRows((prev) => prev.filter((r) => r.id !== row.id));
+                                                }}
+                                                className="text-slate-300 hover:text-red-500 transition-colors p-1"
+                                              >
+                                                <Trash2 className="w-3.5 h-3.5" />
+                                              </button>
+                                            </td>
+                                          </tr>
+                                        );
+                                      })}
+                                    </tbody>
+                                    <tfoot>
+                                      <tr className="bg-slate-50 border-t-2 border-slate-200 font-semibold text-sm">
+                                        <td colSpan={3} className="px-3 py-2 text-xs text-slate-500 uppercase">Pallet {curPallet} Total</td>
+                                        <td className="px-3 py-2 text-right tabular-nums text-slate-700">{palletCtn} CTN</td>
+                                        <td className="px-3 py-2 text-right tabular-nums text-slate-700">{palletPcs.toLocaleString()} PCS</td>
+                                        <td colSpan={2} />
+                                      </tr>
+                                    </tfoot>
+                                  </table>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Grand total bar */}
+                            {packingRows.length > 0 && (
+                              <div className="mt-3 flex items-center gap-6 bg-slate-800 text-white rounded-xl px-5 py-3 text-sm">
+                                <span className="font-semibold">All Pallets</span>
+                                <span className="tabular-nums"><span className="text-slate-400 text-xs mr-1">Pallets</span><strong>{palletNos.length}</strong></span>
+                                <span className="tabular-nums"><span className="text-slate-400 text-xs mr-1">CTN</span><strong>{totalCtn}</strong></span>
+                                <span className="tabular-nums"><span className="text-slate-400 text-xs mr-1">PCS</span><strong>{totalPcs.toLocaleString()}</strong></span>
+                                {(() => {
+                                  const totalReq = Array.from(skuPickingQty.values()).reduce((s, { qty }) => s + qty, 0);
+                                  const rem = totalReq > 0 ? totalReq - totalPcs : null;
+                                  return rem === null ? null : rem === 0
+                                    ? <span className="ml-auto text-emerald-400 font-semibold flex items-center gap-1"><CheckCircle2 className="w-4 h-4" /> All packed</span>
+                                    : <span className="ml-auto text-orange-400 font-semibold">{rem.toLocaleString()} PCS remaining</span>;
+                                })()}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       );
                     })()}
