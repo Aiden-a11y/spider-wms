@@ -2911,16 +2911,19 @@ ${labels}
                       });
 
                       // Derive existing pallet numbers from rows
+                      const hasUnassigned = packingRows.some((r) => !r.pallet_no?.trim());
                       const palletNos = Array.from(
                         new Set(packingRows.map((r) => r.pallet_no?.trim()).filter(Boolean))
                       ).sort((a, b) => (parseInt(a) || 0) - (parseInt(b) || 0));
+                      // Include synthetic "__unassigned__" key so orphaned rows are always visible
+                      const allTabs = hasUnassigned ? [...palletNos, "__unassigned__"] : palletNos;
 
-                      // Active pallet: use state if set and valid, else first existing, else ""
-                      const curPallet = (activePallet && (palletNos.includes(activePallet) || activePallet === "__new__"))
-                        ? activePallet
-                        : palletNos[0] ?? "";
+                      // Active pallet: allow any non-empty activePallet (new pallets won't be in allTabs yet)
+                      const curPallet = activePallet || allTabs[0] || "";
 
-                      const palletRows = packingRows.filter((r) => r.pallet_no?.trim() === curPallet);
+                      const palletRows = curPallet === "__unassigned__"
+                        ? packingRows.filter((r) => !r.pallet_no?.trim())
+                        : packingRows.filter((r) => r.pallet_no?.trim() === curPallet);
                       const palletCtn  = palletRows.reduce((s, r) => s + r.carton_count, 0);
                       const palletPcs  = palletRows.reduce((s, r) => s + r.total_qty, 0);
                       const meta = palletMeta[curPallet] ?? { l: "", w: "", h: "", weight: "" };
@@ -3057,6 +3060,19 @@ ${labels}
                                   Pallet {no}
                                 </button>
                               ))}
+                              {/* Orphaned rows with no pallet_no */}
+                              {hasUnassigned && (
+                                <button
+                                  onClick={() => setActivePallet("__unassigned__")}
+                                  className={`text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${
+                                    curPallet === "__unassigned__"
+                                      ? "bg-red-600 text-white border-red-600"
+                                      : "bg-red-50 text-red-600 border-red-200 hover:border-red-400"
+                                  }`}
+                                >
+                                  Unassigned
+                                </button>
+                              )}
                               {/* New Pallet button */}
                               <button
                                 onClick={() => {
@@ -3072,36 +3088,61 @@ ${labels}
                                 <button
                                   onClick={() => {
                                     const wb = XLSX.utils.book_new();
-                                    // Sheet 1: full list
-                                    const wsData: (string | number)[][] = [
-                                      ["Pallet", "SKU", "Product Name", "Qty/CTN", "Cartons", "Total PCS", "L(in)", "W(in)", "H(in)", "Weight(lbs)"],
-                                      ...packingRows.map((r) => {
-                                        const m = palletMeta[r.pallet_no?.trim() ?? ""] ?? {};
-                                        return [r.pallet_no, r.sku, r.product_name, r.qty_per_carton, r.carton_count, r.total_qty, m.l ?? "", m.w ?? "", m.h ?? "", m.weight ?? ""];
-                                      }),
-                                      [],
-                                      ["", "", "TOTAL", "", totalCtn, totalPcs, "", "", "", ""],
-                                    ];
-                                    const ws1 = XLSX.utils.aoa_to_sheet(wsData);
-                                    ws1["!cols"] = [8, 18, 28, 10, 10, 12, 8, 8, 8, 12].map((w) => ({ wch: w }));
-                                    XLSX.utils.book_append_sheet(wb, ws1, "Packing List");
-                                    // Sheet 2: by pallet
-                                    const palletData: (string | number | boolean)[][] = [["Pallet", "SKU", "Product", "Qty/CTN", "Cartons", "Total PCS", "L", "W", "H", "Weight"]];
-                                    palletGroups.forEach((rows, pNo) => {
+
+                                    // ── Sheet 1: By Pallet (main sheet, one block per pallet) ──
+                                    // Only include rows with a valid pallet_no (skip unassigned orphans)
+                                    const assignedGroups = new Map<string, PackingRow[]>();
+                                    packingRows.forEach((r) => {
+                                      const key = r.pallet_no?.trim();
+                                      if (!key) return;
+                                      const arr = assignedGroups.get(key) ?? [];
+                                      arr.push(r);
+                                      assignedGroups.set(key, arr);
+                                    });
+                                    // Sort pallets numerically
+                                    const sortedPallets = Array.from(assignedGroups.keys()).sort((a, b) => (parseInt(a) || 0) - (parseInt(b) || 0));
+
+                                    const byPalletData: (string | number)[][] = [];
+                                    sortedPallets.forEach((pNo) => {
+                                      const rows = assignedGroups.get(pNo)!;
                                       const m = palletMeta[pNo] ?? {};
-                                      rows.forEach((r, i) => palletData.push([
-                                        i === 0 ? pNo : "",
-                                        r.sku, r.product_name, r.qty_per_carton, r.carton_count, r.total_qty,
-                                        i === 0 ? (m.l || "") : "", i === 0 ? (m.w || "") : "", i === 0 ? (m.h || "") : "", i === 0 ? (m.weight || "") : "",
-                                      ]));
                                       const pCtn = rows.reduce((s, r) => s + r.carton_count, 0);
                                       const pPcs = rows.reduce((s, r) => s + r.total_qty, 0);
-                                      palletData.push(["", "", `Pallet ${pNo} Subtotal`, "", pCtn, pPcs, "", "", "", ""]);
-                                      palletData.push([]);
+                                      const dimStr = [m.l && `L:${m.l}"`, m.w && `W:${m.w}"`, m.h && `H:${m.h}"`, m.weight && `${m.weight}lbs`].filter(Boolean).join("  ");
+                                      // Pallet header row
+                                      byPalletData.push([`PALLET ${pNo}`, dimStr || "", "", "", "", ""]);
+                                      // Column header
+                                      byPalletData.push(["SKU", "Product Name", "Qty/CTN", "Cartons", "Total PCS", "Note"]);
+                                      // Item rows
+                                      rows.forEach((r) => byPalletData.push([r.sku, r.product_name || "", r.qty_per_carton, r.carton_count, r.total_qty, r.note || ""]));
+                                      // Subtotal
+                                      byPalletData.push(["", "Subtotal", "", pCtn, pPcs, ""]);
+                                      // Blank separator
+                                      byPalletData.push([]);
                                     });
-                                    const ws2 = XLSX.utils.aoa_to_sheet(palletData);
-                                    ws2["!cols"] = [10, 18, 28, 10, 10, 12, 8, 8, 8, 12].map((w) => ({ wch: w }));
-                                    XLSX.utils.book_append_sheet(wb, ws2, "By Pallet");
+                                    // Grand total
+                                    byPalletData.push(["TOTAL", `${sortedPallets.length} pallets`, "", totalCtn, totalPcs, ""]);
+
+                                    const ws1 = XLSX.utils.aoa_to_sheet(byPalletData);
+                                    ws1["!cols"] = [20, 32, 10, 10, 12, 20].map((w) => ({ wch: w }));
+                                    XLSX.utils.book_append_sheet(wb, ws1, "By Pallet");
+
+                                    // ── Sheet 2: Flat list (all rows) ──
+                                    const flatData: (string | number)[][] = [
+                                      ["Pallet", "SKU", "Product Name", "Qty/CTN", "Cartons", "Total PCS", "L(in)", "W(in)", "H(in)", "Weight(lbs)", "Note"],
+                                      ...packingRows
+                                        .filter((r) => r.pallet_no?.trim())
+                                        .map((r) => {
+                                          const m = palletMeta[r.pallet_no?.trim() ?? ""] ?? {};
+                                          return [r.pallet_no, r.sku, r.product_name, r.qty_per_carton, r.carton_count, r.total_qty, m.l || "", m.w || "", m.h || "", m.weight || "", r.note || ""];
+                                        }),
+                                      [],
+                                      ["", "", "TOTAL", "", totalCtn, totalPcs, "", "", "", "", ""],
+                                    ];
+                                    const ws2 = XLSX.utils.aoa_to_sheet(flatData);
+                                    ws2["!cols"] = [8, 20, 28, 10, 10, 12, 8, 8, 8, 12, 20].map((w) => ({ wch: w }));
+                                    XLSX.utils.book_append_sheet(wb, ws2, "Packing List");
+
                                     XLSX.writeFile(wb, `PackingList_${orderCode}.xlsx`);
                                   }}
                                   className="ml-auto flex items-center gap-1.5 text-xs font-medium text-green-700 border border-green-200 hover:border-green-400 rounded-lg px-3 py-1.5 transition-colors"
@@ -3123,7 +3164,7 @@ ${labels}
                               <div className="border border-slate-200 rounded-xl overflow-hidden">
                                 {/* Pallet header: dimensions + summary */}
                                 <div className="bg-slate-800 text-white px-4 py-3 flex flex-wrap items-center gap-4">
-                                  <span className="text-sm font-bold mr-2">Pallet {curPallet}</span>
+                                  <span className="text-sm font-bold mr-2">{curPallet === "__unassigned__" ? "Unassigned" : `Pallet ${curPallet}`}</span>
                                   <span className="text-xs text-slate-300">{palletCtn} CTN · {palletPcs.toLocaleString()} PCS</span>
                                   <div className="flex items-center gap-2 ml-auto flex-wrap">
                                     {(["l", "w", "h"] as const).map((dim) => (
@@ -3207,15 +3248,31 @@ ${labels}
                                       <Plus className="w-4 h-4" /> Add Item
                                     </button>
                                   </div>
-                                  {/* Delete pallet */}
-                                  {palletRows.length === 0 && (
+                                  {/* Delete pallet — only when empty; for Unassigned, bulk-delete all orphaned rows */}
+                                  {palletRows.length === 0 ? (
+                                    curPallet !== "__unassigned__" && (
+                                      <button
+                                        onClick={() => setActivePallet(palletNos.filter((n) => n !== curPallet)[0] ?? "")}
+                                        className="ml-auto text-xs text-red-400 hover:text-red-600 transition-colors flex items-center gap-1"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" /> Remove pallet
+                                      </button>
+                                    )
+                                  ) : curPallet === "__unassigned__" ? (
                                     <button
-                                      onClick={() => setActivePallet(palletNos.filter((n) => n !== curPallet)[0] ?? "")}
-                                      className="ml-auto text-xs text-red-400 hover:text-red-600 transition-colors flex items-center gap-1"
+                                      onClick={async () => {
+                                        const ids = palletRows.map((r) => r.id).filter(Boolean) as string[];
+                                        await Promise.all(ids.map((id) =>
+                                          fetch(`/api/packing-list?id=${id}`, { method: "DELETE", headers: authHeader })
+                                        ));
+                                        setPackingRows((prev) => prev.filter((r) => r.pallet_no?.trim()));
+                                        setActivePallet(palletNos[0] ?? "");
+                                      }}
+                                      className="ml-auto text-xs font-semibold text-red-500 hover:text-red-700 border border-red-200 hover:border-red-400 rounded-lg px-2.5 py-1 transition-colors flex items-center gap-1"
                                     >
-                                      <Trash2 className="w-3.5 h-3.5" /> Remove pallet
+                                      <Trash2 className="w-3.5 h-3.5" /> Delete all unassigned
                                     </button>
-                                  )}
+                                  ) : null}
                                 </div>
 
                                 {/* Items in this pallet */}
@@ -3292,7 +3349,7 @@ ${labels}
                                     </tbody>
                                     <tfoot>
                                       <tr className="bg-slate-50 border-t-2 border-slate-200 font-semibold text-sm">
-                                        <td colSpan={3} className="px-3 py-2 text-xs text-slate-500 uppercase">Pallet {curPallet} Total</td>
+                                        <td colSpan={3} className="px-3 py-2 text-xs text-slate-500 uppercase">{curPallet === "__unassigned__" ? "Unassigned" : `Pallet ${curPallet}`} Total</td>
                                         <td className="px-3 py-2 text-right tabular-nums text-slate-700">{palletCtn} CTN</td>
                                         <td className="px-3 py-2 text-right tabular-nums text-slate-700">{palletPcs.toLocaleString()} PCS</td>
                                         <td colSpan={2} />
