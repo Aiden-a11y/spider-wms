@@ -8,7 +8,7 @@ import {
   RefreshCw, AlertCircle, Truck, Search, Download, X,
   Building2, User, Store, Globe, MapPin, Save, CheckCircle2, ArrowLeftRight,
   ClipboardList, AlertTriangle, PackageCheck, Loader2, ExternalLink,
-  Plus, Trash2, FileSpreadsheet, Layers,
+  Plus, Trash2, FileSpreadsheet, Layers, ChevronDown,
 } from "lucide-react";
 import { buildLocationOccupancyLookup, getLocationOccupancyInfo, classifyOccupancy } from "@/lib/wms";
 import { supabase } from "@/lib/supabase";
@@ -268,6 +268,10 @@ export default function ShippingTypePage() {
   const [fbaFillModal,   setFbaFillModal]   = useState(false);
   const [fbaFillRunning, setFbaFillRunning] = useState(false);
   const [fbaFillLog,     setFbaFillLog]     = useState<string[]>([]);
+  const [fbaFillDropdown, setFbaFillDropdown] = useState(false);
+  type FbaFillType = "spd" | "ltl" | "ulta";
+  const [fbaFillType, setFbaFillType] = useState<FbaFillType>("spd");
+  const [fbaLtlPallets, setFbaLtlPallets] = useState<number>(1);
   type FbaEntry = { fbaId: string; pages: number; orderCode: string | null };
   const [fbaFillEntries, setFbaFillEntries] = useState<FbaEntry[]>([]);
 
@@ -1825,9 +1829,17 @@ ${labels}
         setFbaFillLog([...log]);
         continue;
       }
-      const labels = entry.pages;
-      const pickPack = Math.floor(labels / 2);
-      const taskText = `Labels×${labels}, Picking per Carton×${pickPack}, Packing per Carton×${pickPack}`;
+      let taskText: string;
+      if (fbaFillType === "ltl") {
+        const labels = entry.pages + 4;
+        const pickCarton = entry.pages;
+        taskText = `Labels×${labels}, Pick Carton×${pickCarton}, Out per pallet×${fbaLtlPallets}, Palletizing and wrapping×${fbaLtlPallets}`;
+      } else {
+        // SPD or ULTA: same logic
+        const labels = entry.pages;
+        const pickPack = Math.floor(labels / 2);
+        taskText = `Labels×${labels}, Picking per Carton×${pickPack}, Packing per Carton×${pickPack}`;
+      }
       const existing = String(detail.comment ?? "").trim();
       const newComment = existing ? `${existing} | ${taskText}` : taskText;
       const payload = Object.fromEntries(
@@ -1838,7 +1850,7 @@ ${labels}
         const r = await fetch("/api/wms/shipping/save", { method: "POST", headers, body: JSON.stringify(payload) });
         const j = await r.json().catch(() => null);
         if (r.ok && (j as Record<string,unknown>)?.isSuccess !== false) {
-          log[log.length - 1] = `${entry.fbaId} → ✅ Saved (labels=${labels}, pick/pack=${pickPack})`;
+          log[log.length - 1] = `${entry.fbaId} → ✅ Saved (${taskText})`;
         } else {
           log[log.length - 1] = `${entry.fbaId} → ❌ ${(j as Record<string,unknown>)?.message ?? "Save failed"}`;
         }
@@ -2093,13 +2105,39 @@ ${labels}
                   )}
                 </button>
                 <input ref={fbaFillInputRef} type="file" multiple accept=".pdf" className="hidden" onChange={handleFbaFillFiles} />
-                <button
-                  onClick={() => fbaFillInputRef.current?.click()}
-                  className="flex items-center gap-2 text-sm font-medium rounded-lg px-3 py-2 border border-orange-300 text-orange-700 hover:bg-orange-50 transition-colors"
-                  title="Upload FBA label PDFs to auto-fill Labels / Picking per Carton / Packing per Carton"
-                >
-                  FBA Label Fill
-                </button>
+                <div className="relative">
+                  <div className="flex rounded-lg border border-orange-300 overflow-hidden">
+                    <button
+                      onClick={() => fbaFillInputRef.current?.click()}
+                      className="flex items-center gap-2 text-sm font-medium px-3 py-2 text-orange-700 hover:bg-orange-50 transition-colors"
+                      title="Upload FBA label PDFs"
+                    >
+                      FBA Label Fill
+                      <span className="text-xs bg-orange-100 text-orange-600 font-bold px-1.5 py-0.5 rounded">
+                        {fbaFillType === "spd" ? "SPD" : fbaFillType === "ltl" ? "LTL" : "ULTA"}
+                      </span>
+                    </button>
+                    <button
+                      onClick={() => setFbaFillDropdown((v) => !v)}
+                      className="px-2 py-2 text-orange-700 hover:bg-orange-50 border-l border-orange-300 transition-colors"
+                    >
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  {fbaFillDropdown && (
+                    <div className="absolute right-0 top-full mt-1 z-30 bg-white rounded-lg shadow-lg border border-slate-200 py-1 min-w-[140px]">
+                      {(["spd", "ltl", "ulta"] as FbaFillType[]).map((t) => (
+                        <button
+                          key={t}
+                          onClick={() => { setFbaFillType(t); setFbaFillDropdown(false); }}
+                          className={`w-full text-left px-4 py-2 text-sm transition-colors ${fbaFillType === t ? "bg-orange-50 text-orange-700 font-semibold" : "text-slate-700 hover:bg-slate-50"}`}
+                        >
+                          {t === "spd" ? "FBA SPD" : t === "ltl" ? "FBA LTL" : "ULTA"}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </>
             );
           })()}
@@ -3699,76 +3737,126 @@ ${labels}
       )}
 
       {/* ── FBA Label Fill Modal ── */}
-      {fbaFillModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/50" onClick={() => { if (!fbaFillRunning) setFbaFillModal(false); }} />
-          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
-            <div className="flex items-center justify-between p-5 border-b border-slate-100">
-              <div>
-                <h3 className="font-bold text-slate-900">FBA Label Auto-fill</h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  {fbaFillEntries.filter((e) => e.orderCode).length} / {fbaFillEntries.length} orders matched
-                </p>
-              </div>
-              {!fbaFillRunning && (
-                <button onClick={() => setFbaFillModal(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
-              )}
-            </div>
-            <div className="flex-1 overflow-y-auto p-5 space-y-2">
-              {fbaFillLog.length === 0 ? (
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-xs text-slate-500 border-b border-slate-100">
-                      <th className="text-left pb-2">FBA ID</th>
-                      <th className="text-right pb-2">Pages</th>
-                      <th className="text-right pb-2">Labels</th>
-                      <th className="text-right pb-2">Pick/Pack</th>
-                      <th className="text-left pb-2 pl-4">Order Code</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {fbaFillEntries.map((e) => (
-                      <tr key={e.fbaId} className={`border-b border-slate-50 ${e.orderCode ? "" : "opacity-40"}`}>
-                        <td className="py-1.5 font-mono text-xs">{e.fbaId}</td>
-                        <td className="py-1.5 text-right">{e.pages}</td>
-                        <td className="py-1.5 text-right font-bold text-blue-700">{e.pages}</td>
-                        <td className="py-1.5 text-right font-bold text-emerald-700">{Math.floor(e.pages / 2)}</td>
-                        <td className="py-1.5 pl-4 font-mono text-xs">
-                          {e.orderCode ? <span className="text-slate-800">{e.orderCode}</span> : <span className="text-red-400">No match</span>}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : (
-                <div className="space-y-1">
-                  {fbaFillLog.map((line, i) => (
-                    <p key={i} className={`text-xs font-mono ${line.includes("✅") ? "text-green-700" : line.includes("❌") ? "text-red-600" : "text-slate-500"}`}>{line}</p>
-                  ))}
+      {fbaFillModal && (() => {
+        const typeLabel = fbaFillType === "spd" ? "FBA SPD" : fbaFillType === "ltl" ? "FBA LTL" : "ULTA";
+        const matchedCount = fbaFillEntries.filter((e) => e.orderCode).length;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/50" onClick={() => { if (!fbaFillRunning) setFbaFillModal(false); }} />
+            <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
+              {/* Header */}
+              <div className="flex items-center justify-between p-5 border-b border-slate-100">
+                <div>
+                  <h3 className="font-bold text-slate-900">
+                    FBA Label Auto-fill
+                    <span className="ml-2 text-xs font-semibold bg-orange-100 text-orange-600 px-2 py-0.5 rounded">{typeLabel}</span>
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">{matchedCount} / {fbaFillEntries.length} orders matched</p>
                 </div>
-              )}
-            </div>
-            <div className="p-5 border-t border-slate-100 flex justify-end gap-3">
-              {!fbaFillRunning && fbaFillLog.length === 0 && (
-                <>
-                  <button onClick={() => setFbaFillModal(false)} className="px-4 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50">Cancel</button>
-                  <button
-                    onClick={runFbaFill}
-                    disabled={fbaFillEntries.filter((e) => e.orderCode).length === 0}
-                    className="px-4 py-2 text-sm font-semibold bg-orange-600 hover:bg-orange-700 text-white rounded-lg disabled:opacity-40"
-                  >
-                    Update {fbaFillEntries.filter((e) => e.orderCode).length} Orders
-                  </button>
-                </>
-              )}
-              {fbaFillRunning && <p className="text-sm text-slate-500 animate-pulse">Updating orders…</p>}
-              {!fbaFillRunning && fbaFillLog.length > 0 && (
-                <button onClick={() => setFbaFillModal(false)} className="px-4 py-2 text-sm font-semibold bg-slate-800 text-white rounded-lg">Close</button>
-              )}
+                {!fbaFillRunning && (
+                  <button onClick={() => setFbaFillModal(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+                )}
+              </div>
+
+              {/* Body */}
+              <div className="flex-1 overflow-y-auto p-5 space-y-4">
+                {fbaFillLog.length === 0 ? (
+                  <>
+                    {/* LTL pallet input */}
+                    {fbaFillType === "ltl" && (
+                      <div className="flex items-center gap-3 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                        <div className="text-amber-700 font-medium text-sm whitespace-nowrap">Out per Pallet / Palletizing &amp; Wrapping 수량</div>
+                        <input
+                          type="number"
+                          min={1}
+                          value={fbaLtlPallets}
+                          onChange={(e) => setFbaLtlPallets(Math.max(1, parseInt(e.target.value) || 1))}
+                          className="w-24 border border-amber-300 rounded-lg px-3 py-1.5 text-sm text-center font-bold focus:outline-none focus:ring-2 focus:ring-amber-400"
+                        />
+                        <span className="text-xs text-amber-600">pallets</span>
+                      </div>
+                    )}
+
+                    {/* Table */}
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-xs text-slate-500 border-b border-slate-100">
+                          <th className="text-left pb-2">FBA ID</th>
+                          <th className="text-right pb-2">Pages</th>
+                          {fbaFillType === "ltl" ? (
+                            <>
+                              <th className="text-right pb-2 text-blue-700">Labels (p+4)</th>
+                              <th className="text-right pb-2 text-emerald-700">Pick Carton</th>
+                              <th className="text-right pb-2 text-amber-700">Out/Pallet</th>
+                              <th className="text-right pb-2 text-purple-700">Palletizing</th>
+                            </>
+                          ) : (
+                            <>
+                              <th className="text-right pb-2 text-blue-700">Labels</th>
+                              <th className="text-right pb-2 text-emerald-700">Pick/Pack</th>
+                            </>
+                          )}
+                          <th className="text-left pb-2 pl-4">Order Code</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {fbaFillEntries.map((e) => (
+                          <tr key={e.fbaId} className={`border-b border-slate-50 ${e.orderCode ? "" : "opacity-40"}`}>
+                            <td className="py-1.5 font-mono text-xs">{e.fbaId}</td>
+                            <td className="py-1.5 text-right text-slate-500">{e.pages}</td>
+                            {fbaFillType === "ltl" ? (
+                              <>
+                                <td className="py-1.5 text-right font-bold text-blue-700">{e.pages + 4}</td>
+                                <td className="py-1.5 text-right font-bold text-emerald-700">{e.pages}</td>
+                                <td className="py-1.5 text-right font-bold text-amber-700">{fbaLtlPallets}</td>
+                                <td className="py-1.5 text-right font-bold text-purple-700">{fbaLtlPallets}</td>
+                              </>
+                            ) : (
+                              <>
+                                <td className="py-1.5 text-right font-bold text-blue-700">{e.pages}</td>
+                                <td className="py-1.5 text-right font-bold text-emerald-700">{Math.floor(e.pages / 2)}</td>
+                              </>
+                            )}
+                            <td className="py-1.5 pl-4 font-mono text-xs">
+                              {e.orderCode ? <span className="text-slate-800">{e.orderCode}</span> : <span className="text-red-400">No match</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </>
+                ) : (
+                  <div className="space-y-1">
+                    {fbaFillLog.map((line, i) => (
+                      <p key={i} className={`text-xs font-mono ${line.includes("✅") ? "text-green-700" : line.includes("❌") ? "text-red-600" : "text-slate-500"}`}>{line}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="p-5 border-t border-slate-100 flex justify-end gap-3">
+                {!fbaFillRunning && fbaFillLog.length === 0 && (
+                  <>
+                    <button onClick={() => setFbaFillModal(false)} className="px-4 py-2 text-sm text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50">Cancel</button>
+                    <button
+                      onClick={runFbaFill}
+                      disabled={matchedCount === 0}
+                      className="px-4 py-2 text-sm font-semibold bg-orange-600 hover:bg-orange-700 text-white rounded-lg disabled:opacity-40"
+                    >
+                      Update {matchedCount} Orders
+                    </button>
+                  </>
+                )}
+                {fbaFillRunning && <p className="text-sm text-slate-500 animate-pulse">Updating orders…</p>}
+                {!fbaFillRunning && fbaFillLog.length > 0 && (
+                  <button onClick={() => setFbaFillModal(false)} className="px-4 py-2 text-sm font-semibold bg-slate-800 text-white rounded-lg">Close</button>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ── Debug ── */}
       {debugInfo.endpoint && (
