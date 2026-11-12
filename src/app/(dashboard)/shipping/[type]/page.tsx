@@ -3139,64 +3139,194 @@ ${labels}
                               {/* Export */}
                               {packingRows.length > 0 && (
                                 <button
-                                  onClick={() => {
-                                    const wb = XLSX.utils.book_new();
+                                  onClick={async () => {
+                                    const ExcelJS = (await import("exceljs")).default;
+                                    const wb = new ExcelJS.Workbook();
+                                    wb.creator = "WMS Dashboard";
+                                    wb.created = new Date();
 
-                                    // ── Sheet 1: By Pallet (main sheet, one block per pallet) ──
-                                    // Only include rows with a valid pallet_no (skip unassigned orphans)
+                                    // ── Helper styles ──
+                                    const solidFill = (argb: string) => ({ type: "pattern" as const, pattern: "solid" as const, fgColor: { argb } });
+                                    const thinBorder = { style: "thin" as const, color: { argb: "FFD1D5DB" } };
+                                    const allBorders = { top: thinBorder, left: thinBorder, bottom: thinBorder, right: thinBorder };
+                                    const boldWhite = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+                                    const boldDark  = { bold: true, color: { argb: "FF1E293B" }, size: 10 };
+                                    const mono      = { name: "Consolas", size: 9, color: { argb: "FF334155" } };
+                                    const centerAlign = () => ({ vertical: "middle" as const, horizontal: "center" as const });
+                                    const rightAlign  = () => ({ vertical: "middle" as const, horizontal: "right" as const });
+                                    const leftAlign   = () => ({ vertical: "middle" as const, horizontal: "left" as const });
+
+                                    // Build pallet groups (sorted, assigned only)
                                     const assignedGroups = new Map<string, PackingRow[]>();
                                     packingRows.forEach((r) => {
                                       const key = r.pallet_no?.trim();
                                       if (!key) return;
-                                      const arr = assignedGroups.get(key) ?? [];
-                                      arr.push(r);
-                                      assignedGroups.set(key, arr);
+                                      assignedGroups.set(key, [...(assignedGroups.get(key) ?? []), r]);
                                     });
-                                    // Sort pallets numerically
                                     const sortedPallets = Array.from(assignedGroups.keys()).sort((a, b) => (parseInt(a) || 0) - (parseInt(b) || 0));
 
-                                    const byPalletData: (string | number)[][] = [];
+                                    // ═══════════════════════════════════════
+                                    // Sheet 1 — By Pallet
+                                    // ═══════════════════════════════════════
+                                    const ws1 = wb.addWorksheet("By Pallet");
+                                    ws1.columns = [
+                                      { width: 22 }, // SKU
+                                      { width: 34 }, // Product Name
+                                      { width: 11 }, // Qty/CTN
+                                      { width: 10 }, // Cartons
+                                      { width: 12 }, // Total PCS
+                                      { width: 22 }, // Note
+                                    ];
+
+                                    // Order header
+                                    const orderHdr = ws1.addRow([`Packing List — ${orderCode}`, "", "", "", "", ""]);
+                                    ws1.mergeCells(`A${orderHdr.number}:F${orderHdr.number}`);
+                                    orderHdr.height = 22;
+                                    orderHdr.getCell(1).fill = solidFill("FF0F172A");
+                                    orderHdr.getCell(1).font = { bold: true, color: { argb: "FFFFFFFF" }, size: 13 };
+                                    orderHdr.getCell(1).alignment = leftAlign();
+
+                                    ws1.addRow([]); // spacer
+
                                     sortedPallets.forEach((pNo) => {
                                       const rows = assignedGroups.get(pNo)!;
                                       const m = palletMeta[pNo] ?? {};
                                       const pCtn = rows.reduce((s, r) => s + r.carton_count, 0);
                                       const pPcs = rows.reduce((s, r) => s + r.total_qty, 0);
-                                      const dimStr = [m.l && `L:${m.l}"`, m.w && `W:${m.w}"`, m.h && `H:${m.h}"`, m.weight && `${m.weight}lbs`].filter(Boolean).join("  ");
-                                      // Pallet header row
-                                      byPalletData.push([`PALLET ${pNo}`, dimStr || "", "", "", "", ""]);
-                                      // Column header
-                                      byPalletData.push(["SKU", "Product Name", "Qty/CTN", "Cartons", "Total PCS", "Note"]);
+                                      const dims = [
+                                        m.l ? `L ${m.l}"` : "", m.w ? `W ${m.w}"` : "",
+                                        m.h ? `H ${m.h}"` : "", m.weight ? `${m.weight} lbs` : "",
+                                      ].filter(Boolean).join("  ·  ");
+
+                                      // Pallet title row (cols A–B merged = label, C–F merged = dims)
+                                      const palHdr = ws1.addRow([`  PALLET ${pNo}`, "", "", dims, "", ""]);
+                                      ws1.mergeCells(`A${palHdr.number}:C${palHdr.number}`);
+                                      ws1.mergeCells(`D${palHdr.number}:F${palHdr.number}`);
+                                      palHdr.height = 20;
+                                      ["A","B","C","D","E","F"].forEach((col) => {
+                                        palHdr.getCell(col).fill = solidFill("FF1E293B");
+                                        palHdr.getCell(col).font = boldWhite;
+                                      });
+                                      palHdr.getCell("A").alignment = leftAlign();
+                                      palHdr.getCell("D").alignment = rightAlign();
+
+                                      // Column header row
+                                      const colHdr = ws1.addRow(["SKU", "Product Name", "Qty/CTN", "Cartons", "Total PCS", "Note"]);
+                                      colHdr.height = 16;
+                                      ["A","B","C","D","E","F"].forEach((col) => {
+                                        colHdr.getCell(col).fill = solidFill("FFF1F5F9");
+                                        colHdr.getCell(col).font = boldDark;
+                                        colHdr.getCell(col).border = allBorders;
+                                        colHdr.getCell(col).alignment = col === "A" || col === "B" || col === "F" ? leftAlign() : centerAlign();
+                                      });
+
                                       // Item rows
-                                      rows.forEach((r) => byPalletData.push([r.sku, r.product_name || "", r.qty_per_carton, r.carton_count, r.total_qty, r.note || ""]));
-                                      // Subtotal
-                                      byPalletData.push(["", "Subtotal", "", pCtn, pPcs, ""]);
-                                      // Blank separator
-                                      byPalletData.push([]);
+                                      rows.forEach((r, i) => {
+                                        const dataRow = ws1.addRow([r.sku, r.product_name || "", r.qty_per_carton, r.carton_count, r.total_qty, r.note || ""]);
+                                        dataRow.height = 15;
+                                        const bgArgb = i % 2 === 0 ? "FFFFFFFF" : "FFF8FAFC";
+                                        dataRow.getCell("A").font = mono;
+                                        dataRow.getCell("A").fill = solidFill(bgArgb);
+                                        dataRow.getCell("B").fill = solidFill(bgArgb);
+                                        dataRow.getCell("F").fill = solidFill(bgArgb);
+                                        dataRow.getCell("A").alignment = leftAlign();
+                                        dataRow.getCell("B").alignment = leftAlign();
+                                        ["C","D","E"].forEach((col) => {
+                                          dataRow.getCell(col).fill = solidFill(bgArgb);
+                                          dataRow.getCell(col).alignment = rightAlign();
+                                          dataRow.getCell(col).numFmt = "#,##0";
+                                        });
+                                        dataRow.getCell("E").font = { bold: true, size: 10, color: { argb: "FF1D4ED8" } };
+                                        ["A","B","C","D","E","F"].forEach((col) => {
+                                          dataRow.getCell(col).border = allBorders;
+                                        });
+                                      });
+
+                                      // Subtotal row
+                                      const subRow = ws1.addRow(["", "Subtotal", "", pCtn, pPcs, ""]);
+                                      subRow.height = 16;
+                                      ["A","B","C","D","E","F"].forEach((col) => {
+                                        subRow.getCell(col).fill = solidFill("FFDBEAFE");
+                                        subRow.getCell(col).border = allBorders;
+                                      });
+                                      subRow.getCell("B").font = { bold: true, color: { argb: "FF1E40AF" }, size: 10 };
+                                      subRow.getCell("D").font = { bold: true, color: { argb: "FF1E40AF" }, size: 10 };
+                                      subRow.getCell("E").font = { bold: true, color: { argb: "FF1E40AF" }, size: 10 };
+                                      subRow.getCell("D").alignment = rightAlign();
+                                      subRow.getCell("E").alignment = rightAlign();
+                                      subRow.getCell("D").numFmt = "#,##0";
+                                      subRow.getCell("E").numFmt = "#,##0";
+
+                                      ws1.addRow([]); // spacer
                                     });
-                                    // Grand total
-                                    byPalletData.push(["TOTAL", `${sortedPallets.length} pallets`, "", totalCtn, totalPcs, ""]);
 
-                                    const ws1 = XLSX.utils.aoa_to_sheet(byPalletData);
-                                    ws1["!cols"] = [20, 32, 10, 10, 12, 20].map((w) => ({ wch: w }));
-                                    XLSX.utils.book_append_sheet(wb, ws1, "By Pallet");
+                                    // Grand total row
+                                    const totalRow = ws1.addRow([`TOTAL  (${sortedPallets.length} pallets)`, "", "", totalCtn, totalPcs, ""]);
+                                    ws1.mergeCells(`A${totalRow.number}:C${totalRow.number}`);
+                                    totalRow.height = 20;
+                                    ["A","B","C","D","E","F"].forEach((col) => {
+                                      totalRow.getCell(col).fill = solidFill("FF0F172A");
+                                      totalRow.getCell(col).font = boldWhite;
+                                      totalRow.getCell(col).border = allBorders;
+                                    });
+                                    totalRow.getCell("A").alignment = leftAlign();
+                                    totalRow.getCell("D").alignment = rightAlign();
+                                    totalRow.getCell("E").alignment = rightAlign();
+                                    totalRow.getCell("D").numFmt = "#,##0";
+                                    totalRow.getCell("E").numFmt = "#,##0";
 
-                                    // ── Sheet 2: Flat list (all rows) ──
-                                    const flatData: (string | number)[][] = [
-                                      ["Pallet", "SKU", "Product Name", "Qty/CTN", "Cartons", "Total PCS", "L(in)", "W(in)", "H(in)", "Weight(lbs)", "Note"],
-                                      ...packingRows
-                                        .filter((r) => r.pallet_no?.trim())
-                                        .map((r) => {
-                                          const m = palletMeta[r.pallet_no?.trim() ?? ""] ?? {};
-                                          return [r.pallet_no, r.sku, r.product_name, r.qty_per_carton, r.carton_count, r.total_qty, m.l || "", m.w || "", m.h || "", m.weight || "", r.note || ""];
-                                        }),
-                                      [],
-                                      ["", "", "TOTAL", "", totalCtn, totalPcs, "", "", "", "", ""],
+                                    // ═══════════════════════════════════════
+                                    // Sheet 2 — Flat List
+                                    // ═══════════════════════════════════════
+                                    const ws2 = wb.addWorksheet("Packing List");
+                                    ws2.columns = [
+                                      { width: 10 }, { width: 20 }, { width: 30 },
+                                      { width: 10 }, { width: 10 }, { width: 12 },
+                                      { width: 8  }, { width: 8  }, { width: 8  }, { width: 12 }, { width: 22 },
                                     ];
-                                    const ws2 = XLSX.utils.aoa_to_sheet(flatData);
-                                    ws2["!cols"] = [8, 20, 28, 10, 10, 12, 8, 8, 8, 12, 20].map((w) => ({ wch: w }));
-                                    XLSX.utils.book_append_sheet(wb, ws2, "Packing List");
+                                    const flatHdr = ws2.addRow(["Pallet","SKU","Product Name","Qty/CTN","Cartons","Total PCS","L(in)","W(in)","H(in)","Weight(lbs)","Note"]);
+                                    flatHdr.height = 16;
+                                    flatHdr.eachCell((cell) => {
+                                      cell.fill = solidFill("FF1E293B");
+                                      cell.font = boldWhite;
+                                      cell.border = allBorders;
+                                      cell.alignment = centerAlign();
+                                    });
+                                    packingRows
+                                      .filter((r) => r.pallet_no?.trim())
+                                      .forEach((r, i) => {
+                                        const m2 = palletMeta[r.pallet_no?.trim() ?? ""] ?? {};
+                                        const dataRow = ws2.addRow([r.pallet_no, r.sku, r.product_name, r.qty_per_carton, r.carton_count, r.total_qty, m2.l||"", m2.w||"", m2.h||"", m2.weight||"", r.note||""]);
+                                        const bgArgb = i % 2 === 0 ? "FFFFFFFF" : "FFF8FAFC";
+                                        dataRow.eachCell((cell, col) => {
+                                          cell.fill = solidFill(bgArgb);
+                                          cell.border = allBorders;
+                                          cell.alignment = col >= 4 && col <= 10 ? rightAlign() : leftAlign();
+                                          if (col >= 4 && col <= 6) cell.numFmt = "#,##0";
+                                        });
+                                        dataRow.getCell(6).font = { bold: true, size: 10 };
+                                      });
+                                    ws2.addRow([]);
+                                    const flatTotal = ws2.addRow(["","","TOTAL","",totalCtn,totalPcs,"","","","",""]);
+                                    ["A","B","C","D","E","F","G","H","I","J","K"].forEach((col) => {
+                                      flatTotal.getCell(col).fill = solidFill("FF1E293B");
+                                      flatTotal.getCell(col).font = boldWhite;
+                                      flatTotal.getCell(col).border = allBorders;
+                                    });
+                                    flatTotal.getCell("E").numFmt = "#,##0";
+                                    flatTotal.getCell("F").numFmt = "#,##0";
+                                    flatTotal.getCell("E").alignment = rightAlign();
+                                    flatTotal.getCell("F").alignment = rightAlign();
 
-                                    XLSX.writeFile(wb, `PackingList_${orderCode}.xlsx`);
+                                    // Download
+                                    const buffer = await wb.xlsx.writeBuffer();
+                                    const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+                                    const url = URL.createObjectURL(blob);
+                                    const a = document.createElement("a");
+                                    a.href = url;
+                                    a.download = `PackingList_${orderCode}.xlsx`;
+                                    a.click();
+                                    URL.revokeObjectURL(url);
                                   }}
                                   className="ml-auto flex items-center gap-1.5 text-xs font-medium text-green-700 border border-green-200 hover:border-green-400 rounded-lg px-3 py-1.5 transition-colors"
                                 >
