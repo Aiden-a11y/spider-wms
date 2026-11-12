@@ -281,7 +281,7 @@ export default function ShippingTypePage() {
   const [packingSaving,     setPackingSaving]     = useState(false);
   const [showPalletSummary, setShowPalletSummary] = useState(false);
   const [activePallet, setActivePallet] = useState<string>("");
-  const [palletMeta, setPalletMeta] = useState<Record<string, { l: string; w: string; h: string; weight: string }>>({});
+  const [palletMeta, setPalletMeta] = useState<Record<string, { id?: string; l: string; w: string; h: string; weight: string }>>({});
   const [packAddSku, setPackAddSku] = useState<string>("");
   const [packAddQtyPerCtn, setPackAddQtyPerCtn] = useState<string>("");
   const [packAddCtnCount, setPackAddCtnCount] = useState<string>("");
@@ -454,7 +454,25 @@ export default function ShippingTypePage() {
         headers: authHeader,
       });
       const data = await res.json();
-      setPackingRows(data.rows ?? []);
+      const all: PackingRow[] = data.rows ?? [];
+      // Separate pallet meta rows from real packing rows
+      const metaRows = all.filter((r) => r.sku === "__pallet_meta__");
+      const realRows = all.filter((r) => r.sku !== "__pallet_meta__");
+      const metaMap: Record<string, { id?: string; l: string; w: string; h: string; weight: string }> = {};
+      metaRows.forEach((r) => {
+        try {
+          const parsed = JSON.parse(r.note || "{}");
+          metaMap[r.pallet_no?.trim() ?? ""] = {
+            id: r.id,
+            l: parsed.l ?? "",
+            w: parsed.w ?? "",
+            h: parsed.h ?? "",
+            weight: parsed.weight ?? "",
+          };
+        } catch { /* ignore malformed */ }
+      });
+      setPackingRows(realRows);
+      setPalletMeta(metaMap);
     } finally {
       setPackingLoading(false);
     }
@@ -2945,6 +2963,41 @@ ${labels}
                         });
                       }
 
+                      // Persist pallet dimension/weight to DB as a special __pallet_meta__ row
+                      async function savePalletMeta(palletNo: string, m: { id?: string; l: string; w: string; h: string; weight: string }) {
+                        if (!palletNo || palletNo === "__unassigned__") return;
+                        const noteVal = JSON.stringify({ l: m.l, w: m.w, h: m.h, weight: m.weight });
+                        if (m.id) {
+                          await fetch(`/api/packing-list?id=${m.id}`, {
+                            method: "PATCH",
+                            headers: { ...authHeader, "Content-Type": "application/json" },
+                            body: JSON.stringify({ note: noteVal }),
+                          });
+                        } else {
+                          const res = await fetch("/api/packing-list", {
+                            method: "POST",
+                            headers: { ...authHeader, "Content-Type": "application/json" },
+                            body: JSON.stringify([{
+                              order_code: orderCode,
+                              sku: "__pallet_meta__",
+                              product_name: "",
+                              qty_per_carton: 0,
+                              carton_count: 0,
+                              pallet_no: palletNo,
+                              note: noteVal,
+                            }]),
+                          });
+                          const data = await res.json();
+                          const newId = data.rows?.[0]?.id;
+                          if (newId) {
+                            setPalletMeta((prev) => ({
+                              ...prev,
+                              [palletNo]: { ...prev[palletNo], id: newId },
+                            }));
+                          }
+                        }
+                      }
+
                       async function addItemToPallet() {
                         if (!packAddSku || !curPallet) return;
                         const res = await fetch("/api/packing-list", {
@@ -3175,6 +3228,7 @@ ${labels}
                                           min={0}
                                           value={meta[dim]}
                                           onChange={(e) => setPalletMeta((prev) => ({ ...prev, [curPallet]: { ...meta, [dim]: e.target.value } }))}
+                                          onBlur={() => savePalletMeta(curPallet, palletMeta[curPallet] ?? meta)}
                                           className="w-16 text-xs text-right bg-slate-700 border border-slate-600 focus:border-blue-400 focus:outline-none rounded px-1.5 py-1 text-white tabular-nums"
                                           placeholder="0"
                                         />
@@ -3187,6 +3241,7 @@ ${labels}
                                         min={0}
                                         value={meta.weight}
                                         onChange={(e) => setPalletMeta((prev) => ({ ...prev, [curPallet]: { ...meta, weight: e.target.value } }))}
+                                        onBlur={() => savePalletMeta(curPallet, palletMeta[curPallet] ?? meta)}
                                         className="w-20 text-xs text-right bg-slate-700 border border-slate-600 focus:border-blue-400 focus:outline-none rounded px-1.5 py-1 text-white tabular-nums"
                                         placeholder="0"
                                       />
