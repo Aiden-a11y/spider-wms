@@ -2081,13 +2081,8 @@ ${labels}
   /* SKU → total picking qty (for Remain calculation in Packing List) */
   const skuPickingQty = useMemo(() => {
     const map = new Map<string, { qty: number; productName: string }>();
-    // Use all available item sources — picking rows first, then raw fallbacks
-    const sources: Record<string, unknown>[] = [
-      ...pickingRows,
-      ...shippingItemsRaw,
-      ...itemsRaw,
-    ] as Record<string, unknown>[];
-    sources.forEach((it) => {
+    // pickingRows already contains itemsRaw+shippingItemsRaw — use it alone to avoid double-counting
+    (pickingRows as Record<string, unknown>[]).forEach((it) => {
       const sku = String(
         it.productSku ?? it.sku ?? it.stockCode ?? it.itemCode ?? it.unitBarcode ?? ""
       );
@@ -2099,7 +2094,7 @@ ${labels}
       else map.set(sku, { qty, productName: name });
     });
     return map;
-  }, [pickingRows, shippingItemsRaw, itemsRaw]);
+  }, [pickingRows]);
 
   /* Fields to skip in "extra" section */
   const SKIP_FIELDS = new Set([
