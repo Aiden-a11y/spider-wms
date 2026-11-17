@@ -1821,9 +1821,15 @@ ${labels}
     if (!files.length) return;
     const entries: FbaEntry[] = await Promise.all(
       files.map(async (f) => {
-        const fbaId = f.name.split("-")[0].toUpperCase();
+        // Strip extension (.pdf/.PDF) first, then take the part before any "-"
+        const nameNoExt = f.name.replace(/\.[^.]+$/, "");
+        const fbaId = nameNoExt.split("-")[0].toUpperCase();
         const pages = await countPdfPages(f);
-        const matched = orders.find((o) => String(o.shippingOrderNo ?? "").trim().toUpperCase() === fbaId);
+        const matched = orders.find((o) => {
+          const no   = String(o.shippingOrderNo  ?? "").trim().toUpperCase();
+          const code = String(o.shippingOrderCode ?? o.orderCode ?? o.outboundCode ?? "").trim().toUpperCase();
+          return no === fbaId || code === fbaId;
+        });
         const orderCode = matched ? String(matched.shippingOrderCode ?? matched.orderCode ?? "") : null;
         return { fbaId, pages, orderCode, order: matched ?? null };
       })
