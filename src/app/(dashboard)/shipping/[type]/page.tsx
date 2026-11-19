@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { buildLocationOccupancyLookup, getLocationOccupancyInfo, classifyOccupancy } from "@/lib/wms";
 import { supabase } from "@/lib/supabase";
-import { generatePickLineZPL, zebraDiscoverPrinters, zebraSend, type ZebraPrinter } from "@/lib/zpl";
+import { generatePickLineZPL, generateB2BSummaryZPL, zebraDiscoverPrinters, zebraSend, type ZebraPrinter } from "@/lib/zpl";
 import * as XLSX from "xlsx";
 
 /* ── Shipping type config ── */
@@ -1774,6 +1774,72 @@ ${labels}
 
         await zebraSend(printer, zpl);
         if (i < allocRows.length - 1) await new Promise<void>((r) => setTimeout(r, 200));
+      }
+
+      setZebraPickStatus("done");
+      setTimeout(() => setZebraPickStatus(""), 4000);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Print failed";
+      setZebraPickStatus("error");
+      setZebraPickError(msg);
+    }
+  }
+
+  /* ── Zebra — send order summary ticket (SKU totals per order) ─────────────── */
+  async function zebraOrderSummary() {
+    setZebraPickStatus("printing");
+    setZebraPickError("");
+    try {
+      let printer = zebraPickPrinter.current;
+      if (!printer) {
+        const list = await zebraDiscoverPrinters();
+        if (list.length === 0) throw new Error("No Zebra printers found. Is Browser Print running?");
+        printer = list[0];
+        zebraPickPrinter.current = printer;
+      }
+
+      const codes = Object.keys(selectedCodes).filter((k) => selectedCodes[k]);
+      const dateStr = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      const custName = customers.find((c) => c.code === customerCode)?.name ?? customerCode ?? warehouseCode;
+
+      for (let i = 0; i < codes.length; i++) {
+        const code = codes[i];
+        // Group allocRows by SKU for this order
+        const skuMap = new Map<string, { productName: string; totalQty: number }>();
+        allocRows
+          .filter((r) => r.perOrder[code] != null)
+          .forEach((r) => {
+            const qty = r.perOrder[code] ?? 0;
+            const prev = skuMap.get(r.sku);
+            if (prev) { prev.totalQty += qty; }
+            else skuMap.set(r.sku, { productName: r.productName || "", totalQty: qty });
+          });
+
+        const skus = Array.from(skuMap.entries())
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([sku, { productName, totalQty }]) => {
+            const upc = uomMap[sku] ?? 0;
+            const cartons = upc > 0 ? Math.ceil(totalQty / upc) : null;
+            return { sku, productName, totalQty, cartons, unitsPerCarton: upc };
+          });
+
+        const totalQty = skus.reduce((s, r) => s + r.totalQty, 0);
+        const totalCartons = skus.reduce((s, r) => s + (r.cartons ?? 0), 0);
+
+        const zpl = generateB2BSummaryZPL({
+          labelIdx: i + 1,
+          totalLabels: codes.length,
+          orderCode: code,
+          orderNo: shipNoMap[code] ?? code,
+          customerName: custName,
+          warehouseCode,
+          dateStr,
+          skus,
+          totalQty,
+          totalCartons,
+        });
+
+        await zebraSend(printer, zpl);
       }
 
       setZebraPickStatus("done");
@@ -3977,6 +4043,20 @@ ${labels}
                             <div>
                               <div className="font-medium">By SKU</div>
                               <div className="text-[10px] text-slate-400">One ticket per order</div>
+                            </div>
+                          </button>
+                          <div className="px-3 py-1.5 text-[10px] font-semibold text-violet-600 uppercase tracking-wide bg-violet-50 border-t border-violet-100 border-b border-violet-100 flex items-center gap-1.5">
+                            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+                            Summary Ticket
+                          </div>
+                          <button
+                            onClick={() => { setTicketSortOpen(false); zebraOrderSummary(); }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors text-left"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-violet-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                            <div>
+                              <div className="font-medium">SKU 총수량 요약</div>
+                              <div className="text-[10px] text-slate-400">오더별 SKU별 총 수량 · One ticket per order</div>
                             </div>
                           </button>
                         </div>

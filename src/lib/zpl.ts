@@ -677,6 +677,150 @@ export function generatePickLineZPL(data: B2BPickLineData): string {
   return z.join("\n");
 }
 
+// ── B2B Order Summary Label (SKU totals per order) ───────────────────────────
+//   4" × auto @ 203 DPI (PW = 812 dots)
+//   One label per order: shows SKU / Product / Total Qty / Cartons
+
+export interface B2BSummaryOrder {
+  labelIdx: number;
+  totalLabels: number;
+  orderCode: string;
+  orderNo: string;
+  customerName: string;
+  warehouseCode: string;
+  dateStr: string;
+  skus: Array<{
+    sku: string;
+    productName: string;
+    totalQty: number;
+    cartons: number | null;
+    unitsPerCarton: number;
+  }>;
+  totalQty: number;
+  totalCartons: number;
+}
+
+export function generateB2BSummaryZPL(data: B2BSummaryOrder): string {
+  const W = 812;
+  const M = 16;
+  const z: string[] = [];
+  let y = 10;
+  const LL_IDX = 2;
+
+  z.push("^XA");
+  z.push(`^PW${W}`);
+  z.push("^LH0,0");
+  z.push("^CI28");
+
+  // ── HEADER ──
+  // QR code (top-right, mag 5 ≈ 130 dots)
+  z.push(`^FO${W - 155},${y}^BQN,2,5^FDQA,${ze(data.orderCode)}^FS`);
+
+  z.push(`^FO${M},${y}^GB${W - M * 2},3,3^FS`);
+  y += 7;
+
+  // Title badge (inverted)
+  z.push(`^FO${M},${y}^GB340,52,52^FS`);
+  z.push(`^FO${M + 6},${y + 8}^A0N,22,18^FR^FDB2B ORDER SUMMARY^FS`);
+  y += 60;
+
+  z.push(`^FO${M},${y}^A0N,18,15^FDCustomer: ${zt(data.customerName, 20)}^FS`);
+  z.push(`^FO${W - 200},${y}^A0N,18,15^FDWH: ${zt(data.warehouseCode, 10)}^FS`);
+  y += 22;
+  z.push(`^FO${M},${y}^A0N,18,15^FDDate: ${zt(data.dateStr, 20)}^FS`);
+  z.push(`^FO${W - 200},${y}^A0N,18,15^FD${data.labelIdx} / ${data.totalLabels}^FS`);
+  y += 24;
+
+  // Ensure we clear the QR (starts at y=17, ~130 tall)
+  y = Math.max(y, 155);
+  z.push(`^FO${M},${y}^GB${W - M * 2},3,3^FS`);
+  y += 8;
+
+  // ── ORDER INFO ──
+  z.push(`^FO${M},${y}^A0N,20,16^FDORDER NO.^FS`);
+  y += 24;
+  const orderStr = ze(data.orderNo || data.orderCode);
+  const [oH, oW] = orderStr.length <= 16 ? [44, 36] : orderStr.length <= 22 ? [34, 28] : [28, 24];
+  z.push(`^FO${M},${y}^A0N,${oH},${oW}^FD${zt(orderStr, 28)}^FS`);
+  y += oH + 8;
+  if (data.orderNo && data.orderCode !== data.orderNo) {
+    z.push(`^FO${M},${y}^A0N,18,15^FDCode: ${zt(data.orderCode, 24)}^FS`);
+    y += 22;
+  }
+
+  // Summary stats
+  z.push(`^FO${M},${y}^A0N,20,16^FDSKUs: ${data.skus.length}   Total: ${data.totalQty.toLocaleString()} EA${data.totalCartons > 0 ? `  /  ${data.totalCartons} CTN` : ""}^FS`);
+  y += 28;
+
+  z.push(`^FO${M},${y}^GB${W - M * 2},3,3^FS`);
+  y += 7;
+
+  // ── SKU TABLE HEADER ──
+  z.push(`^FO${M},${y}^A0N,20,16^FD#^FS`);
+  z.push(`^FO52,${y}^A0N,20,16^FDSKU^FS`);
+  z.push(`^FO430,${y}^A0N,20,16^FDQTY (EA)^FS`);
+  z.push(`^FO636,${y}^A0N,20,16^FDCTN^FS`);
+  z.push(`^FO762,${y}^A0N,20,16^FD✓^FS`);
+  y += 24;
+  z.push(`^FO${M},${y}^GB${W - M * 2},3,3^FS`);
+  y += 5;
+
+  // ── SKU ROWS ──
+  for (let i = 0; i < data.skus.length; i++) {
+    const s = data.skus[i];
+    const rowY = y;
+    z.push(`^FO${M},${rowY}^A0N,22,18^FD${i + 1}^FS`);
+    z.push(`^FO52,${rowY}^A0N,22,18^FD${zt(s.sku, 16)}^FS`);
+    z.push(`^FO430,${rowY}^A0N,26,22^FD${s.totalQty.toLocaleString()}^FS`);
+    z.push(`^FO636,${rowY + 2}^A0N,24,20^FD${s.cartons != null ? String(s.cartons) : "—"}^FS`);
+    z.push(`^FO762,${rowY + 2}^GB28,28,2^FS`); // checkbox
+    y += 32;
+
+    // Product name (small, indented)
+    if (s.productName) {
+      z.push(`^FO52,${y}^A0N,18,14^FD${zt(s.productName, 32)}^FS`);
+      y += 20;
+    }
+
+    z.push(`^FO${M},${y}^GB${W - M * 2},1,1^FS`);
+    y += 4;
+  }
+
+  // ── TOTAL ROW ──
+  y += 4;
+  z.push(`^FO${M},${y}^GB${W - M * 2},4,4^FS`);
+  y += 8;
+  z.push(`^FO${M},${y}^A0N,30,26^FDTOTAL^FS`);
+  z.push(`^FO430,${y}^A0N,32,28^FD${data.totalQty.toLocaleString()}^FS`);
+  z.push(`^FO636,${y}^A0N,30,26^FD${data.totalCartons > 0 ? String(data.totalCartons) : ""}^FS`);
+  y += 44;
+
+  // ── FOOTER ──
+  z.push(`^FO${M},${y}^GB${W - M * 2},4,4^FS`);
+  y += 10;
+  z.push(`^FO${M},${y}^A0N,22,18^FDPicker:^FS`);
+  z.push(`^FO90,${y + 28}^GB240,3,3^FS`);
+  z.push(`^FO370,${y}^A0N,22,18^FDChecked:^FS`);
+  z.push(`^FO452,${y + 28}^GB330,3,3^FS`);
+  y += 44;
+  z.push(`^FO${M},${y}^A0N,22,18^FDDate / Time:^FS`);
+  z.push(`^FO130,${y + 28}^GB650,3,3^FS`);
+  y += 44;
+
+  const nowStr = new Date().toLocaleString("en-US", {
+    month: "short", day: "numeric", year: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
+  z.push(`^FO${M},${y}^A0N,18,14^FDGenerated: ${ze(nowStr)}^FS`);
+  y += 26;
+  z.push(`^FO${M},${y}^GB${W - M * 2},4,4^FS`);
+  y += 12;
+
+  z.splice(LL_IDX, 0, `^LL${y}`);
+  z.push("^XZ");
+  return z.join("\n");
+}
+
 // ── Zebra Browser Print API ───────────────────────────────────────────────────
 
 // Keep the full device object exactly as returned by /available so Browser Print
